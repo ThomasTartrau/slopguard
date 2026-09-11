@@ -216,6 +216,27 @@ pub fn load_custom_rules(dirs: &[PathBuf]) -> Result<Vec<Rule>, RuleError> {
     Ok(rules)
 }
 
+/// Load all effective rules based on config: builtin (filtered by rulesets and
+/// disabled list) plus custom rules from configured directories.
+pub fn load_effective_rules(config: &crate::config::Config) -> Result<Vec<Rule>, RuleError> {
+    let mut rules: Vec<Rule> = load_builtin_rules()?
+        .into_iter()
+        .filter(
+            |rule| match rule.category.as_ref().unwrap_or(&Category::Correctness) {
+                Category::Slop => config.rulesets.slop,
+                Category::Security => config.rulesets.security,
+                Category::Correctness => config.rulesets.correctness,
+            },
+        )
+        .filter(|rule| !config.rules.disable.iter().any(|d| d == rule.id.as_str()))
+        .collect();
+
+    let custom = load_custom_rules(&config.rules.custom_dirs)?;
+    rules.extend(custom);
+    validate_unique_ids(&rules)?;
+    Ok(rules)
+}
+
 /// Validate that all rule ids are unique.
 pub fn validate_unique_ids(rules: &[Rule]) -> Result<(), RuleError> {
     let mut seen = HashSet::new();

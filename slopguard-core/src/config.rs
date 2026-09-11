@@ -152,6 +152,19 @@ pub fn load_config_from(
     merged.try_into().map_err(ConfigError::Invalid)
 }
 
+/// Load configuration from a single file, skipping hierarchical resolution.
+pub fn load_config_file(path: &Path) -> Result<Config, ConfigError> {
+    let display = path.display().to_string();
+    let content = fs::read_to_string(path).map_err(|source| ConfigError::Io {
+        path: display.clone(),
+        source,
+    })?;
+    toml::from_str(&content).map_err(|source| ConfigError::Parse {
+        path: display,
+        source,
+    })
+}
+
 /// Load configuration with hierarchical resolution.
 ///
 /// Resolution order (later overrides earlier):
