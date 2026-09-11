@@ -1,0 +1,7 @@
+[rulesets]
+slop = true
+security = true
+correctness = true
+
+[rules]
+disable = ["no-unwrap-in-prod", "no-expect-in-prod"]
