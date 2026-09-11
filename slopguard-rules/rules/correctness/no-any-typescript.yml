@@ -1,8 +1,16 @@
 id: no-any-typescript
 language: typescript
 severity: error
+category: correctness
 message: "any is forbidden. Use unknown, the concrete type, or a generic."
 note: "any disables type checking and propagates silently."
 rule:
   kind: predefined_type
   regex: '^any$'
+tests:
+  should_match:
+    - "function parse(data: any): string { return data; }"
+    - "const items: any[] = [];"
+  should_not_match:
+    - "function parse(data: unknown): string { return String(data); }"
+    - "const items: string[] = [];"

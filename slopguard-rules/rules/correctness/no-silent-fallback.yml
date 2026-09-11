@@ -1,6 +1,7 @@
 id: no-silent-fallback
 language: rust
 severity: warning
+category: correctness
 message: "unwrap_or/unwrap_or_default hides a potential error. Propagate with ? or ok_or()."
 note: "AI uses a silent fallback instead of propagating the error."
 rule:
@@ -10,3 +11,11 @@ ignores:
   - "**/tests/**"
   - "**/test_*"
   - "**/*_test.rs"
+tests:
+  should_match:
+    - 'let name = user.name.unwrap_or("");'
+    - 'let count = result.unwrap_or(0);'
+    - "let items = fetch_items().unwrap_or_default();"
+  should_not_match:
+    - "let name = user.name.unwrap_or(\"guest\");"
+    - "let count = result?;"

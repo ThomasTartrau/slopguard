@@ -1,8 +1,18 @@
 id: no-trivial-doc
 language: rust
 severity: warning
+category: slop
 message: "Trivial doc-comment restating the name. Remove or document non-obvious behavior."
 note: "AI pattern: 'This method provides...' or 'Execute the tool against the API.' copy-pasted everywhere."
 rule:
   kind: line_comment
   regex: '///\s*(The |This (method|function|struct|enum|module|trait|type) )(is |provides |represents |contains |holds |stores |manages |handles |implements |defines |describes )'
+tests:
+  should_match:
+    - "/// This method provides the user data"
+    - "/// The struct represents a user"
+    - "/// This function handles the request"
+  should_not_match:
+    - "/// Panics if the connection pool is exhausted"
+    - "/// Returns None when the cache TTL has expired"
+    - "// This method provides (not a doc-comment)"

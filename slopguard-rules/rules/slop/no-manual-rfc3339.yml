@@ -1,6 +1,7 @@
 id: no-manual-rfc3339
 language: rust
 severity: warning
+category: slop
 message: ".to_rfc3339() is usually redundant. DateTime<Utc> serializes to RFC3339 natively via serde."
 note: "If the field type is String, change it to DateTime<Utc>. Serde + chrono handles the format."
 rule:
@@ -9,3 +10,10 @@ ignores:
   - "**/tests/**"
   - "**/test_*"
   - "**/*_test.rs"
+tests:
+  should_match:
+    - "let s = now.to_rfc3339();"
+    - "let ts = created_at.to_rfc3339();"
+  should_not_match:
+    - "let s = now.format(\"%Y-%m-%d\").to_string();"
+    - "let s = now.to_string();"

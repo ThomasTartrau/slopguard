@@ -417,6 +417,80 @@ rule:
     }
 
     #[test]
+    fn all_builtin_rules_valid_messages() {
+        for path in BuiltinRules::iter() {
+            if !is_rule_file(Path::new(path.as_ref())) {
+                continue;
+            }
+            let file = BuiltinRules::get(&path).unwrap();
+            let yaml = from_utf8(&file.data).unwrap();
+            let rule: Rule = serde_yaml::from_str(yaml).unwrap();
+            assert!(
+                !rule.message.contains('\u{2014}'),
+                "rule '{}' message contains em dash: {}",
+                rule.id,
+                rule.message
+            );
+            assert!(
+                !rule.message.contains('\u{2013}'),
+                "rule '{}' message contains en dash: {}",
+                rule.id,
+                rule.message
+            );
+            assert!(
+                rule.message.is_ascii() || rule.message.chars().all(|c| c.is_ascii() || c == '\''),
+                "rule '{}' message contains non-ASCII characters: {}",
+                rule.id,
+                rule.message
+            );
+        }
+    }
+
+    #[test]
+    fn all_builtin_rules_have_tests() {
+        for path in BuiltinRules::iter() {
+            if !is_rule_file(Path::new(path.as_ref())) {
+                continue;
+            }
+            let file = BuiltinRules::get(&path).unwrap();
+            let yaml = from_utf8(&file.data).unwrap();
+            let rule: Rule = serde_yaml::from_str(yaml).unwrap();
+            let tests = rule.tests.as_ref().unwrap_or_else(|| {
+                panic!("rule '{}' (at {path}) is missing `tests` block", rule.id)
+            });
+            assert!(
+                tests.should_match.len() >= 2,
+                "rule '{}' (at {path}) needs >= 2 should_match, got {}",
+                rule.id,
+                tests.should_match.len()
+            );
+            assert!(
+                tests.should_not_match.len() >= 2,
+                "rule '{}' (at {path}) needs >= 2 should_not_match, got {}",
+                rule.id,
+                tests.should_not_match.len()
+            );
+        }
+    }
+
+    #[test]
+    fn all_builtin_rules_have_explicit_category() {
+        for path in BuiltinRules::iter() {
+            if !is_rule_file(Path::new(path.as_ref())) {
+                continue;
+            }
+            let file = BuiltinRules::get(&path).unwrap();
+            let yaml = from_utf8(&file.data).unwrap();
+            let rule: Rule = serde_yaml::from_str(yaml).unwrap();
+            assert!(
+                rule.category.is_some(),
+                "rule '{}' (at {path}) is missing an explicit `category` field",
+                rule.id
+            );
+        }
+    }
+
+    #[test]
     fn custom_rules_category_from_subdir() {
         let dir = tempdir().unwrap();
         let security_dir = dir.path().join("security");

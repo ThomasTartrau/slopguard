@@ -1,6 +1,7 @@
 id: no-allow-dead-code
 language: rust
 severity: error
+category: security
 message: "#[allow(dead_code)] in src/. Remove dead code instead of suppressing the warning."
 note: "AI adds unused code then hides the warning with allow(dead_code) instead of deleting it."
 rule:
@@ -10,3 +11,10 @@ files:
   - "**/src/**/*.rs"
 ignores:
   - "**/tests/**"
+tests:
+  should_match:
+    - "#[allow(dead_code)]"
+    - "#[allow( dead_code )]"
+  should_not_match:
+    - "#[allow(unused_imports)]"
+    - "#[deny(dead_code)]"

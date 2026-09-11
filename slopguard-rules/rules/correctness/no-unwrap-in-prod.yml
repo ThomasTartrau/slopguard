@@ -1,6 +1,7 @@
 id: no-unwrap-in-prod
 language: rust
 severity: error
+category: correctness
 message: ".unwrap() forbidden in production. Use ? or .expect('explicit message')."
 note: "unwrap() crashes the process on a single invalid input."
 rule:
@@ -12,3 +13,10 @@ ignores:
   - "**/*_test.rs"
   - "**/examples/**"
   - "**/benches/**"
+tests:
+  should_match:
+    - "let user = db.get_user(id).unwrap();"
+    - "let val = config.get(\"key\").unwrap();"
+  should_not_match:
+    - "let user = db.get_user(id)?;"
+    - "let user = db.get_user(id).expect(\"user must exist after auth\");"

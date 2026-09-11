@@ -1,6 +1,7 @@
 id: no-safety-hallucination
 language: rust
 severity: error
+category: security
 message: "Suspicious // SAFETY comment. Verify the code is actually unsafe."
 note: "AI generates // SAFETY: comments on safe code, or with hallucinated justifications on unsafe code."
 rule:
@@ -13,3 +14,24 @@ rule:
     - not:
         precedes:
           kind: unsafe_block
+tests:
+  should_match:
+    - |
+      fn foo() {
+          // SAFETY: this is safe because we checked the length
+          let x = vec![1, 2, 3];
+      }
+    - |
+      // SAFETY: the pointer is valid
+      let x = 42;
+  should_not_match:
+    - |
+      fn foo() {
+          // SAFETY: p is valid and aligned
+          unsafe { ptr::read(p) };
+      }
+    - |
+      unsafe {
+          // SAFETY: exclusively owned
+          *raw = 42;
+      }

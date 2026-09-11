@@ -1,6 +1,7 @@
 id: no-ignored-result
 language: rust
 severity: error
+category: correctness
 message: "Result ignored via let _ =. Handle the error with ?, if let Err(e), or log."
 note: "let _ = on a fallible call silently swallows errors."
 rule:
@@ -9,3 +10,10 @@ ignores:
   - "**/tests/**"
   - "**/test_*"
   - "**/*_test.rs"
+tests:
+  should_match:
+    - "let _ = fs::remove_file(path);"
+    - "let _ = sender.send(msg);"
+  should_not_match:
+    - "fs::remove_file(path)?;"
+    - "let result = sender.send(msg);"

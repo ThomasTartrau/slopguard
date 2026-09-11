@@ -1,6 +1,7 @@
 id: pub-fn-needs-tracing
 language: rust
 severity: warning
+category: correctness
 message: "Public method without #[tracing::instrument]. Breaks OTel trace continuity."
 note: "Add #[tracing::instrument(skip(self))] or skip_all depending on context."
 rule:
@@ -23,3 +24,23 @@ ignores:
   - "**/lib.rs"
   - "**/mod.rs"
   - "**/examples/**"
+tests:
+  should_match:
+    - |
+      pub fn create_user(name: &str) -> Result<User> {
+          Ok(User { name: name.to_string() })
+      }
+    - |
+      pub async fn fetch_orders(pool: &PgPool) -> Result<Vec<Order>> {
+          todo!()
+      }
+  should_not_match:
+    - |
+      #[tracing::instrument(skip(self))]
+      pub fn create_user(name: &str) -> Result<User> {
+          Ok(User { name: name.to_string() })
+      }
+    - |
+      fn private_helper() -> i32 {
+          42
+      }

@@ -1,6 +1,7 @@
 id: no-restated-comment
 language: rust
 severity: warning
+category: slop
 message: "Comment restating the code. Remove it, the code is already readable."
 note: "AI pattern: '// increment the counter' above counter += 1."
 rule:
@@ -8,3 +9,12 @@ rule:
   regex: '//\s*(increment|decrement|set|get|return|check|validate|create|update|delete|remove|add|initialize|init|call|invoke|send|fetch|load|save|store|parse|convert|transform|iterate|loop|log|print|import|export)\s+(the\s+)?\w+'
 ignores:
   - "**/tests/**"
+tests:
+  should_match:
+    - "// increment the counter"
+    - "// create the user"
+    - "// fetch the data"
+  should_not_match:
+    - "// BUG: increment wraps at u32::MAX, see issue #42"
+    - "/// Returns the parsed config"
+    - "// TODO: refactor this later"

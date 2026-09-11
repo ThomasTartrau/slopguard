@@ -1,6 +1,7 @@
 id: no-ok-chain
 language: rust
 severity: warning
+category: correctness
 message: ".ok() silently converts an error to None. Use ? or match to handle the error."
 note: "The .ok().and_then().map() chain swallows errors and causes silent successes."
 rule:
@@ -10,3 +11,10 @@ ignores:
   - "**/tests/**"
   - "**/test_*"
   - "**/*_test.rs"
+tests:
+  should_match:
+    - 'let val = result.ok().map(|v| v.len());'
+    - 'let val = parse_int(s).ok().and_then(|n| validate(n));'
+  should_not_match:
+    - "let val = result?;"
+    - "let val = result.ok();"

@@ -1,6 +1,7 @@
 id: no-double-fallback
 language: rust
 severity: warning
+category: correctness
 message: "Silent double fallback. One fallback layer max, propagate the rest."
 note: "Chaining .ok().unwrap_or() or .unwrap_or().unwrap_or() hides two error levels."
 rule:
@@ -10,3 +11,10 @@ ignores:
   - "**/tests/**"
   - "**/test_*"
   - "**/*_test.rs"
+tests:
+  should_match:
+    - 'let val = result.ok().unwrap_or("default");'
+    - 'let x = a.unwrap_or(0).unwrap_or_default();'
+  should_not_match:
+    - 'let val = result.unwrap_or("default");'
+    - "let x = result?;"

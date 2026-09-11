@@ -1,6 +1,7 @@
 id: test-needs-timeout
 language: rust
 severity: warning
+category: correctness
 message: "Async test without tokio::time::timeout. Risk of silent hang in CI."
 note: "Wrap the test body in timeout(Duration::from_secs(N), async { ... })."
 rule:
@@ -13,3 +14,28 @@ rule:
           has:
             regex: 'timeout'
             stopBy: end
+tests:
+  should_match:
+    - |
+      #[tokio::test]
+      async fn test_fetch() {
+          let result = fetch().await;
+          assert!(result.is_ok());
+      }
+    - |
+      #[tokio::test]
+      async fn test_send() {
+          send_message().await;
+      }
+  should_not_match:
+    - |
+      #[tokio::test]
+      async fn test_fetch() {
+          let result = timeout(Duration::from_secs(5), fetch()).await;
+          assert!(result.is_ok());
+      }
+    - |
+      #[test]
+      fn test_sync() {
+          assert_eq!(1 + 1, 2);
+      }

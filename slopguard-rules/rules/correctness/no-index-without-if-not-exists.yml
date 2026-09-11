@@ -1,6 +1,7 @@
 id: no-index-without-if-not-exists
 language: rust
 severity: error
+category: correctness
 message: "CREATE INDEX without IF NOT EXISTS in a SQL migration. Add IF NOT EXISTS."
 note: "Without IF NOT EXISTS, the migration crashes on re-run."
 rule:
@@ -12,3 +13,10 @@ rule:
 files:
   - "**/migrations/**/*.rs"
   - "**/migrate/**/*.rs"
+tests:
+  should_match:
+    - '"CREATE INDEX idx_users_email ON users (email)"'
+    - '"CREATE UNIQUE INDEX idx_orders_ref ON orders (ref)"'
+  should_not_match:
+    - '"CREATE INDEX IF NOT EXISTS idx_users_email ON users (email)"'
+    - '"CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_ref ON orders (ref)"'

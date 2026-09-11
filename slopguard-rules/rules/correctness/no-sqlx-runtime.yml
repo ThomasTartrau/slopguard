@@ -1,6 +1,7 @@
 id: no-sqlx-runtime
 language: rust
 severity: error
+category: correctness
 message: "sqlx::query() runtime. Use sqlx::query!() for compile-time verification."
 note: "The variants without ! (query, query_as, query_scalar) do not verify SQL at compile time."
 rule:
@@ -10,3 +11,10 @@ ignores:
   - "**/tests/**"
   - "**/test_*"
   - "**/*_test.rs"
+tests:
+  should_match:
+    - 'sqlx::query("SELECT * FROM users").fetch_all(&pool).await;'
+    - 'sqlx::query_as::<_, User>("SELECT * FROM users").fetch_one(&pool).await;'
+  should_not_match:
+    - 'sqlx::query!("SELECT * FROM users").fetch_all(&pool).await;'
+    - 'sqlx::query_as!(User, "SELECT * FROM users").fetch_one(&pool).await;'

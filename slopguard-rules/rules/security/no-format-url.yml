@@ -1,6 +1,7 @@
 id: no-format-url
 language: rust
 severity: error
+category: security
 message: "format!() to build a URL. Use Url::parse(), .query(), or .join()."
 note: "Parameter injection or path traversal risk if the input contains &, =, / or .."
 rule:
@@ -16,3 +17,10 @@ ignores:
   - "**/tests/**"
   - "**/test_*"
   - "**/*_test.rs"
+tests:
+  should_match:
+    - 'let url = format!("https://api.example.com/users/{}", user_id);'
+    - 'let url = format!("{base_url}/items/{id}");'
+  should_not_match:
+    - 'let msg = format!("connected to {}", host);'
+    - 'let label = format!("user-{}", count);'

@@ -1,8 +1,18 @@
 id: no-paraphrase-doc
 language: rust
 severity: warning
+category: slop
 message: "Doc-comment paraphrasing the method name. Remove or explain the WHY."
 note: "Classic AI pattern: 'Create a new X' on every constructor, 'Execute the tool' on every method. Zero information added."
 rule:
   kind: line_comment
   regex: '///\s*(Creates?|Constructs?|Build|Returns?|Gets?|Sets?|Execute|Perform|Implement|Initialize|Instantiate)s?\s+(a\s+)?new\s+\w+(\s+(operation|instance|struct|object|client|builder|config|handler|service|provider|context|manager|controller|module))?\.?\s*$'
+tests:
+  should_match:
+    - "/// Creates a new UserService instance."
+    - "/// Create a new config handler"
+    - "/// Returns a new builder"
+  should_not_match:
+    - "/// Creates a connection with retry and exponential backoff"
+    - "/// Validates the input before creating the resource"
+    - "// Creates a new instance (not a doc-comment)"

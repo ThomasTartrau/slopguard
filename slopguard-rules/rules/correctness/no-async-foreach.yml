@@ -1,6 +1,7 @@
 id: no-async-foreach
 language: typescript
 severity: error
+category: correctness
 message: "Async callback in forEach/map/filter/reduce. Use for...of or Promise.all(arr.map(...))."
 note: "forEach ignores the returned Promise, callbacks run in parallel without await."
 rule:
@@ -10,3 +11,10 @@ rule:
     - pattern: $ARR.map(async ($$$) => { $$$ })
     - pattern: $ARR.filter(async ($$$) => { $$$ })
     - pattern: $ARR.reduce(async ($$$) => { $$$ })
+tests:
+  should_match:
+    - "items.forEach(async (item) => { await process(item); })"
+    - "items.map(async (item) => { await transform(item); })"
+  should_not_match:
+    - "items.forEach((item) => { process(item); })"
+    - "await Promise.all(items.map((item) => process(item)));"

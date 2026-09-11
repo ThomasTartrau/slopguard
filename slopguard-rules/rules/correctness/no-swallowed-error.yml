@@ -1,6 +1,7 @@
 id: no-swallowed-error
 language: rust
 severity: warning
+category: correctness
 message: "Source error discarded. Preserve context with .context() or map_err(|e| ...e...)."
 note: "map_err(|_| ...) throws away the original error, making debugging impossible."
 rule:
@@ -10,3 +11,10 @@ ignores:
   - "**/tests/**"
   - "**/test_*"
   - "**/*_test.rs"
+tests:
+  should_match:
+    - 'file.read_to_string(&mut buf).map_err(|_| AppError::ReadFailed);'
+    - 'conn.execute(sql).map_err(|_e| Error::Database);'
+  should_not_match:
+    - 'file.read_to_string(&mut buf).map_err(|e| AppError::Io(e));'
+    - 'conn.execute(sql).map_err(AppError::Database);'

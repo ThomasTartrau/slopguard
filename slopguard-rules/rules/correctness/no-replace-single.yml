@@ -1,6 +1,7 @@
 id: no-replace-single
 language: typescript
 severity: warning
+category: correctness
 message: ".replace() only replaces the first occurrence. Use .replaceAll() or a /g regex."
 note: "'a-b-c'.replace('-', '_') returns 'a_b-c', not 'a_b_c'."
 rule:
@@ -9,3 +10,10 @@ rule:
     - regex: '\.replace\('
     - not:
         regex: '\.replace\(\s*/'
+tests:
+  should_match:
+    - "const slug = title.replace(' ', '-');"
+    - "const clean = input.replace('\\n', ' ');"
+  should_not_match:
+    - "const slug = title.replace(/ /g, '-');"
+    - "const slug = title.replaceAll(' ', '-');"

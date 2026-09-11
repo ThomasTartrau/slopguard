@@ -1,6 +1,7 @@
 id: no-float-money
 language: rust
 severity: error
+category: correctness
 message: "FLOAT/REAL/DOUBLE in SQL. Use BIGINT (cents) or DECIMAL for monetary values."
 note: "Floating point loses precision on monetary calculations."
 rule:
@@ -9,3 +10,10 @@ rule:
 files:
   - "**/migrations/**/*.rs"
   - "**/migrate/**/*.rs"
+tests:
+  should_match:
+    - '"ALTER TABLE orders ADD COLUMN amount FLOAT"'
+    - '"CREATE TABLE invoices (total DOUBLE PRECISION)"'
+  should_not_match:
+    - '"ALTER TABLE orders ADD COLUMN amount BIGINT"'
+    - '"CREATE TABLE invoices (total DECIMAL(10,2))"'

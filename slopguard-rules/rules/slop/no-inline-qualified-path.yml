@@ -1,6 +1,7 @@
 id: no-inline-qualified-path
 language: rust
 severity: warning
+category: slop
 message: "Inline qualified path. Use a `use` import at the top of the file."
 note: "AI generates code with fully qualified paths instead of adding imports."
 rule:
@@ -15,3 +16,12 @@ rule:
     - not:
         inside:
           kind: attribute_item
+tests:
+  should_match:
+    - "let map: std::collections::HashMap<String, i32> = std::collections::HashMap::new();"
+    - "let dur = tokio::time::Duration::from_secs(5);"
+  should_not_match:
+    - |
+      use std::collections::HashMap;
+      let map: HashMap<String, i32> = HashMap::new();
+    - "let x = crate::utils::helper();"

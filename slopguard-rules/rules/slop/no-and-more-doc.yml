@@ -1,8 +1,18 @@
 id: no-and-more-doc
 language: rust
 severity: warning
+category: slop
 message: "Vague documentation ('and more', 'etc.', 'various'). List concretely or remove."
 note: "AI adds 'and more' or 'etc.' to hide that it does not know what follows."
 rule:
   kind: line_comment
   regex: '///.*\b(and more|etc\.|and so on|and others|various|amongst others|and many more|and much more)\b'
+tests:
+  should_match:
+    - "/// Supports JSON, XML, and more."
+    - "/// Handles validation, parsing, etc."
+    - "/// Various utility functions"
+  should_not_match:
+    - "/// Supports JSON and XML"
+    - "/// Handles validation and parsing"
+    - "// and more (not a doc-comment)"

@@ -1,6 +1,7 @@
 id: no-unsafe-without-safety
 language: rust
 severity: error
+category: security
 message: "unsafe block without // SAFETY: comment. Document why this is safe."
 note: "Every unsafe block must be preceded by a // SAFETY: comment explaining the invariant."
 rule:
@@ -9,3 +10,25 @@ rule:
     follows:
       kind: line_comment
       regex: 'SAFETY'
+tests:
+  should_match:
+    - |
+      fn foo() {
+          unsafe { ptr::read(p) };
+      }
+    - |
+      fn bar() {
+          // This is fine
+          unsafe { *raw = 42; }
+      }
+  should_not_match:
+    - |
+      fn foo() {
+          // SAFETY: p is valid and aligned, checked by the caller
+          unsafe { ptr::read(p) };
+      }
+    - |
+      fn bar() {
+          // SAFETY: raw is non-null and exclusively owned
+          unsafe { *raw = 42; }
+      }

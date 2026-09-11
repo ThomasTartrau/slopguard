@@ -1,6 +1,7 @@
 id: no-format-path
 language: rust
 severity: error
+category: security
 message: "format!() to build a file path. Use Path::join() and validate the input."
 note: "Path traversal via ../ if input is not validated. Validate the identifier (UUID, alphanum) before building the path."
 rule:
@@ -16,3 +17,10 @@ ignores:
   - "**/tests/**"
   - "**/test_*"
   - "**/*_test.rs"
+tests:
+  should_match:
+    - 'let p = format!("/tmp/{}.json", user_id);'
+    - 'let p = format!("{file_name}.pdf");'
+  should_not_match:
+    - 'let msg = format!("hello {}", name);'
+    - 'let p = base_dir.join(format!("{}.json", id));'
