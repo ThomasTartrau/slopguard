@@ -1,10 +1,11 @@
 use crate::finding::Finding;
+use crate::rule::RuleId;
 
 const DISABLE_MARKER: &str = "slopguard-disable-next-line";
 
 struct DisableDirective {
     target_line: usize,
-    rule_id: Option<String>,
+    rule_id: Option<RuleId>,
 }
 
 fn parse_directives(source: &str) -> Vec<DisableDirective> {
@@ -12,11 +13,15 @@ fn parse_directives(source: &str) -> Vec<DisableDirective> {
         .lines()
         .enumerate()
         .filter_map(|(idx, line)| {
-            let rest = line.trim().strip_prefix("//")?.trim().strip_prefix(DISABLE_MARKER)?;
+            let rest = line
+                .trim()
+                .strip_prefix("//")?
+                .trim()
+                .strip_prefix(DISABLE_MARKER)?;
             let rest = rest.trim();
             Some(DisableDirective {
                 target_line: idx + 2,
-                rule_id: (!rest.is_empty()).then(|| rest.to_string()),
+                rule_id: (!rest.is_empty()).then(|| RuleId::from(rest)),
             })
         })
         .collect()
@@ -34,9 +39,7 @@ pub fn filter_disabled(findings: Vec<Finding>, source: &str) -> Vec<Finding> {
         .filter(|finding| {
             !directives.iter().any(|d| {
                 d.target_line == finding.line
-                    && d.rule_id
-                        .as_ref()
-                        .is_none_or(|id| id == &finding.rule_id)
+                    && d.rule_id.as_ref().is_none_or(|id| *id == finding.rule_id)
             })
         })
         .collect()
@@ -47,13 +50,13 @@ mod tests {
     use std::path::PathBuf;
 
     use crate::finding::Finding;
-    use crate::rule::{Category, Severity};
+    use crate::rule::{Category, RuleId, Severity};
 
     use super::filter_disabled;
 
     fn make_finding(rule_id: &str, line: usize) -> Finding {
         Finding {
-            rule_id: rule_id.to_string(),
+            rule_id: RuleId::from(rule_id),
             severity: Severity::Error,
             category: Category::Correctness,
             message: "test".to_string(),
@@ -76,7 +79,10 @@ mod tests {
             make_finding("no-expect-in-prod", 3),
         ];
         let result = filter_disabled(findings, source);
-        assert!(result.is_empty(), "all findings on the disabled line should be suppressed");
+        assert!(
+            result.is_empty(),
+            "all findings on the disabled line should be suppressed"
+        );
     }
 
     #[test]
@@ -88,7 +94,7 @@ mod tests {
         ];
         let result = filter_disabled(findings, source);
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0].rule_id, "other-rule");
+        assert_eq!(result[0].rule_id, RuleId::from("other-rule"));
     }
 
     #[test]
@@ -97,7 +103,7 @@ mod tests {
         let findings = vec![make_finding("no-unwrap-in-prod", 3)];
         let result = filter_disabled(findings, source);
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0].rule_id, "no-unwrap-in-prod");
+        assert_eq!(result[0].rule_id, RuleId::from("no-unwrap-in-prod"));
     }
 
     #[test]
@@ -110,15 +116,18 @@ mod tests {
 
     #[test]
     fn disable_with_spacing_variants() {
-        let source_no_space = "fn main() {\n    //slopguard-disable-next-line\n    foo().unwrap();\n}\n";
+        let source_no_space =
+            "fn main() {\n    //slopguard-disable-next-line\n    foo().unwrap();\n}\n";
         let findings1 = vec![make_finding("no-unwrap-in-prod", 3)];
         assert!(filter_disabled(findings1, source_no_space).is_empty());
 
-        let source_extra_spaces = "fn main() {\n    //  slopguard-disable-next-line\n    foo().unwrap();\n}\n";
+        let source_extra_spaces =
+            "fn main() {\n    //  slopguard-disable-next-line\n    foo().unwrap();\n}\n";
         let findings2 = vec![make_finding("no-unwrap-in-prod", 3)];
         assert!(filter_disabled(findings2, source_extra_spaces).is_empty());
 
-        let source_leading_space = "fn main() {\n      // slopguard-disable-next-line\n    foo().unwrap();\n}\n";
+        let source_leading_space =
+            "fn main() {\n      // slopguard-disable-next-line\n    foo().unwrap();\n}\n";
         let findings3 = vec![make_finding("no-unwrap-in-prod", 3)];
         assert!(filter_disabled(findings3, source_leading_space).is_empty());
     }
@@ -137,7 +146,8 @@ mod tests {
 
     #[test]
     fn disable_with_rule_id_multiple_findings_same_line() {
-        let source = "fn main() {\n    // slopguard-disable-next-line rule-b\n    foo().unwrap();\n}\n";
+        let source =
+            "fn main() {\n    // slopguard-disable-next-line rule-b\n    foo().unwrap();\n}\n";
         let findings = vec![
             make_finding("rule-a", 3),
             make_finding("rule-b", 3),
@@ -145,8 +155,8 @@ mod tests {
         ];
         let result = filter_disabled(findings, source);
         assert_eq!(result.len(), 2);
-        assert_eq!(result[0].rule_id, "rule-a");
-        assert_eq!(result[1].rule_id, "rule-c");
+        assert_eq!(result[0].rule_id, RuleId::from("rule-a"));
+        assert_eq!(result[1].rule_id, RuleId::from("rule-c"));
     }
 
     #[test]

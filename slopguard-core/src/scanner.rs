@@ -20,13 +20,13 @@ use thiserror::Error;
 use crate::config::Config;
 use crate::disable::filter_disabled;
 use crate::finding::{Finding, ScanResult, ScanStats};
-use crate::rule::{Language, Rule, Severity};
+use crate::rule::{Language, Rule, RuleId, Severity};
 
 #[derive(Debug, Error)]
 pub enum ScanError {
     #[error("failed to compile rule '{id}': {source}")]
     RuleCompile {
-        id: String,
+        id: RuleId,
         #[source]
         source: RuleConfigError,
     },
@@ -66,7 +66,7 @@ fn extension_to_lang(path: &Path) -> Option<SupportLang> {
 
 fn compile_rule(rule: &Rule, lang: SupportLang) -> Result<RuleConfig<SupportLang>, ScanError> {
     let ast_grep_rule = AstGrepRule {
-        id: &rule.id,
+        id: rule.id.as_str(),
         language: lang,
         severity: &rule.severity,
         message: &rule.message,
@@ -97,7 +97,10 @@ fn compile_rules(rules: &[Rule]) -> Result<CompiledRules<'_>, ScanError> {
         .collect::<Result<Vec<_>, _>>()?;
     Ok(CompiledRules {
         collection: RuleCollection::try_new(configs)?,
-        by_id: rules.iter().map(|rule| (rule.id.as_str(), rule)).collect(),
+        by_id: rules
+            .iter()
+            .map(|rule| (rule.id.as_str(), rule))
+            .collect::<HashMap<_, _>>(),
     })
 }
 
@@ -200,7 +203,7 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
-    use crate::rule::{load_builtin_rules, parse_rule};
+    use crate::rule::{load_builtin_rules, parse_rule, RuleId};
 
     fn unwrap_rule() -> Rule {
         parse_rule(
@@ -233,7 +236,7 @@ rule:
         let result = scan_dir(dir.path(), &[unwrap_rule()]);
         assert_eq!(result.findings.len(), 1);
         let f = &result.findings[0];
-        assert_eq!(f.rule_id, "test-unwrap");
+        assert_eq!(f.rule_id, RuleId::from("test-unwrap"));
         assert_eq!(f.severity, Severity::Error);
         assert_eq!(f.line, 2);
         assert!(f.matched_text.contains("unwrap()"));
@@ -350,7 +353,7 @@ rule:
         .unwrap();
         let err = scan(&[dir.path().to_path_buf()], &[rule], &Config::default()).unwrap_err();
         assert!(
-            matches!(&err, ScanError::RuleCompile { id, .. } if id == "no-kind"),
+            matches!(&err, ScanError::RuleCompile { id, .. } if *id == RuleId::from("no-kind")),
             "{err:?}"
         );
     }
@@ -409,7 +412,7 @@ rule:
         .unwrap();
         let result = scan_dir(dir.path(), &[rule]);
         assert_eq!(result.findings.len(), 1);
-        assert_eq!(result.findings[0].rule_id, "dbg");
+        assert_eq!(result.findings[0].rule_id, RuleId::from("dbg"));
     }
 
     #[test]
@@ -444,7 +447,11 @@ rule:
         )
         .unwrap();
         let result = scan_dir(dir.path(), &[unwrap_rule()]);
-        assert_eq!(result.findings.len(), 1, "only the non-disabled unwrap should remain");
+        assert_eq!(
+            result.findings.len(),
+            1,
+            "only the non-disabled unwrap should remain"
+        );
         assert_eq!(result.findings[0].line, 4);
     }
 

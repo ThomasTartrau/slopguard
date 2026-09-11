@@ -2,12 +2,12 @@ use std::path::PathBuf;
 
 use serde::Serialize;
 
-use crate::rule::{Category, Severity};
+use crate::rule::{Category, RuleId, Severity};
 
 /// A single finding from scanning a source file.
 #[derive(Debug, Clone, Serialize)]
 pub struct Finding {
-    pub rule_id: String,
+    pub rule_id: RuleId,
     pub severity: Severity,
     pub category: Category,
     pub message: String,

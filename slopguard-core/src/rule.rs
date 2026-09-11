@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::fmt;
 use std::fs::read_to_string;
 use std::io::Error as IoError;
 use std::path::{Component, Path, PathBuf};
@@ -11,6 +12,33 @@ use serde_yaml::Value;
 use slopguard_rules::BuiltinRules;
 use strum::{Display, EnumIter, EnumString};
 use thiserror::Error;
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct RuleId(pub String);
+
+impl fmt::Display for RuleId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl RuleId {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<String> for RuleId {
+    fn from(s: String) -> Self {
+        Self(s)
+    }
+}
+
+impl From<&str> for RuleId {
+    fn from(s: &str) -> Self {
+        Self(s.to_string())
+    }
+}
 
 #[derive(Debug, Display, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -71,7 +99,7 @@ pub struct RuleTests {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Rule {
-    pub id: String,
+    pub id: RuleId,
     pub language: Language,
     pub severity: Severity,
     pub message: String,
@@ -96,10 +124,10 @@ pub enum RuleError {
     Parse(#[from] serde_yaml::Error),
 
     #[error("rule '{id}': rule field must not be empty")]
-    EmptyRule { id: String },
+    EmptyRule { id: RuleId },
 
     #[error("duplicate rule id: '{id}'")]
-    DuplicateId { id: String },
+    DuplicateId { id: RuleId },
 
     #[error("failed to read rule file '{path}': {source}")]
     Io {
@@ -233,7 +261,7 @@ tests:
     - "let x = foo()?;"
 "#;
         let rule = parse_rule(yaml).unwrap();
-        assert_eq!(rule.id, "test-rule");
+        assert_eq!(rule.id, RuleId::from("test-rule"));
         assert_eq!(rule.language, Language::Rust);
         assert_eq!(rule.severity, Severity::Error);
         assert_eq!(rule.message, "Test message");
@@ -259,7 +287,7 @@ rule:
   pattern: $X.unwrap()
 "#;
         let rule = parse_rule(yaml).unwrap();
-        assert_eq!(rule.id, "minimal-rule");
+        assert_eq!(rule.id, RuleId::from("minimal-rule"));
         assert_eq!(rule.severity, Severity::Warning);
         assert!(rule.note.is_none());
         assert!(rule.category.is_none());
@@ -355,9 +383,13 @@ rule:
         assert_eq!(security_count, 8, "expected 8 security rules");
         assert_eq!(correctness_count, 17, "expected 17 correctness rules");
 
-        assert!(rules.iter().any(|r| r.id == "no-unwrap-in-prod"));
-        assert!(rules.iter().any(|r| r.id == "no-debug-on-secrets"));
-        assert!(rules.iter().any(|r| r.id == "no-slop-words"));
+        assert!(rules
+            .iter()
+            .any(|r| r.id == RuleId::from("no-unwrap-in-prod")));
+        assert!(rules
+            .iter()
+            .any(|r| r.id == RuleId::from("no-debug-on-secrets")));
+        assert!(rules.iter().any(|r| r.id == RuleId::from("no-slop-words")));
 
         validate_unique_ids(&rules).unwrap();
     }
@@ -377,7 +409,7 @@ rule:
 
         let rules = load_custom_rules(&[dir.path().to_path_buf()]).unwrap();
         assert_eq!(rules.len(), 1);
-        assert_eq!(rules[0].id, "custom-rule");
+        assert_eq!(rules[0].id, RuleId::from("custom-rule"));
     }
 
     #[test]
