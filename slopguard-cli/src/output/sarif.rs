@@ -122,7 +122,9 @@ pub fn format_sarif(result: &ScanResult, w: &mut impl Write) -> io::Result<()> {
             rules_map.push((id, &finding.message, desc));
             rules.push(SarifRule {
                 id,
-                short_description: SarifMessage { text: &finding.message },
+                short_description: SarifMessage {
+                    text: &finding.message,
+                },
                 full_description: SarifMessage { text: desc },
                 default_configuration: SarifDefaultConfiguration {
                     level: severity_to_sarif_level(&finding.severity),

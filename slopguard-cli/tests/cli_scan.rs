@@ -1,12 +1,11 @@
+mod common;
+
 use std::fs::write;
 
-use assert_cmd::Command;
 use predicates::prelude::*;
 use tempfile::tempdir;
 
-fn slopguard() -> Command {
-    Command::cargo_bin("slopguard").unwrap()
-}
+use common::slopguard;
 
 #[test]
 fn clean_exit_zero() {

@@ -38,18 +38,18 @@ pub enum ScanError {
 /// The subset of a slopguard rule that ast-grep understands. slopguard-only
 /// fields (`category`, `fix` as free text, `tests`) are deliberately left out.
 #[derive(Serialize)]
-struct AstGrepRule<'a> {
-    id: &'a str,
-    language: SupportLang,
-    severity: &'a Severity,
-    message: &'a str,
+pub struct AstGrepRule<'a> {
+    pub id: &'a str,
+    pub language: SupportLang,
+    pub severity: &'a Severity,
+    pub message: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
-    note: Option<&'a str>,
-    rule: &'a Value,
+    pub note: Option<&'a str>,
+    pub rule: &'a Value,
     #[serde(skip_serializing_if = "Option::is_none")]
-    files: Option<&'a [String]>,
+    pub files: Option<&'a [String]>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    ignores: Option<&'a [String]>,
+    pub ignores: Option<&'a [String]>,
 }
 
 /// Rules compiled for scanning, plus a way back to the slopguard rule that
@@ -64,6 +64,15 @@ fn extension_to_lang(path: &Path) -> Option<SupportLang> {
         .filter(|lang| Language::iter().any(|l| l.ast_grep_langs().contains(lang)))
 }
 
+pub(crate) fn compile_ast_grep_rule(
+    rule: &AstGrepRule,
+) -> Result<RuleConfig<SupportLang>, RuleConfigError> {
+    let inner: SerializableRuleConfig<SupportLang> = to_value(rule)
+        .and_then(singleton_map_recursive::deserialize)
+        .map_err(RuleConfigError::from)?;
+    RuleConfig::try_from(inner, &GlobalRules::default())
+}
+
 fn compile_rule(rule: &Rule, lang: SupportLang) -> Result<RuleConfig<SupportLang>, ScanError> {
     let ast_grep_rule = AstGrepRule {
         id: rule.id.as_str(),
@@ -75,14 +84,10 @@ fn compile_rule(rule: &Rule, lang: SupportLang) -> Result<RuleConfig<SupportLang
         files: rule.files.as_deref(),
         ignores: rule.ignores.as_deref(),
     };
-    let compile_error = |source: RuleConfigError| ScanError::RuleCompile {
+    compile_ast_grep_rule(&ast_grep_rule).map_err(|source| ScanError::RuleCompile {
         id: rule.id.clone(),
         source,
-    };
-    let inner: SerializableRuleConfig<SupportLang> = to_value(&ast_grep_rule)
-        .and_then(singleton_map_recursive::deserialize)
-        .map_err(|e| compile_error(e.into()))?;
-    RuleConfig::try_from(inner, &GlobalRules::default()).map_err(compile_error)
+    })
 }
 
 fn compile_rules(rules: &[Rule]) -> Result<CompiledRules<'_>, ScanError> {

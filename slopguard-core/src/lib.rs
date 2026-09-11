@@ -3,3 +3,4 @@ pub mod disable;
 pub mod finding;
 pub mod rule;
 pub mod scanner;
+pub mod testing;
