@@ -1,0 +1,17 @@
+id: no-inline-qualified-path
+language: rust
+severity: warning
+message: "Inline qualified path. Use a `use` import at the top of the file."
+note: "AI generates code with fully qualified paths instead of adding imports."
+rule:
+  all:
+    - any:
+        - kind: scoped_identifier
+        - kind: scoped_type_identifier
+    - regex: '^(std|serde|serde_json|chrono|reqwest|tokio|sqlx|base64|url|aws_sdk_\w+)::\w+::\w+'
+    - not:
+        inside:
+          kind: use_declaration
+    - not:
+        inside:
+          kind: attribute_item

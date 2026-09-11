@@ -1,0 +1,12 @@
+id: no-client-without-timeout
+language: rust
+severity: error
+message: "reqwest::Client without timeout. Add .timeout() and .connect_timeout() to the builder."
+note: "An HTTP client without timeout blocks indefinitely on a slow endpoint."
+rule:
+  kind: call_expression
+  regex: '(reqwest::)?Client::new\(\)'
+ignores:
+  - "**/tests/**"
+  - "**/test_*"
+  - "**/*_test.rs"

@@ -1,0 +1,8 @@
+id: no-and-more-doc
+language: rust
+severity: warning
+message: "Vague documentation ('and more', 'etc.', 'various'). List concretely or remove."
+note: "AI adds 'and more' or 'etc.' to hide that it does not know what follows."
+rule:
+  kind: line_comment
+  regex: '///.*\b(and more|etc\.|and so on|and others|various|amongst others|and many more|and much more)\b'

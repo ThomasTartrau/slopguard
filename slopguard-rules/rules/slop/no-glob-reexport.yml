@@ -1,0 +1,9 @@
+id: no-glob-reexport
+language: rust
+severity: warning
+message: "pub use module::*. Use explicit re-exports to control the public API."
+note: "Glob re-exports make the public API implicit and risk accidental exports."
+rule:
+  pattern: pub use $MODULE::*;
+files:
+  - "**/src/**/*.rs"

@@ -1,0 +1,18 @@
+id: no-format-path
+language: rust
+severity: error
+message: "format!() to build a file path. Use Path::join() and validate the input."
+note: "Path traversal via ../ if input is not validated. Validate the identifier (UUID, alphanum) before building the path."
+rule:
+  kind: macro_invocation
+  all:
+    - has:
+        field: macro
+        regex: '^format$'
+    - has:
+        kind: string_literal
+        regex: '(/tmp/|/var/|/etc/|\.pdf|\.json|\.csv|\.txt|\.log|\.toml|\.yaml|\.yml)\{|\{[^}]*(path|file|dir|name|id)[^}]*\}\.(pdf|json|csv|txt|log)'
+ignores:
+  - "**/tests/**"
+  - "**/test_*"
+  - "**/*_test.rs"

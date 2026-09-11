@@ -1,0 +1,12 @@
+id: no-sqlx-runtime
+language: rust
+severity: error
+message: "sqlx::query() runtime. Use sqlx::query!() for compile-time verification."
+note: "The variants without ! (query, query_as, query_scalar) do not verify SQL at compile time."
+rule:
+  kind: call_expression
+  regex: 'sqlx::(query|query_as|query_scalar)\('
+ignores:
+  - "**/tests/**"
+  - "**/test_*"
+  - "**/*_test.rs"

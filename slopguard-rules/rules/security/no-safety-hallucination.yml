@@ -1,0 +1,15 @@
+id: no-safety-hallucination
+language: rust
+severity: error
+message: "Suspicious // SAFETY comment. Verify the code is actually unsafe."
+note: "AI generates // SAFETY: comments on safe code, or with hallucinated justifications on unsafe code."
+rule:
+  kind: line_comment
+  all:
+    - regex: '//\s*SAFETY\s*:'
+    - not:
+        inside:
+          kind: unsafe_block
+    - not:
+        precedes:
+          kind: unsafe_block

@@ -1,0 +1,11 @@
+id: no-unsafe-without-safety
+language: rust
+severity: error
+message: "unsafe block without // SAFETY: comment. Document why this is safe."
+note: "Every unsafe block must be preceded by a // SAFETY: comment explaining the invariant."
+rule:
+  kind: unsafe_block
+  not:
+    follows:
+      kind: line_comment
+      regex: 'SAFETY'

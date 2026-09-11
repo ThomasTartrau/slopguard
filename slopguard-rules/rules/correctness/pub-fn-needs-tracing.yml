@@ -1,0 +1,25 @@
+id: pub-fn-needs-tracing
+language: rust
+severity: warning
+message: "Public method without #[tracing::instrument]. Breaks OTel trace continuity."
+note: "Add #[tracing::instrument(skip(self))] or skip_all depending on context."
+rule:
+  kind: function_item
+  all:
+    - has:
+        kind: visibility_modifier
+        regex: '^pub'
+    - not:
+        has:
+          kind: attribute_item
+          regex: 'tracing::instrument'
+files:
+  - "**/src/**/*.rs"
+ignores:
+  - "**/tests/**"
+  - "**/test_*"
+  - "**/*_test.rs"
+  - "**/main.rs"
+  - "**/lib.rs"
+  - "**/mod.rs"
+  - "**/examples/**"

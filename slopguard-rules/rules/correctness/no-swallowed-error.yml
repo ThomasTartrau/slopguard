@@ -1,0 +1,12 @@
+id: no-swallowed-error
+language: rust
+severity: warning
+message: "Source error discarded. Preserve context with .context() or map_err(|e| ...e...)."
+note: "map_err(|_| ...) throws away the original error, making debugging impossible."
+rule:
+  kind: call_expression
+  regex: '\.map_err\(\|_\w*\|'
+ignores:
+  - "**/tests/**"
+  - "**/test_*"
+  - "**/*_test.rs"

@@ -1,0 +1,12 @@
+id: no-async-foreach
+language: typescript
+severity: error
+message: "Async callback in forEach/map/filter/reduce. Use for...of or Promise.all(arr.map(...))."
+note: "forEach ignores the returned Promise, callbacks run in parallel without await."
+rule:
+  any:
+    - pattern: $ARR.forEach(async ($$$) => { $$$ })
+    - pattern: $ARR.forEach(async function($$$) { $$$ })
+    - pattern: $ARR.map(async ($$$) => { $$$ })
+    - pattern: $ARR.filter(async ($$$) => { $$$ })
+    - pattern: $ARR.reduce(async ($$$) => { $$$ })

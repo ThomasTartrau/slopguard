@@ -1,0 +1,12 @@
+id: no-ok-chain
+language: rust
+severity: warning
+message: ".ok() silently converts an error to None. Use ? or match to handle the error."
+note: "The .ok().and_then().map() chain swallows errors and causes silent successes."
+rule:
+  kind: call_expression
+  regex: '\.ok\(\)\.\w+\('
+ignores:
+  - "**/tests/**"
+  - "**/test_*"
+  - "**/*_test.rs"

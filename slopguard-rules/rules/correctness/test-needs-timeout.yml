@@ -1,0 +1,15 @@
+id: test-needs-timeout
+language: rust
+severity: warning
+message: "Async test without tokio::time::timeout. Risk of silent hang in CI."
+note: "Wrap the test body in timeout(Duration::from_secs(N), async { ... })."
+rule:
+  kind: attribute_item
+  all:
+    - regex: 'tokio::test'
+    - precedes:
+        kind: function_item
+        not:
+          has:
+            regex: 'timeout'
+            stopBy: end

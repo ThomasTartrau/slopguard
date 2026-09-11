@@ -1,0 +1,10 @@
+id: no-slop-words
+language: rust
+severity: warning
+message: "AI filler word in a comment. Rephrase or remove."
+note: "These words appear 1000x more often in LLM text than in human text (ANTISLOP paper, ICLR 2026)."
+rule:
+  any:
+    - kind: line_comment
+    - kind: block_comment
+  regex: '\b(comprehensive|robust|seamless|leverage|utilize|facilitate|streamline|endeavor|foster|harness|delve|intricate|nuanced|pivotal|myriad|plethora|paramount|cutting.edge|state.of.the.art|best.in.class|industry.leading|game.changing)\b'

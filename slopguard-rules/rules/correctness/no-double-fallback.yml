@@ -1,0 +1,12 @@
+id: no-double-fallback
+language: rust
+severity: warning
+message: "Silent double fallback. One fallback layer max, propagate the rest."
+note: "Chaining .ok().unwrap_or() or .unwrap_or().unwrap_or() hides two error levels."
+rule:
+  kind: call_expression
+  regex: '\.(ok|unwrap_or|unwrap_or_default|unwrap_or_else)\(.*\)\.(unwrap_or|unwrap_or_default|unwrap_or_else|and_then|map)\('
+ignores:
+  - "**/tests/**"
+  - "**/test_*"
+  - "**/*_test.rs"

@@ -1,0 +1,18 @@
+id: no-format-url
+language: rust
+severity: error
+message: "format!() to build a URL. Use Url::parse(), .query(), or .join()."
+note: "Parameter injection or path traversal risk if the input contains &, =, / or .."
+rule:
+  kind: macro_invocation
+  all:
+    - has:
+        field: macro
+        regex: '^format$'
+    - has:
+        kind: string_literal
+        regex: '(https?://|\{[^}]*(url|host|base|endpoint)[^}]*\}/|\{[^}]*(id|name|key|uid|slug)[^}]*\})'
+ignores:
+  - "**/tests/**"
+  - "**/test_*"
+  - "**/*_test.rs"

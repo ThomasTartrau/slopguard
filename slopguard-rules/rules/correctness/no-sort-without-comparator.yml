@@ -1,0 +1,7 @@
+id: no-sort-without-comparator
+language: typescript
+severity: error
+message: ".sort() without comparator is lexicographic. Pass a comparator (a, b) => a - b."
+note: "[10, 9, 80].sort() returns [10, 80, 9]. Lexicographic sort, not numeric."
+rule:
+  pattern: $ARR.sort()

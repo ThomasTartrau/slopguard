@@ -1,0 +1,12 @@
+id: no-silent-fallback
+language: rust
+severity: warning
+message: "unwrap_or/unwrap_or_default hides a potential error. Propagate with ? or ok_or()."
+note: "AI uses a silent fallback instead of propagating the error."
+rule:
+  kind: call_expression
+  regex: '\.(unwrap_or\(\s*(""|"unknown"|0|false|Uuid::nil\(\))\s*\)|unwrap_or_default\(\))'
+ignores:
+  - "**/tests/**"
+  - "**/test_*"
+  - "**/*_test.rs"

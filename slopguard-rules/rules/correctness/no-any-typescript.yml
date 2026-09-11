@@ -1,0 +1,8 @@
+id: no-any-typescript
+language: typescript
+severity: error
+message: "any is forbidden. Use unknown, the concrete type, or a generic."
+note: "any disables type checking and propagates silently."
+rule:
+  kind: predefined_type
+  regex: '^any$'

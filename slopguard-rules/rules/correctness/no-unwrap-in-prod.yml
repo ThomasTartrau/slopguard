@@ -1,0 +1,14 @@
+id: no-unwrap-in-prod
+language: rust
+severity: error
+message: ".unwrap() forbidden in production. Use ? or .expect('explicit message')."
+note: "unwrap() crashes the process on a single invalid input."
+rule:
+  kind: call_expression
+  regex: '\.unwrap\(\)\s*$'
+ignores:
+  - "**/tests/**"
+  - "**/test_*"
+  - "**/*_test.rs"
+  - "**/examples/**"
+  - "**/benches/**"

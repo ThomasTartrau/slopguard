@@ -1,0 +1,14 @@
+id: no-useeffect-derived-state
+language: typescript
+severity: warning
+message: "useEffect for derived state. Use useMemo or compute directly in the render."
+note: "useEffect + setState to derive a value causes an unnecessary re-render and sync bugs."
+rule:
+  kind: call_expression
+  all:
+    - regex: 'useEffect\('
+    - has:
+        kind: arrow_function
+        has:
+          kind: call_expression
+          regex: 'set[A-Z]\w*\('

@@ -1,0 +1,11 @@
+id: no-float-money
+language: rust
+severity: error
+message: "FLOAT/REAL/DOUBLE in SQL. Use BIGINT (cents) or DECIMAL for monetary values."
+note: "Floating point loses precision on monetary calculations."
+rule:
+  kind: string_literal
+  regex: '\b(FLOAT|REAL|DOUBLE\s+PRECISION)\b'
+files:
+  - "**/migrations/**/*.rs"
+  - "**/migrate/**/*.rs"

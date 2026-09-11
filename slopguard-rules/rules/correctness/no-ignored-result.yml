@@ -1,0 +1,11 @@
+id: no-ignored-result
+language: rust
+severity: error
+message: "Result ignored via let _ =. Handle the error with ?, if let Err(e), or log."
+note: "let _ = on a fallible call silently swallows errors."
+rule:
+  pattern: let _ = $EXPR;
+ignores:
+  - "**/tests/**"
+  - "**/test_*"
+  - "**/*_test.rs"

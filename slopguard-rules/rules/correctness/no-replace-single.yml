@@ -1,0 +1,11 @@
+id: no-replace-single
+language: typescript
+severity: warning
+message: ".replace() only replaces the first occurrence. Use .replaceAll() or a /g regex."
+note: "'a-b-c'.replace('-', '_') returns 'a_b-c', not 'a_b_c'."
+rule:
+  kind: call_expression
+  all:
+    - regex: '\.replace\('
+    - not:
+        regex: '\.replace\(\s*/'

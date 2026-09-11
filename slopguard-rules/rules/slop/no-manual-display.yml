@@ -1,0 +1,11 @@
+id: no-manual-display
+language: rust
+severity: warning
+message: 'Manual Display impl. Use #[derive(Display)] from strum with #[strum(serialize_all = "...")].'
+note: "A manual impl with a match arm per variant is replaced by one derive line. Check if strum is already a dependency."
+rule:
+  pattern: impl fmt::Display for $NAME { $$$ }
+ignores:
+  - "**/tests/**"
+  - "**/test_*"
+  - "**/*_test.rs"

@@ -1,0 +1,15 @@
+id: no-expect-in-prod
+language: rust
+severity: error
+message: ".expect() forbidden in production. Use ? or match."
+note: "expect() allowed only in tests and server startup (main). In a handler/service it crashes the process."
+rule:
+  kind: call_expression
+  regex: '\.expect\('
+ignores:
+  - "**/tests/**"
+  - "**/test_*"
+  - "**/*_test.rs"
+  - "**/examples/**"
+  - "**/benches/**"
+  - "**/main.rs"
