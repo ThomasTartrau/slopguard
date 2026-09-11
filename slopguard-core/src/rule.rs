@@ -4,11 +4,12 @@ use std::io::Error as IoError;
 use std::path::{Component, Path, PathBuf};
 use std::str::{from_utf8, Utf8Error};
 
+use ast_grep_language::SupportLang;
 use ignore::WalkBuilder;
 use serde::{Deserialize, Serialize};
 use serde_yaml::Value;
 use slopguard_rules::BuiltinRules;
-use strum::{Display, EnumString};
+use strum::{Display, EnumIter, EnumString};
 use thiserror::Error;
 
 #[derive(Debug, Display, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -19,7 +20,7 @@ pub enum Severity {
     Warning,
 }
 
-#[derive(Debug, Display, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Display, EnumIter, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 #[strum(serialize_all = "lowercase")]
 pub enum Language {
@@ -27,12 +28,24 @@ pub enum Language {
     TypeScript,
 }
 
-#[derive(Debug, Display, EnumString, Clone, PartialEq, Eq, Serialize, Deserialize)]
+impl Language {
+    /// The ast-grep languages a rule written for this language is compiled
+    /// against. TypeScript rules also cover TSX files.
+    pub fn ast_grep_langs(&self) -> &'static [SupportLang] {
+        match self {
+            Language::Rust => &[SupportLang::Rust],
+            Language::TypeScript => &[SupportLang::TypeScript, SupportLang::Tsx],
+        }
+    }
+}
+
+#[derive(Debug, Display, EnumString, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 #[strum(serialize_all = "lowercase")]
 pub enum Category {
     Slop,
     Security,
+    #[default]
     Correctness,
 }
 

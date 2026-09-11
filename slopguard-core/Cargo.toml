@@ -17,6 +17,8 @@ serde_yaml = "0.9"
 slopguard-rules = { path = "../slopguard-rules" }
 dirs = "7.0.0"
 smart-default = "0.7.1"
+globset = "0.4"
+rayon = "1"
 
 [dev-dependencies]
 tempfile = "3"
