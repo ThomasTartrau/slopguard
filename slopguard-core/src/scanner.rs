@@ -18,6 +18,7 @@ use strum::IntoEnumIterator;
 use thiserror::Error;
 
 use crate::config::Config;
+use crate::disable::filter_disabled;
 use crate::finding::{Finding, ScanResult, ScanStats};
 use crate::rule::{Language, Rule, Severity};
 
@@ -121,7 +122,7 @@ fn scan_file(path: &Path, lang: SupportLang, rules: &CompiledRules) -> Vec<Findi
     let combined = CombinedScan::new(applicable);
     let result = combined.scan(&root, false);
 
-    result
+    let findings = result
         .matches
         .into_iter()
         .filter_map(|(config, matches)| {
@@ -148,7 +149,9 @@ fn scan_file(path: &Path, lang: SupportLang, rules: &CompiledRules) -> Vec<Findi
                 }
             })
         })
-        .collect()
+        .collect();
+
+    filter_disabled(findings, &source)
 }
 
 /// Scan the given paths for rule violations.
@@ -430,6 +433,31 @@ rule:
         let result = scan_dir(dir.path(), &[rule]);
         assert_eq!(result.stats.files_scanned, 2);
         assert_eq!(result.stats.warnings, 2);
+    }
+
+    #[test]
+    fn scan_with_disable_comment_filters_findings() {
+        let dir = tempdir().unwrap();
+        write(
+            dir.path().join("main.rs"),
+            "fn main() {\n    // slopguard-disable-next-line\n    foo().unwrap();\n    bar().unwrap();\n}\n",
+        )
+        .unwrap();
+        let result = scan_dir(dir.path(), &[unwrap_rule()]);
+        assert_eq!(result.findings.len(), 1, "only the non-disabled unwrap should remain");
+        assert_eq!(result.findings[0].line, 4);
+    }
+
+    #[test]
+    fn scan_with_disable_rule_id_filters_only_that_rule() {
+        let dir = tempdir().unwrap();
+        write(
+            dir.path().join("main.rs"),
+            "fn main() {\n    // slopguard-disable-next-line test-unwrap\n    foo().unwrap();\n}\n",
+        )
+        .unwrap();
+        let result = scan_dir(dir.path(), &[unwrap_rule()]);
+        assert_eq!(result.findings.len(), 0);
     }
 
     #[test]
