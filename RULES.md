@@ -1,0 +1,109 @@
+# Builtin rules reference
+
+All 34 rules with their current YAML definitions. Source files are in `personal-config/slopguard/rules/`.
+
+## Ruleset: slop (9 rules)
+
+AI-generated code patterns detected at abnormally high rates.
+
+| Rule | Lang | Severity | What it catches |
+|------|------|----------|-----------------|
+| no-slop-words | rust | warning | AI filler words in comments (comprehensive, robust, seamless, leverage...) |
+| no-trivial-doc | rust | warning | Doc-comments like "This method provides..." that restate the name |
+| no-paraphrase-doc | rust | warning | Doc-comments like "Create a new X" on every constructor |
+| no-and-more-doc | rust | warning | Vague docs with "and more", "etc.", "various" |
+| no-restated-comment | rust | warning | Comments that restate the code ("// increment the counter") |
+| no-manual-display | rust | warning | Manual `impl fmt::Display` instead of derive(Display) from strum |
+| no-manual-rfc3339 | rust | warning | `.to_rfc3339()` when serde + chrono handles it natively |
+| no-inline-qualified-path | rust | warning | `std::collections::HashMap` inline instead of a `use` import |
+| no-glob-reexport | rust | warning | `pub use module::*` instead of explicit re-exports |
+
+## Ruleset: security (7 rules)
+
+Security anti-patterns.
+
+| Rule | Lang | Severity | What it catches |
+|------|------|----------|-----------------|
+| no-debug-on-secrets | rust | error | derive(Debug) on structs with secret/token/password fields |
+| no-empty-env-secret | rust | error | env::var() for secrets without rejecting empty strings |
+| no-format-path | rust | error | format!() to build file paths (path traversal risk) |
+| no-format-url | rust | error | format!() to build URLs (parameter injection risk) |
+| no-unsafe-without-safety | rust | error | unsafe block without // SAFETY: comment |
+| no-safety-hallucination | rust | error | // SAFETY: comment on code that is not actually unsafe |
+| no-allow-dead-code | rust | error | #[allow(dead_code)] in src/ (remove dead code instead) |
+| no-client-without-timeout | rust | error | reqwest::Client::new() without timeout configuration |
+
+## Ruleset: correctness (18 rules)
+
+Error handling, type safety, and correctness issues.
+
+### Rust (13 rules)
+| Rule | Lang | Severity | What it catches |
+|------|------|----------|-----------------|
+| no-unwrap-in-prod | rust | error | .unwrap() outside tests/examples |
+| no-expect-in-prod | rust | error | .expect() outside tests/examples/main |
+| no-ignored-result | rust | error | `let _ = fallible_call()` |
+| no-swallowed-error | rust | warning | `map_err(\|_\| ...)` discarding the original error |
+| no-silent-fallback | rust | warning | unwrap_or("") / unwrap_or_default() hiding errors |
+| no-double-fallback | rust | warning | Chained fallbacks (.ok().unwrap_or()) |
+| no-ok-chain | rust | warning | .ok() silently converting errors to None |
+| no-sqlx-runtime | rust | error | sqlx::query() instead of sqlx::query!() (no compile-time check) |
+| no-index-without-if-not-exists | rust | error | CREATE INDEX without IF NOT EXISTS in migrations |
+| no-float-money | rust | error | FLOAT/REAL/DOUBLE in SQL migrations for monetary values |
+| pub-fn-needs-tracing | rust | warning | Public methods without #[tracing::instrument] |
+| test-needs-timeout | rust | warning | Async tests without tokio::time::timeout |
+
+### TypeScript (5 rules)
+| Rule | Lang | Severity | What it catches |
+|------|------|----------|-----------------|
+| no-any-typescript | ts | error | `any` type usage |
+| no-async-foreach | ts | error | Async callbacks in forEach/map/filter/reduce |
+| no-replace-single | ts | warning | .replace() without /g (only replaces first occurrence) |
+| no-sort-without-comparator | ts | error | .sort() without comparator (lexicographic, not numeric) |
+| no-useeffect-derived-state | ts | warning | useEffect + setState for derived state |
+
+## Rule anatomy
+
+Each rule follows this structure:
+
+```yaml
+# Identity
+id: rule-id                        # unique, kebab-case
+language: rust                     # rust | typescript
+severity: error                    # error | warning
+category: correctness              # slop | security | correctness
+
+# User-facing text
+message: "Short, actionable"      # what's wrong, what to do instead
+note: "Explanation"                # why this matters
+fix: "Use X instead"              # textual suggestion
+
+# AST matcher (ast-grep syntax)
+rule:
+  pattern: $X.unwrap()             # or kind/regex/all/any/not/has/precedes/follows/inside
+
+# Scope
+files: ["**/src/**/*.rs"]          # only scan these
+ignores: ["**/tests/**"]           # skip these
+
+# Inline tests
+tests:
+  should_match:
+    - "snippet that triggers"
+  should_not_match:
+    - "snippet that must not trigger"
+```
+
+## Key ast-grep syntax notes for implementors
+
+- In tree-sitter-rust, **attributes are siblings of the item**, not children. `#[derive(Debug)]` and `struct Foo {}` are sibling nodes. Use `precedes`/`follows` to relate them, not `has`.
+- **SQL is not a supported language**. SQL checks are done by matching `string_literal` nodes in Rust files (for inline migrations).
+- **Patterns starting with `.`** (like `.map_err(|_| $$$)`) are not valid standalone patterns. Use `kind: call_expression` + `regex` instead.
+- The `field: visibility_modifier` syntax is not valid in ast-grep. Use `has: { kind: visibility_modifier, regex: '^pub' }`.
+
+## Research backing
+
+- **ANTISLOP paper (ICLR 2026)**: certain words appear 1000x more often in LLM text than human text. The no-slop-words rule uses this word list.
+- **SlopCodeBench**: 89.8% degradation in agent sessions from accumulated anti-patterns.
+- **Tambon et al.**: 333 bugs across 10 categories from AI-generated code.
+- **GitClear**: refactoring collapsed from 21% to 3.8% in AI-assisted codebases.

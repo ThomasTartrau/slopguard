@@ -1,0 +1,7 @@
+[workspace]
+members = ["slopguard-cli", "slopguard-core", "slopguard-rules"]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+license = "MIT"

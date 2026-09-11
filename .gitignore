@@ -1,0 +1,6 @@
+/target
+.slopguard-cache/
+*.swp
+*.swo
+.DS_Store
+.env
