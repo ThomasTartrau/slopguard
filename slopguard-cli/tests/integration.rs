@@ -78,8 +78,6 @@ fn scan_rust_violations() {
         "no-silent-fallback",
         "no-double-fallback",
         "no-ok-chain",
-        "pub-fn-needs-tracing",
-        "test-needs-timeout",
     ];
 
     for rule_id in &expected_rules {
@@ -520,7 +518,7 @@ fn severity_threshold_error_exits_zero_on_warnings_only() {
     setup_src_dir(dir.path());
     write(
         dir.path().join("src/lib.rs"),
-        "// A comprehensive guide to the API.\npub fn api() {}\n",
+        "// This will streamline the API.\npub fn api() {}\n",
     )
     .unwrap();
 

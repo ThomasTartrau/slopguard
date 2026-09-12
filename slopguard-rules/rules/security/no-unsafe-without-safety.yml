@@ -18,6 +18,16 @@ rule:
           follows:
             kind: line_comment
             regex: 'SAFETY'
+      - has:
+          kind: line_comment
+          regex: 'SAFETY'
+          stopBy: end
+      - inside:
+          kind: block
+          has:
+            kind: line_comment
+            regex: 'SAFETY'
+            stopBy: end
 ignores:
   - "**/tests/**"
   - "**/test_*"

@@ -6,7 +6,10 @@ message: "#[allow(dead_code)] in src/. Remove dead code instead of suppressing t
 note: "AI adds unused code then hides the warning with allow(dead_code) instead of deleting it."
 rule:
   kind: attribute_item
-  regex: 'allow\(\s*dead_code\s*\)'
+  all:
+    - regex: 'allow\(\s*dead_code\s*\)'
+    - not:
+        regex: 'cfg_attr\s*\('
 files:
   - "**/src/**/*.rs"
 ignores:

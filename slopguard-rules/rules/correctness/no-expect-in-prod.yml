@@ -11,10 +11,13 @@ ignores:
   - "**/tests/**"
   - "**/test_*"
   - "**/*_test.rs"
+  - "**/*-test-*/**"
+  - "**/*_test_*/**"
   - "**/examples/**"
   - "**/benches/**"
   - "**/main.rs"
   - "**/fixtures/**"
+  - "**/build.rs"
 skip_test_code: true
 tests:
   should_match:

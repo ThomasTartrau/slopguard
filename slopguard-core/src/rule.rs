@@ -120,6 +120,12 @@ pub struct Rule {
     pub skip_test_code: bool,
     #[serde(default)]
     pub tests: Option<RuleTests>,
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
+}
+
+fn default_enabled() -> bool {
+    true
 }
 
 #[derive(Debug, Error)]
@@ -232,6 +238,7 @@ pub fn load_effective_rules(config: &crate::config::Config) -> Result<Vec<Rule>,
                 Category::Correctness => config.rulesets.correctness,
             },
         )
+        .filter(|rule| rule.enabled)
         .filter(|rule| !config.rules.disable.iter().any(|d| d == rule.id.as_str()))
         .collect();
 

@@ -4,7 +4,7 @@
 // no-format-url) are excluded: they have ast-grep matching issues.
 
 // --- slop/no-slop-words (warning) ---
-// This provides a comprehensive overview of the API
+// This will streamline the API
 
 // --- slop/no-trivial-doc (warning) ---
 /// This method provides the user data

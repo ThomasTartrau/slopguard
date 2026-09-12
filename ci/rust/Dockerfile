@@ -11,7 +11,7 @@ RUN case "$(uname -m)" in \
 RUN cargo binstall --no-confirm \
     cargo-nextest@0.9.140 \
     cargo-audit@0.22.2 \
-    cargo-zigbuild@0.20.8
+    cargo-zigbuild@0.23.4
 
 FROM rust:1.94.1-bookworm
 
