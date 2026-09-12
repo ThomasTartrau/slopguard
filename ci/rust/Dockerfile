@@ -21,7 +21,7 @@ RUN case "$(uname -m)" in \
       *)             ZIG_ARCH="x86_64" ;; \
     esac && \
     mkdir -p /opt/zig && \
-    curl -sSfL "https://ziglang.org/download/${ZIG_VERSION}/zig-linux-${ZIG_ARCH}-${ZIG_VERSION}.tar.xz" \
+    curl -sSfL "https://ziglang.org/download/${ZIG_VERSION}/zig-${ZIG_ARCH}-linux-${ZIG_VERSION}.tar.xz" \
     | tar -xJ --strip-components=1 -C /opt/zig
 
 ENV PATH="/opt/zig:${PATH}"
