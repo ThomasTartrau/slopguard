@@ -5,3 +5,6 @@ resolver = "2"
 [workspace.package]
 edition = "2021"
 license = "MIT"
+repository = "https://gitlab.com/ThomasTartrau/slopguard"
+keywords = ["linter", "static-analysis", "ast-grep", "code-quality"]
+categories = ["development-tools", "command-line-utilities"]
