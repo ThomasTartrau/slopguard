@@ -74,9 +74,43 @@ You can extend slopguard with your own YAML rules, disable rules per-line with i
 
 ## ⚡ Quick Start
 
+### Install
+
+**Pre-built binary (recommended):**
+
+```bash
+curl -fsSL https://gitlab.com/ThomasTartrau/slopguard/-/raw/main/install.sh | sh
+```
+
+Or install a specific version:
+
+```bash
+curl -fsSL https://gitlab.com/ThomasTartrau/slopguard/-/raw/main/install.sh | VERSION=0.1.0 sh
+```
+
+By default, the binary is installed to `~/.local/bin/`. Override with `INSTALL_DIR`:
+
+```bash
+curl -fsSL https://gitlab.com/ThomasTartrau/slopguard/-/raw/main/install.sh | INSTALL_DIR=/usr/local/bin sh
+```
+
+Pre-built binaries are available for:
+
+| OS | Architecture | Target |
+|----|-------------|--------|
+| Linux | x86_64 | `x86_64-unknown-linux-gnu`, `x86_64-unknown-linux-musl` |
+| macOS | ARM (M1+) | `aarch64-apple-darwin` |
+| macOS | Intel | `x86_64-apple-darwin` |
+
+You can also download archives directly from the [releases page](https://gitlab.com/ThomasTartrau/slopguard/-/releases).
+
+**From source (requires Rust toolchain):**
+
 ```bash
 cargo install slopguard-cli
 ```
+
+### Usage
 
 ```bash
 slopguard scan .
