@@ -18,6 +18,8 @@ toml = "0.8"
 ignore = "0.4"
 strum = { version = "0.27", features = ["derive"] }
 thiserror = "2"
+sha2 = "0.10"
+rmp-serde = "1"
 serde_yaml = "0.9"
 slopguard-rules = { path = "../slopguard-rules", version = "0.1.2" }
 dirs = "7.0.0"

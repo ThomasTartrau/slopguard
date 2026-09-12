@@ -4,7 +4,7 @@ use std::fs::read_to_string;
 use std::io::{self, Write};
 use std::path::Path;
 
-use slopguard_core::finding::{Finding, ScanResult};
+use slopguard_core::finding::{CacheStats, Finding, ScanResult};
 use slopguard_core::rule::{Category, Rule, Severity};
 
 const RED: &str = "\x1b[1;31m";
@@ -174,6 +174,15 @@ pub fn format_explain(rule: &Rule, w: &mut impl Write) -> io::Result<()> {
     Ok(())
 }
 
+fn write_cache_line(w: &mut impl Write, files_scanned: usize, cs: &CacheStats) -> io::Result<()> {
+    writeln!(
+        w,
+        "Scanned {files_scanned} files ({cached} cached, {changed} changed)",
+        cached = cs.cached,
+        changed = cs.changed,
+    )
+}
+
 pub fn format_text(result: &ScanResult, w: &mut impl Write, use_colors: bool) -> io::Result<()> {
     let c = Colors::new(use_colors);
     let mut files_cache: BTreeMap<&Path, Vec<String>> = BTreeMap::new();
@@ -205,6 +214,10 @@ pub fn format_text(result: &ScanResult, w: &mut impl Write, use_colors: bool) ->
     } else {
         "files"
     };
+
+    if let Some(ref cs) = result.cache_stats {
+        write_cache_line(w, result.stats.files_scanned, cs)?;
+    }
 
     if result.stats.total > 0 {
         writeln!(
