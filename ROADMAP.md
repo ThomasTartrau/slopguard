@@ -44,6 +44,42 @@
 
 ---
 
+## v0.1.x - Polish and validation
+
+### Documentation
+- [ ] Refaire le README principal (badges, ASCII art, table des crates, architecture diagram, quick start)
+- [ ] Creer README pour slopguard-cli
+- [ ] Creer README pour slopguard-core
+- [ ] Creer README pour slopguard-rules
+- [ ] Ajouter `readme = "README.md"` dans chaque Cargo.toml de sous-crate
+
+### Distribution
+- [ ] Binaires pre-compiles via GitLab CI (Linux x86_64, Linux musl, macOS ARM, macOS Intel)
+- [ ] Script d'installation `install.sh` (detect OS/arch, telecharge le bon binaire)
+- [ ] Republier sur crates.io avec les README
+
+### Validation sur le terrain
+- [ ] Scanner tokio, axum, ripgrep, cargo, serde pour mesurer faux positifs et performance
+- [ ] Rapport de benchmark dans benchmarks/RESULTS.md
+- [ ] Ajuster les regles bruyantes (tickets separes par regle)
+
+### Nouvelles regles (candidates, a valider apres benchmark)
+- [ ] Rust : `.clone()` inutile, `Arc<Mutex<>>` vs `RwLock`, `Box<dyn Error>` vs thiserror, `println!` en prod vs tracing
+- [ ] TypeScript : `as unknown as T` (double cast), `// @ts-ignore` sans justification, `catch(e) {}` vide
+- [ ] Documentation : `#[doc(hidden)]` sur du code public, `///` vide
+
+### Fonctionnalites
+- [ ] `slopguard explain <rule-id>` : detail d'une regle avec exemples
+- [ ] `--rule <id>` pour scanner avec une seule regle
+- [ ] Cache des fichiers inchanges (hash SHA256) pour accelerer les re-scans
+
+### CI integration
+- [ ] GitLab CI template (`.gitlab-ci.yml` snippet pour les projets utilisateurs)
+- [ ] Pre-commit hook support
+- [ ] GitHub Action officielle
+
+---
+
 ## v0.2.0 - AI analysis
 
 ### AI integration
