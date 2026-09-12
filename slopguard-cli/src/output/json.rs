@@ -3,6 +3,7 @@ use std::io::{self, Write};
 use serde::Serialize;
 
 use slopguard_core::finding::{Finding, ScanResult};
+use slopguard_core::rule::{Category, Language, Rule, Severity};
 
 #[derive(Serialize)]
 struct JsonOutput<'a> {
@@ -15,6 +16,41 @@ struct ScanSummary {
     errors: usize,
     warnings: usize,
     total: usize,
+}
+
+#[derive(Serialize)]
+struct ExplainOutput<'a> {
+    id: &'a str,
+    language: &'a Language,
+    severity: &'a Severity,
+    category: &'a Category,
+    message: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    note: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fix: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    should_match: Option<&'a [String]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    should_not_match: Option<&'a [String]>,
+}
+
+pub fn format_explain_json(rule: &Rule, w: &mut impl Write) -> io::Result<()> {
+    let default_category = Category::Correctness;
+    let output = ExplainOutput {
+        id: rule.id.as_str(),
+        language: &rule.language,
+        severity: &rule.severity,
+        category: rule.category.as_ref().unwrap_or(&default_category),
+        message: &rule.message,
+        note: rule.note.as_deref(),
+        fix: rule.fix.as_deref(),
+        should_match: rule.tests.as_ref().map(|t| t.should_match.as_slice()),
+        should_not_match: rule.tests.as_ref().map(|t| t.should_not_match.as_slice()),
+    };
+    serde_json::to_writer_pretty(&mut *w, &output).map_err(io::Error::other)?;
+    writeln!(w)?;
+    Ok(())
 }
 
 pub fn format_json(result: &ScanResult, w: &mut impl Write) -> io::Result<()> {

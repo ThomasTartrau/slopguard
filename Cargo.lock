@@ -950,6 +950,7 @@ dependencies = [
  "serde",
  "serde_json",
  "slopguard-core",
+ "strsim",
  "tempfile",
  "thiserror",
 ]
