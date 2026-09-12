@@ -1,5 +1,6 @@
 workflow:
   rules:
+    - if: '$CI_COMMIT_TAG =~ /^slopguard-cli-v/'
     - if: $CI_COMMIT_TAG
       when: never
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
@@ -237,3 +238,57 @@ release-plz-release:
       - stuck_or_timeout_failure
   rules:
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+# ---------------------------------------------------------------------------
+# BINARY RELEASES (tag pipelines only)
+# ---------------------------------------------------------------------------
+
+build-binaries:
+  stage: release
+  image: $CI_RUST_IMAGE
+  <<: *rust-cache
+  needs: []
+  parallel:
+    matrix:
+      - TARGET: x86_64-unknown-linux-gnu
+      - TARGET: x86_64-unknown-linux-musl
+      - TARGET: aarch64-apple-darwin
+      - TARGET: x86_64-apple-darwin
+  script:
+    - VERSION="${CI_COMMIT_TAG#slopguard-cli-v}"
+    - |
+      if [ "$TARGET" = "x86_64-unknown-linux-gnu" ]; then
+        rustup target add x86_64-unknown-linux-gnu 2>/dev/null || true
+        cargo build -p slopguard-cli --release --target "$TARGET"
+      else
+        cargo zigbuild -p slopguard-cli --release --target "$TARGET"
+      fi
+    - DIST="slopguard-${VERSION}-${TARGET}"
+    - mkdir -p "dist/${DIST}"
+    - cp "target/${TARGET}/release/slopguard" "dist/${DIST}/"
+    - cp LICENSE "dist/${DIST}/"
+    - |
+      cat > "dist/${DIST}/README.md" <<INNER
+      # slopguard
+
+      Catch AI-generated code patterns via static analysis.
+
+      https://gitlab.com/ThomasTartrau/slopguard
+      INNER
+    - tar -czf "dist/${DIST}.tar.gz" -C dist "${DIST}"
+    - PROJ_API="${CI_API_V4_URL}/projects/${CI_PROJECT_ID}"
+    - PKG_URL="${PROJ_API}/packages/generic/slopguard/${VERSION}/${DIST}.tar.gz"
+    - LINKS_URL="${PROJ_API}/releases/${CI_COMMIT_TAG}/assets/links"
+    - |
+      curl --fail --header "JOB-TOKEN: $CI_JOB_TOKEN" \
+        --upload-file "dist/${DIST}.tar.gz" \
+        "${PKG_URL}"
+    - |
+      curl --fail --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
+        --request POST \
+        "${LINKS_URL}" \
+        --data-urlencode "name=${DIST}.tar.gz" \
+        --data-urlencode "url=${PKG_URL}" \
+        --data-urlencode "link_type=package"
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^slopguard-cli-v/'
