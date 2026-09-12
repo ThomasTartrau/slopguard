@@ -15,8 +15,6 @@ stages:
   - release
 
 default:
-  tags:
-    - macos
   retry:
     max: 2
     when:
