@@ -46,9 +46,11 @@ variables:
 .install-release-plz: &install-release-plz
   - mkdir -p "${CI_PROJECT_DIR}/.cargo/bin"
   - |
-    case "$(uname -m)" in
-      aarch64|arm64) ARCH="aarch64-apple-darwin" ;;
-      *)             ARCH="x86_64-unknown-linux-musl" ;;
+    case "$(uname -s)-$(uname -m)" in
+      Linux-aarch64)  ARCH="aarch64-unknown-linux-musl" ;;
+      Linux-x86_64)   ARCH="x86_64-unknown-linux-musl" ;;
+      Darwin-arm64)   ARCH="aarch64-apple-darwin" ;;
+      *)              ARCH="x86_64-unknown-linux-musl" ;;
     esac
   - curl -sSfL "https://github.com/release-plz/release-plz/releases/download/release-plz-v${RELEASE_PLZ_VERSION}/release-plz-${ARCH}.tar.gz" | tar -xz -C "${CI_PROJECT_DIR}/.cargo/bin" release-plz
   - export PATH="${CI_PROJECT_DIR}/.cargo/bin:$PATH"
