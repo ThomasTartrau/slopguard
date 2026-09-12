@@ -1,6 +1,6 @@
 mod common;
 
-use std::fs::write;
+use std::fs::{self, write};
 
 use predicates::prelude::*;
 use tempfile::tempdir;
@@ -290,4 +290,111 @@ fn text_summary_line() {
         stdout.contains("3 errors") && stdout.contains("in 2 files"),
         "summary should show correct counts, got: {stdout}"
     );
+}
+
+#[test]
+fn no_cache_flag() {
+    let dir = tempdir().unwrap();
+    write(
+        dir.path().join("main.rs"),
+        "fn main() {\n    foo().unwrap();\n}\n",
+    )
+    .unwrap();
+
+    let output = slopguard()
+        .current_dir(dir.path())
+        .args(["scan", "--no-cache", "--no-colors", "."])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        !stdout.contains("cached"),
+        "--no-cache should not show cache metrics, got: {stdout}"
+    );
+    assert!(
+        !dir.path().join(".slopguard-cache").exists(),
+        "--no-cache should not create a cache directory"
+    );
+}
+
+#[test]
+fn cache_metrics_in_output() {
+    let dir = tempdir().unwrap();
+    write(
+        dir.path().join("main.rs"),
+        "fn main() {\n    foo().unwrap();\n}\n",
+    )
+    .unwrap();
+
+    // First scan: all files changed, nothing cached
+    let output1 = slopguard()
+        .current_dir(dir.path())
+        .args(["scan", "--no-colors", "."])
+        .output()
+        .unwrap();
+
+    let stdout1 = String::from_utf8(output1.stdout).unwrap();
+    assert!(
+        stdout1.contains("0 cached") && stdout1.contains("1 changed"),
+        "first scan should show 0 cached and 1 changed, got: {stdout1}"
+    );
+
+    // Verify cache directory was created
+    assert!(
+        dir.path().join(".slopguard-cache").exists(),
+        "cache directory should be created after first scan"
+    );
+
+    // Second scan: all files cached
+    let output2 = slopguard()
+        .current_dir(dir.path())
+        .args(["scan", "--no-colors", "."])
+        .output()
+        .unwrap();
+
+    let stdout2 = String::from_utf8(output2.stdout).unwrap();
+    assert!(
+        stdout2.contains("1 cached") && stdout2.contains("0 changed"),
+        "second scan should show 1 cached and 0 changed, got: {stdout2}"
+    );
+
+    // Modify file, third scan should show changed
+    write(
+        dir.path().join("main.rs"),
+        "fn main() {\n    bar().unwrap();\n    baz().unwrap();\n}\n",
+    )
+    .unwrap();
+
+    let output3 = slopguard()
+        .current_dir(dir.path())
+        .args(["scan", "--no-colors", "."])
+        .output()
+        .unwrap();
+
+    let stdout3 = String::from_utf8(output3.stdout).unwrap();
+    assert!(
+        stdout3.contains("0 cached") && stdout3.contains("1 changed"),
+        "third scan after modification should show 0 cached and 1 changed, got: {stdout3}"
+    );
+}
+
+#[test]
+fn cache_gitignore_created() {
+    let dir = tempdir().unwrap();
+    write(dir.path().join("main.rs"), "fn main() {}\n").unwrap();
+
+    slopguard()
+        .current_dir(dir.path())
+        .args(["scan", "--no-colors", "."])
+        .assert()
+        .success();
+
+    let gitignore = dir.path().join(".slopguard-cache/.gitignore");
+    assert!(
+        gitignore.exists(),
+        ".gitignore should be created in cache dir"
+    );
+    let content = fs::read_to_string(&gitignore).unwrap();
+    assert_eq!(content, "*\n");
 }

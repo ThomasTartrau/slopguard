@@ -17,7 +17,7 @@ use slopguard_core::rule::{
     is_rule_active, load_all_rules, load_builtin_rules, load_effective_rules, Category, Rule,
     RuleError, Severity,
 };
-use slopguard_core::scanner::{scan, ScanError};
+use slopguard_core::scanner::{scan, scan_cached, ScanError};
 use slopguard_core::testing::{self, RuleTestStatus, TestError, TestFailureKind};
 
 use crate::output::{json, sarif, text};
@@ -93,6 +93,10 @@ enum Command {
         /// Scan with only this rule
         #[arg(long = "rule", value_name = "RULE_ID")]
         rule_filter: Option<String>,
+
+        /// Disable file caching and force a full rescan
+        #[arg(long)]
+        no_cache: bool,
     },
     /// Generate a slopguard.toml config file
     Init {
@@ -191,6 +195,7 @@ struct ScanOpts {
     cli_disable: Vec<String>,
     cli_enable: Vec<String>,
     rule_filter: Option<String>,
+    no_cache: bool,
 }
 
 fn run_scan(opts: ScanOpts) -> Result<bool, AppError> {
@@ -203,6 +208,7 @@ fn run_scan(opts: ScanOpts) -> Result<bool, AppError> {
         cli_disable,
         cli_enable,
         rule_filter,
+        no_cache,
     } = opts;
     let use_colors = !no_colors && env::var_os("NO_COLOR").is_none();
 
@@ -235,7 +241,12 @@ fn run_scan(opts: ScanOpts) -> Result<bool, AppError> {
         rules.retain(|r| r.id.as_str() == filter_id);
     }
 
-    let result = scan(&paths, &rules, &config)?;
+    let result = if no_cache {
+        scan(&paths, &rules, &config)?
+    } else {
+        let cache_root = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        scan_cached(&paths, &rules, &config, &cache_root)?
+    };
     let has_findings = has_findings_above_threshold(&result, &severity_threshold);
 
     let stdout = io::stdout();
@@ -493,6 +504,7 @@ fn main() -> ExitCode {
             cli_disable,
             cli_enable,
             rule_filter,
+            no_cache,
         } => match run_scan(ScanOpts {
             paths,
             format,
@@ -502,6 +514,7 @@ fn main() -> ExitCode {
             cli_disable,
             cli_enable,
             rule_filter,
+            no_cache,
         }) {
             Ok(true) => ExitCode::from(1),
             Ok(false) => ExitCode::SUCCESS,
