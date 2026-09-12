@@ -1,0 +1,6 @@
+- id: slopguard
+  name: slopguard
+  entry: slopguard scan
+  language: rust
+  types_or: [rust, typescript, javascript]
+  pass_filenames: true

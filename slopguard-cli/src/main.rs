@@ -97,6 +97,10 @@ enum Command {
         /// Disable file caching and force a full rescan
         #[arg(long)]
         no_cache: bool,
+
+        /// Directory to store the scan cache (overrides SLOPGUARD_CACHE_DIR and config)
+        #[arg(long, value_name = "PATH")]
+        cache_dir: Option<PathBuf>,
     },
     /// Generate a slopguard.toml config file
     Init {
@@ -196,6 +200,7 @@ struct ScanOpts {
     cli_enable: Vec<String>,
     rule_filter: Option<String>,
     no_cache: bool,
+    cache_dir: Option<PathBuf>,
 }
 
 fn run_scan(opts: ScanOpts) -> Result<bool, AppError> {
@@ -209,6 +214,7 @@ fn run_scan(opts: ScanOpts) -> Result<bool, AppError> {
         cli_enable,
         rule_filter,
         no_cache,
+        cache_dir,
     } = opts;
     let use_colors = !no_colors && env::var_os("NO_COLOR").is_none();
 
@@ -244,8 +250,8 @@ fn run_scan(opts: ScanOpts) -> Result<bool, AppError> {
     let result = if no_cache {
         scan(&paths, &rules, &config)?
     } else {
-        let cache_root = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        scan_cached(&paths, &rules, &config, &cache_root)?
+        let resolved_cache_dir = resolve_cache_dir(cache_dir, &config);
+        scan_cached(&paths, &rules, &config, &resolved_cache_dir)?
     };
     let has_findings = has_findings_above_threshold(&result, &severity_threshold);
 
@@ -311,6 +317,7 @@ enable = []
 
 [scan]
 ignores = []
+# cache_dir = ".slopguard-cache"
 
 [output]
 format = "text"
@@ -321,6 +328,21 @@ colors = true
 # provider = "anthropic"
 # model = "claude-sonnet-5"
 "#;
+
+fn resolve_cache_dir(cli_flag: Option<PathBuf>, config: &Config) -> PathBuf {
+    cli_flag
+        .or_else(|| {
+            env::var("SLOPGUARD_CACHE_DIR")
+                .ok()
+                .filter(|s| !s.is_empty())
+                .map(PathBuf::from)
+        })
+        .or_else(|| config.scan.cache_dir.clone())
+        .unwrap_or_else(|| {
+            let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+            cwd.join(".slopguard-cache")
+        })
+}
 
 fn resolve_config(config_path: Option<&Path>) -> Result<Config, AppError> {
     match config_path {
@@ -505,6 +527,7 @@ fn main() -> ExitCode {
             cli_enable,
             rule_filter,
             no_cache,
+            cache_dir,
         } => match run_scan(ScanOpts {
             paths,
             format,
@@ -515,6 +538,7 @@ fn main() -> ExitCode {
             cli_enable,
             rule_filter,
             no_cache,
+            cache_dir,
         }) {
             Ok(true) => ExitCode::from(1),
             Ok(false) => ExitCode::SUCCESS,

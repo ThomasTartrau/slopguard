@@ -54,6 +54,8 @@ pub struct RulesConfig {
 #[serde(default)]
 pub struct ScanConfig {
     pub ignores: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_dir: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, SmartDefault)]
@@ -401,6 +403,32 @@ format = "xml"
         assert!(!cfg.ai.enabled);
         assert!(cfg.ai.provider.is_none());
         assert!(cfg.ai.model.is_none());
+    }
+
+    #[test]
+    fn parse_cache_dir() {
+        let dir = tempdir().unwrap();
+        let toml = r#"
+[scan]
+cache_dir = ".cache/slopguard"
+"#;
+        write(dir.path().join("slopguard.toml"), toml).unwrap();
+
+        let cfg = load_config_from(None, dir.path()).unwrap();
+        assert_eq!(cfg.scan.cache_dir, Some(PathBuf::from(".cache/slopguard")));
+    }
+
+    #[test]
+    fn parse_cache_dir_absent() {
+        let dir = tempdir().unwrap();
+        let toml = r#"
+[scan]
+ignores = ["target/"]
+"#;
+        write(dir.path().join("slopguard.toml"), toml).unwrap();
+
+        let cfg = load_config_from(None, dir.path()).unwrap();
+        assert!(cfg.scan.cache_dir.is_none());
     }
 
     #[test]
