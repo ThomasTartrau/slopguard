@@ -1,0 +1,5 @@
+# Cloned repos (large, reproducible via bench.sh)
+.repos/
+
+# Scan results (reproducible via bench.sh)
+results/
