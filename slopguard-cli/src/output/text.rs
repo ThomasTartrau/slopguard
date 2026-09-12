@@ -5,7 +5,7 @@ use std::io::{self, Write};
 use std::path::Path;
 
 use slopguard_core::finding::{Finding, ScanResult};
-use slopguard_core::rule::Severity;
+use slopguard_core::rule::{Category, Rule, Severity};
 
 const RED: &str = "\x1b[1;31m";
 const YELLOW: &str = "\x1b[1;33m";
@@ -128,6 +128,49 @@ fn write_finding(
     }
 
     writeln!(w)?;
+    Ok(())
+}
+
+pub fn format_explain(rule: &Rule, w: &mut impl Write) -> io::Result<()> {
+    let category = rule
+        .category
+        .as_ref()
+        .unwrap_or(&Category::Correctness)
+        .to_string();
+
+    writeln!(w, "id:        {}", rule.id)?;
+    writeln!(w, "language:  {}", rule.language)?;
+    writeln!(w, "severity:  {}", rule.severity)?;
+    writeln!(w, "category:  {category}")?;
+    writeln!(w, "message:   {}", rule.message)?;
+    if let Some(note) = &rule.note {
+        writeln!(w, "note:      {note}")?;
+    }
+    if let Some(fix) = &rule.fix {
+        writeln!(w, "fix:       {fix}")?;
+    }
+
+    if let Some(tests) = &rule.tests {
+        if !tests.should_match.is_empty() {
+            writeln!(w)?;
+            writeln!(w, "should_match:")?;
+            for snippet in &tests.should_match {
+                for line in snippet.lines() {
+                    writeln!(w, "  {line}")?;
+                }
+            }
+        }
+        if !tests.should_not_match.is_empty() {
+            writeln!(w)?;
+            writeln!(w, "should_not_match:")?;
+            for snippet in &tests.should_not_match {
+                for line in snippet.lines() {
+                    writeln!(w, "  {line}")?;
+                }
+            }
+        }
+    }
+
     Ok(())
 }
 
