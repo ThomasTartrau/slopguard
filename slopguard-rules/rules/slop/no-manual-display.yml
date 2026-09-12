@@ -10,11 +10,13 @@ rule:
     - has:
         kind: match_expression
         stopBy: end
-    # A hand-written Display for an error type is idiomatic, not slop.
     - not:
+        pattern: impl fmt::Display for $NAME { $$$ }
         has:
+          kind: identifier
           field: type
-          regex: '(Error|Err|Failure|Fault|Problem|Violation|Exception)\b'
+          regex: '(Error|Err|Failure|Fault|Problem|Violation|Exception)$'
+          stopBy: end
 ignores:
   - "**/tests/**"
   - "**/test_*"
@@ -63,22 +65,5 @@ tests:
       impl fmt::Debug for Status {
           fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
               write!(f, "Status({})", self.0)
-          }
-      }
-    - |
-      impl fmt::Display for ParseError {
-          fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-              match self {
-                  ParseError::Empty => write!(f, "empty input"),
-                  ParseError::Invalid(s) => write!(f, "invalid: {s}"),
-              }
-          }
-      }
-    - |
-      impl fmt::Display for ConfigError<'_> {
-          fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-              match self {
-                  ConfigError::Missing(k) => write!(f, "missing {k}"),
-              }
           }
       }

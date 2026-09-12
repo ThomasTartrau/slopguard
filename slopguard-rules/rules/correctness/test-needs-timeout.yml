@@ -2,9 +2,8 @@ id: test-needs-timeout
 language: rust
 severity: warning
 category: correctness
-enabled: false
 message: "Async test without tokio::time::timeout. Risk of silent hang in CI."
-note: "Wrap the test body in timeout(Duration::from_secs(N), async { ... }). Opt-in rule: enable in slopguard.toml."
+note: "Wrap the test body in timeout(Duration::from_secs(N), async { ... })."
 rule:
   kind: attribute_item
   all:

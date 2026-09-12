@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-PROJECT_API="https://gitlab.com/api/v4/projects/ThomasTartrau%2Fslopguard"
+REPO_ENCODED="ThomasTartrau%2Fslopguard"
 INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/bin}"
 
 main() {
@@ -39,7 +39,7 @@ fetch_latest_version() {
     fi
 
     printf "Fetching latest version... "
-    RELEASES=$(curl -fsSL "${PROJECT_API}/releases")
+    RELEASES=$(curl -fsSL "https://gitlab.com/api/v4/projects/${REPO_ENCODED}/releases")
     LATEST_TAG=$(printf '%s' "$RELEASES" | grep -o '"tag_name":"slopguard-cli-v[^"]*"' | head -1 | cut -d'"' -f4)
 
     if [ -z "$LATEST_TAG" ]; then
@@ -53,7 +53,7 @@ fetch_latest_version() {
 
 download_and_install() {
     ARCHIVE="slopguard-${VERSION}-${TARGET}.tar.gz"
-    URL="${PROJECT_API}/packages/generic/slopguard/${VERSION}/${ARCHIVE}"
+    URL="https://gitlab.com/api/v4/projects/${REPO_ENCODED}/packages/generic/slopguard/${VERSION}/${ARCHIVE}"
 
     echo "Downloading slopguard v${VERSION} for ${TARGET}..."
 
