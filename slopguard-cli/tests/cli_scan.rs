@@ -380,6 +380,166 @@ fn cache_metrics_in_output() {
 }
 
 #[test]
+fn cache_dir_flag() {
+    let dir = tempdir().unwrap();
+    let cache = tempdir().unwrap();
+    let cache_path = cache.path().join("custom-cache");
+    write(
+        dir.path().join("main.rs"),
+        "fn main() {\n    foo().unwrap();\n}\n",
+    )
+    .unwrap();
+
+    slopguard()
+        .args([
+            "scan",
+            "--cache-dir",
+            cache_path.to_str().unwrap(),
+            "--no-colors",
+            dir.path().to_str().unwrap(),
+        ])
+        .assert()
+        .code(1);
+
+    assert!(
+        cache_path.exists(),
+        "cache directory should be created at the specified path"
+    );
+    let has_bin = cache_path
+        .read_dir()
+        .map(|d| {
+            d.flatten()
+                .any(|e| e.file_name().to_string_lossy().ends_with(".bin"))
+        })
+        .unwrap_or(false);
+    assert!(has_bin, "cache directory should contain .bin files");
+
+    assert!(
+        !dir.path().join(".slopguard-cache").exists(),
+        "default cache dir should NOT be created when --cache-dir is specified"
+    );
+}
+
+#[test]
+fn cache_dir_priority() {
+    let dir = tempdir().unwrap();
+    let cli_cache = tempdir().unwrap();
+    let cli_path = cli_cache.path().join("cli-wins");
+    let env_cache = tempdir().unwrap();
+    let env_path = env_cache.path().join("env-cache");
+    let toml_cache = tempdir().unwrap();
+    let toml_path = toml_cache.path().join("toml-cache");
+
+    write(
+        dir.path().join("main.rs"),
+        "fn main() {\n    foo().unwrap();\n}\n",
+    )
+    .unwrap();
+
+    let config = dir.path().join("slopguard.toml");
+    write(
+        &config,
+        format!(
+            "[scan]\ncache_dir = \"{}\"\n",
+            toml_path.to_str().unwrap().replace('\\', "\\\\")
+        ),
+    )
+    .unwrap();
+
+    slopguard()
+        .env("SLOPGUARD_CACHE_DIR", env_path.to_str().unwrap())
+        .args([
+            "scan",
+            "--cache-dir",
+            cli_path.to_str().unwrap(),
+            "--config",
+            config.to_str().unwrap(),
+            "--no-colors",
+            dir.path().to_str().unwrap(),
+        ])
+        .assert()
+        .code(1);
+
+    assert!(
+        cli_path.exists(),
+        "CLI --cache-dir should win over env and TOML"
+    );
+    assert!(
+        !env_path.exists(),
+        "env SLOPGUARD_CACHE_DIR should NOT be used when --cache-dir is provided"
+    );
+    assert!(
+        !toml_path.exists(),
+        "TOML cache_dir should NOT be used when --cache-dir is provided"
+    );
+}
+
+#[test]
+fn no_cache_ignores_cache_dir() {
+    let dir = tempdir().unwrap();
+    let cache = tempdir().unwrap();
+    let cache_path = cache.path().join("should-not-exist");
+    write(
+        dir.path().join("main.rs"),
+        "fn main() {\n    foo().unwrap();\n}\n",
+    )
+    .unwrap();
+
+    slopguard()
+        .args([
+            "scan",
+            "--no-cache",
+            "--cache-dir",
+            cache_path.to_str().unwrap(),
+            "--no-colors",
+            dir.path().to_str().unwrap(),
+        ])
+        .assert()
+        .code(1);
+
+    assert!(
+        !cache_path.exists(),
+        "cache directory should NOT be created when --no-cache is used"
+    );
+}
+
+#[test]
+fn cache_dir_env() {
+    let dir = tempdir().unwrap();
+    let cache = tempdir().unwrap();
+    let cache_path = cache.path().join("env-cache");
+    write(
+        dir.path().join("main.rs"),
+        "fn main() {\n    foo().unwrap();\n}\n",
+    )
+    .unwrap();
+
+    slopguard()
+        .env("SLOPGUARD_CACHE_DIR", cache_path.to_str().unwrap())
+        .args(["scan", "--no-colors", dir.path().to_str().unwrap()])
+        .assert()
+        .code(1);
+
+    assert!(
+        cache_path.exists(),
+        "cache directory should be created at SLOPGUARD_CACHE_DIR path"
+    );
+    let has_bin = cache_path
+        .read_dir()
+        .map(|d| {
+            d.flatten()
+                .any(|e| e.file_name().to_string_lossy().ends_with(".bin"))
+        })
+        .unwrap_or(false);
+    assert!(has_bin, "cache directory should contain .bin files");
+
+    assert!(
+        !dir.path().join(".slopguard-cache").exists(),
+        "default cache dir should NOT be created when SLOPGUARD_CACHE_DIR is set"
+    );
+}
+
+#[test]
 fn cache_gitignore_created() {
     let dir = tempdir().unwrap();
     write(dir.path().join("main.rs"), "fn main() {}\n").unwrap();
