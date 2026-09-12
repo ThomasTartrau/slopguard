@@ -258,7 +258,6 @@ build-binaries:
     - VERSION="${CI_COMMIT_TAG#slopguard-cli-v}"
     - |
       if [ "$TARGET" = "x86_64-unknown-linux-gnu" ]; then
-        rustup target add x86_64-unknown-linux-gnu 2>/dev/null || true
         cargo build -p slopguard-cli --release --target "$TARGET"
       else
         cargo zigbuild -p slopguard-cli --release --target "$TARGET"
@@ -276,16 +275,18 @@ build-binaries:
       https://gitlab.com/ThomasTartrau/slopguard
       INNER
     - tar -czf "dist/${DIST}.tar.gz" -C dist "${DIST}"
+    - PROJECT_API="${CI_API_V4_URL}/projects/${CI_PROJECT_ID}"
+    - PACKAGE_URL="${PROJECT_API}/packages/generic/slopguard/${VERSION}/${DIST}.tar.gz"
     - |
       curl --fail --header "JOB-TOKEN: $CI_JOB_TOKEN" \
         --upload-file "dist/${DIST}.tar.gz" \
-        "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/slopguard/${VERSION}/${DIST}.tar.gz"
+        "$PACKAGE_URL"
     - |
       curl --fail --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
         --request POST \
-        "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/releases/${CI_COMMIT_TAG}/assets/links" \
+        "${PROJECT_API}/releases/${CI_COMMIT_TAG}/assets/links" \
         --data-urlencode "name=${DIST}.tar.gz" \
-        --data-urlencode "url=${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/slopguard/${VERSION}/${DIST}.tar.gz" \
+        --data-urlencode "url=${PACKAGE_URL}" \
         --data-urlencode "link_type=package"
   rules:
     - if: '$CI_COMMIT_TAG =~ /^slopguard-cli-v/'

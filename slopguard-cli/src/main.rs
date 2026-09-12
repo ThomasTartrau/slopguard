@@ -12,7 +12,7 @@ use thiserror::Error;
 use slopguard_core::config::{load_config, load_config_file, Config, ConfigError, OutputFormat};
 use slopguard_core::finding::ScanResult;
 use slopguard_core::rule::{
-    load_builtin_rules, load_effective_rules, Category, RuleError, Severity,
+    is_rule_active, load_builtin_rules, load_effective_rules, Category, RuleError, Severity,
 };
 use slopguard_core::scanner::{scan, ScanError};
 use slopguard_core::testing::{self, RuleTestStatus, TestError, TestFailureKind};
@@ -78,6 +78,14 @@ enum Command {
         /// Disable colored output
         #[arg(long)]
         no_colors: bool,
+
+        /// Disable specific rules (overrides config, repeatable)
+        #[arg(long = "disable", value_name = "RULE_ID")]
+        cli_disable: Vec<String>,
+
+        /// Enable specific rules even if disabled by default or config (repeatable)
+        #[arg(long = "enable", value_name = "RULE_ID")]
+        cli_enable: Vec<String>,
     },
     /// Generate a slopguard.toml config file
     Init {
@@ -151,10 +159,14 @@ fn run_scan(
     severity_threshold: SeverityThreshold,
     config_path: Option<PathBuf>,
     no_colors: bool,
+    cli_disable: Vec<String>,
+    cli_enable: Vec<String>,
 ) -> Result<bool, AppError> {
     let use_colors = !no_colors && env::var_os("NO_COLOR").is_none();
 
-    let config = resolve_config(config_path.as_deref())?;
+    let mut config = resolve_config(config_path.as_deref())?;
+    config.rules.disable.extend(cli_disable);
+    config.rules.enable.extend(cli_enable);
 
     let format = format.unwrap_or(match config.output.format {
         OutputFormat::Text => Format::Text,
@@ -180,6 +192,8 @@ correctness = true
 
 [rules]
 disable = []
+# Opt-in rules (disabled by default): pub-fn-needs-tracing, test-needs-timeout
+enable = []
 # custom_dirs = ["./my-rules"]
 
 [scan]
@@ -272,15 +286,6 @@ fn run_list(
         load_effective_rules(&config)?
     };
 
-    let is_enabled = |r: &slopguard_core::rule::Rule| -> bool {
-        let cat_on = match r.category.as_ref().unwrap_or(&Category::Correctness) {
-            Category::Slop => config.rulesets.slop,
-            Category::Security => config.rulesets.security,
-            Category::Correctness => config.rulesets.correctness,
-        };
-        cat_on && r.enabled && !config.rules.disable.iter().any(|d| d == r.id.as_str())
-    };
-
     let entries: Vec<ListEntry> = rules
         .iter()
         .map(|r| ListEntry {
@@ -292,7 +297,7 @@ fn run_list(
                 .as_ref()
                 .unwrap_or(&Category::Correctness)
                 .to_string(),
-            status: if !show_all || is_enabled(r) {
+            status: if !show_all || is_rule_active(r, &config) {
                 "enabled".to_string()
             } else {
                 "disabled".to_string()
@@ -383,7 +388,17 @@ fn main() -> ExitCode {
             severity_threshold,
             config,
             no_colors,
-        } => match run_scan(paths, format, severity_threshold, config, no_colors) {
+            cli_disable,
+            cli_enable,
+        } => match run_scan(
+            paths,
+            format,
+            severity_threshold,
+            config,
+            no_colors,
+            cli_disable,
+            cli_enable,
+        ) {
             Ok(true) => ExitCode::from(1),
             Ok(false) => ExitCode::SUCCESS,
             Err(e) => {

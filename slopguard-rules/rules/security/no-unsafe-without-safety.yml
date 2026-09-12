@@ -8,31 +8,37 @@ rule:
   kind: unsafe_block
   not:
     any:
+      # The block is directly preceded by a SAFETY comment. Continuation lines
+      # of a multi-line comment are skipped (stopBy: first non-comment sibling).
       - follows:
           kind: line_comment
-          regex: 'SAFETY'
+          regex: '(?i)^//[/!]?\s*safety\b'
+          stopBy:
+            not:
+              kind: line_comment
+      # Or the statement / expression that contains the block is, at any depth
+      # (let x = unsafe {...}, if let Some(x) = unsafe {...}, foo(unsafe {...})).
       - inside:
-          any:
-            - kind: expression_statement
-            - kind: let_declaration
           follows:
             kind: line_comment
-            regex: 'SAFETY'
+            regex: '(?i)^//[/!]?\s*safety\b'
+            stopBy:
+              not:
+                kind: line_comment
+          stopBy: end
+      # Or the comment sits inside the block itself.
       - has:
           kind: line_comment
-          regex: 'SAFETY'
+          regex: '(?i)^//[/!]?\s*safety\b'
           stopBy: end
-      - inside:
-          kind: block
-          has:
-            kind: line_comment
-            regex: 'SAFETY'
-            stopBy: end
 ignores:
   - "**/tests/**"
   - "**/test_*"
   - "**/*_test.rs"
+  - "**/*-test-*/**"
   - "**/fixtures/**"
+  - "**/benches/**"
+  - "**/examples/**"
 skip_test_code: true
 tests:
   should_match:
@@ -45,6 +51,12 @@ tests:
           // This is fine
           unsafe { *raw = 42; }
       }
+    - |
+      fn baz() {
+          // SAFETY: p is valid
+          let y = 2;
+          unsafe { ptr::read(p) };
+      }
   should_not_match:
     - |
       fn foo() {
@@ -55,4 +67,27 @@ tests:
       fn bar() {
           // SAFETY: raw is non-null and exclusively owned
           unsafe { *raw = 42; }
+      }
+    - |
+      fn multi_line() {
+          // SAFETY: p is valid
+          // and aligned
+          unsafe { ptr::read(p) };
+      }
+    - |
+      fn capitalized() {
+          // Safety: p is valid
+          let x = unsafe { ptr::read(p) };
+      }
+    - |
+      fn tail_expr() -> u8 {
+          // SAFETY: p is valid
+          unsafe { ptr::read(p) }
+      }
+    - |
+      fn nested() {
+          // SAFETY: p is valid
+          if let Some(x) = unsafe { ptr::read(p) } {
+              drop(x);
+          }
       }

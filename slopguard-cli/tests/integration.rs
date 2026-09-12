@@ -355,8 +355,8 @@ fn scan_custom_config() {
 
     assert_eq!(
         findings.len(),
-        21,
-        "expected 21 findings (23 total minus 2 disabled), got {}",
+        19,
+        "expected 19 findings (21 active minus 2 disabled), got {}",
         findings.len()
     );
 }
@@ -566,4 +566,53 @@ fn severity_threshold_error_exits_one_on_errors() {
         ])
         .assert()
         .code(1);
+}
+
+#[test]
+fn scan_enable_flag_activates_opt_in_rule() {
+    let dir = tempdir().unwrap();
+    setup_src_dir(dir.path());
+    write(
+        dir.path().join("src/service.rs"),
+        "pub async fn fetch_orders(pool: &PgPool) -> Result<Vec<Order>> {\n    todo!()\n}\n",
+    )
+    .unwrap();
+
+    let rule_ids = |args: &[&str]| -> Vec<String> {
+        let output = slopguard()
+            .args(["scan", "--format", "json"])
+            .args(args)
+            .arg(dir.path())
+            .output()
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        json["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|f| f["rule_id"].as_str().unwrap().to_string())
+            .collect()
+    };
+
+    assert!(
+        !rule_ids(&[]).iter().any(|id| id == "pub-fn-needs-tracing"),
+        "opt-in rule must be off by default"
+    );
+    assert!(
+        rule_ids(&["--enable", "pub-fn-needs-tracing"])
+            .iter()
+            .any(|id| id == "pub-fn-needs-tracing"),
+        "--enable must activate the opt-in rule"
+    );
+    assert!(
+        rule_ids(&[
+            "--enable",
+            "pub-fn-needs-tracing",
+            "--disable",
+            "pub-fn-needs-tracing"
+        ])
+        .iter()
+        .any(|id| id == "pub-fn-needs-tracing"),
+        "--enable wins over --disable"
+    );
 }

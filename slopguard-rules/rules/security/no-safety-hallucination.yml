@@ -7,23 +7,26 @@ note: "AI generates // SAFETY: comments on safe code, or with hallucinated justi
 rule:
   kind: line_comment
   all:
-    - regex: '//\s*SAFETY\s*:'
+    # Plain comment only: /// SAFETY doc-comments on unsafe fns are legitimate.
+    - regex: '^//\s*SAFETY\s*:'
     - not:
         inside:
           kind: unsafe_block
           stopBy: end
+    # The next non-comment sibling (statement, item, expression) contains
+    # unsafe code at any depth.
     - not:
         precedes:
-          any:
-            - kind: unsafe_block
-            - kind: expression_statement
-              has:
-                kind: unsafe_block
-            - kind: let_declaration
-              has:
-                kind: unsafe_block
+          regex: '\bunsafe\b'
           stopBy:
-            kind: line_comment
+            not:
+              kind: line_comment
+    # Inside a macro body tree-sitter only sees tokens: fall back to text.
+    - not:
+        inside:
+          kind: token_tree
+          regex: '\bunsafe\b'
+          stopBy: end
     - not:
         inside:
           kind: block
@@ -57,3 +60,22 @@ tests:
           // SAFETY: exclusively owned
           *raw = 42;
       }
+    - |
+      fn multi_line() {
+          // SAFETY: p is valid
+          // and aligned
+          let x = unsafe { ptr::read(p) };
+      }
+    - |
+      fn nested() {
+          // SAFETY: p is valid
+          if let Some(x) = unsafe { ptr::read(p) } {
+              drop(x);
+          }
+      }
+    - |
+      /// SAFETY: the caller must hold the lock.
+      unsafe fn with_lock() {}
+    - |
+      // SAFETY: T is Send because the pointer is never shared.
+      unsafe impl<T> Send for Wrapper<T> {}
