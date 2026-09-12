@@ -31,6 +31,7 @@ variables:
   RELEASE_PLZ_VERSION: "0.3.160"
   CARGO_HTTP_TIMEOUT: "180"
   CARGO_NET_RETRY: "5"
+  CI_RUST_IMAGE: "${CI_REGISTRY_IMAGE}/ci-rust:rust-1.94.1"
 
 .rust-cache: &rust-cache
   cache:
@@ -44,7 +45,12 @@ variables:
 
 .install-release-plz: &install-release-plz
   - mkdir -p "${CI_PROJECT_DIR}/.cargo/bin"
-  - curl -sSfL "https://github.com/release-plz/release-plz/releases/download/release-plz-v${RELEASE_PLZ_VERSION}/release-plz-aarch64-apple-darwin.tar.gz" | tar -xz -C "${CI_PROJECT_DIR}/.cargo/bin" release-plz
+  - |
+    case "$(uname -m)" in
+      aarch64|arm64) ARCH="aarch64-apple-darwin" ;;
+      *)             ARCH="x86_64-unknown-linux-musl" ;;
+    esac
+  - curl -sSfL "https://github.com/release-plz/release-plz/releases/download/release-plz-v${RELEASE_PLZ_VERSION}/release-plz-${ARCH}.tar.gz" | tar -xz -C "${CI_PROJECT_DIR}/.cargo/bin" release-plz
   - export PATH="${CI_PROJECT_DIR}/.cargo/bin:$PATH"
   - release-plz --version
 
@@ -58,13 +64,41 @@ variables:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
 
 # ---------------------------------------------------------------------------
+# CI IMAGE
+# ---------------------------------------------------------------------------
+
+build-ci-image:
+  stage: check
+  image: docker:27
+  services:
+    - docker:27-dind
+  variables:
+    DOCKER_TLS_CERTDIR: "/certs"
+  before_script:
+    - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" "$CI_REGISTRY"
+  script:
+    - docker build -t "$CI_RUST_IMAGE" ci/rust/
+    - docker push "$CI_RUST_IMAGE"
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes:
+        - ci/rust/Dockerfile
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      changes:
+        - ci/rust/Dockerfile
+
+# ---------------------------------------------------------------------------
 # CHECK
 # ---------------------------------------------------------------------------
 
 cargo-fmt:
   extends: .only-mr
   stage: check
+  image: $CI_RUST_IMAGE
   <<: *rust-cache
+  needs:
+    - job: build-ci-image
+      optional: true
   variables:
     RUSTFLAGS: "-D warnings"
   script:
@@ -73,7 +107,11 @@ cargo-fmt:
 cargo-clippy:
   extends: .only-mr
   stage: check
+  image: $CI_RUST_IMAGE
   <<: *rust-cache
+  needs:
+    - job: build-ci-image
+      optional: true
   variables:
     RUSTFLAGS: "-D warnings"
   script:
@@ -82,7 +120,11 @@ cargo-clippy:
 cargo-audit:
   extends: .only-mr
   stage: check
+  image: $CI_RUST_IMAGE
   <<: *rust-cache
+  needs:
+    - job: build-ci-image
+      optional: true
   script:
     - cargo audit
   allow_failure: false
@@ -94,8 +136,11 @@ cargo-audit:
 unit-tests:
   extends: .only-mr
   stage: test
+  image: $CI_RUST_IMAGE
   <<: *rust-cache
-  needs: []
+  needs:
+    - job: build-ci-image
+      optional: true
   variables:
     RUSTFLAGS: "-D warnings"
   script:
@@ -104,8 +149,11 @@ unit-tests:
 doc-tests:
   extends: .only-mr
   stage: test
+  image: $CI_RUST_IMAGE
   <<: *rust-cache
-  needs: []
+  needs:
+    - job: build-ci-image
+      optional: true
   variables:
     RUSTFLAGS: "-D warnings"
   script:
@@ -117,6 +165,7 @@ doc-tests:
 
 build-release:
   stage: build
+  image: $CI_RUST_IMAGE
   <<: *rust-cache
   script:
     - cargo build --workspace --release
@@ -129,6 +178,7 @@ build-release:
 
 release-plz-update:
   stage: release
+  image: $CI_RUST_IMAGE
   <<: *rust-cache
   needs:
     - build-release
@@ -162,6 +212,7 @@ release-plz-update:
 
 release-plz-release:
   stage: release
+  image: $CI_RUST_IMAGE
   <<: *rust-cache
   needs:
     - job: build-release
