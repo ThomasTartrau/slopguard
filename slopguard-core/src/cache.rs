@@ -50,6 +50,12 @@ impl CacheStore {
         }
     }
 
+    /// Create a cache store that writes directly to the given directory
+    /// instead of appending `.slopguard-cache`.
+    pub fn with_dir(dir: PathBuf) -> Self {
+        Self { dir }
+    }
+
     pub fn dir(&self) -> &Path {
         &self.dir
     }

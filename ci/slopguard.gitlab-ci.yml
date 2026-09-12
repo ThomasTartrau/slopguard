@@ -1,0 +1,21 @@
+# slopguard GitLab CI template
+#
+# Include this in your .gitlab-ci.yml:
+#
+#   include:
+#     - remote: 'https://gitlab.com/ThomasTartrau/slopguard/-/raw/main/ci/slopguard.gitlab-ci.yml'
+#
+# Or copy this file into your project.
+
+slopguard:
+  image: rust:latest
+  cache:
+    key: slopguard-${CI_COMMIT_REF_SLUG}
+    paths:
+      - .cache/slopguard/
+  before_script:
+    - cargo install slopguard-cli
+  script:
+    - slopguard scan . --cache-dir .cache/slopguard/
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"

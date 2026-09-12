@@ -228,11 +228,16 @@ pub fn scan(paths: &[PathBuf], rules: &[Rule], config: &Config) -> Result<ScanRe
 /// Scan with file-level caching. Files whose content hash matches a cached
 /// entry (and whose rules have not changed) return cached findings without
 /// reparsing.
+///
+/// `cache_dir` is the directory where cache files are stored. When a custom
+/// cache directory is specified (via `--cache-dir`, `SLOPGUARD_CACHE_DIR`,
+/// or `scan.cache_dir` in config), pass it directly. Otherwise pass the
+/// project root and use `CacheStore::new` which appends `.slopguard-cache`.
 pub fn scan_cached(
     paths: &[PathBuf],
     rules: &[Rule],
     config: &Config,
-    cache_root: &Path,
+    cache_dir: &Path,
 ) -> Result<ScanResult, ScanError> {
     let compiled = compile_rules(rules)?;
     let ignores = build_glob_set(&config.scan.ignores)?;
@@ -246,7 +251,7 @@ pub fn scan_cached(
         .filter_map(|path| extension_to_lang(&path).map(|lang| (path, lang)))
         .collect();
 
-    let store = CacheStore::new(cache_root);
+    let store = CacheStore::with_dir(cache_dir.to_path_buf());
     let current_rules_hash = rules_hash(rules);
     let rules_changed = store
         .check_rules_changed(&current_rules_hash)
@@ -670,9 +675,11 @@ skip_test_code: true
 
     #[test]
     fn scan_with_cache() {
-        let dir = tempdir().unwrap();
+        let src_dir = tempdir().unwrap();
+        let cache_dir = tempdir().unwrap();
+        let cache_path = cache_dir.path().join("cache");
         write(
-            dir.path().join("main.rs"),
+            src_dir.path().join("main.rs"),
             "fn main() {\n    foo().unwrap();\n}\n",
         )
         .unwrap();
@@ -681,7 +688,7 @@ skip_test_code: true
         let config = Config::default();
 
         let result1 =
-            scan_cached(&[dir.path().to_path_buf()], &rules, &config, dir.path()).unwrap();
+            scan_cached(&[src_dir.path().to_path_buf()], &rules, &config, &cache_path).unwrap();
 
         assert_eq!(result1.findings.len(), 1);
         let cache_stats1 = result1.cache_stats.as_ref().unwrap();
@@ -689,7 +696,7 @@ skip_test_code: true
         assert_eq!(cache_stats1.changed, 1, "first scan: one file scanned");
 
         let result2 =
-            scan_cached(&[dir.path().to_path_buf()], &rules, &config, dir.path()).unwrap();
+            scan_cached(&[src_dir.path().to_path_buf()], &rules, &config, &cache_path).unwrap();
 
         assert_eq!(result2.findings.len(), 1);
         let cache_stats2 = result2.cache_stats.as_ref().unwrap();

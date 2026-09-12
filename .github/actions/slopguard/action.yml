@@ -1,0 +1,41 @@
+name: slopguard
+description: Scan code for AI-generated patterns and common issues
+
+inputs:
+  severity-threshold:
+    description: 'Only fail for findings at or above this severity (warning or error)'
+    required: false
+    default: 'warning'
+  format:
+    description: 'Output format (text, json, or sarif)'
+    required: false
+    default: 'text'
+  args:
+    description: 'Extra flags to pass to slopguard scan'
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - name: Cache slopguard scan results
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/slopguard
+        key: slopguard-${{ hashFiles('slopguard.toml') }}-${{ runner.os }}
+        restore-keys: |
+          slopguard-${{ hashFiles('slopguard.toml') }}-
+          slopguard-
+
+    - name: Install slopguard
+      shell: bash
+      run: cargo install slopguard-cli
+
+    - name: Run slopguard
+      shell: bash
+      run: >-
+        slopguard scan .
+        --severity-threshold ${{ inputs.severity-threshold }}
+        --format ${{ inputs.format }}
+        --cache-dir ~/.cache/slopguard
+        ${{ inputs.args }}

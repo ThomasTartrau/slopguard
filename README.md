@@ -192,7 +192,49 @@ The first form suppresses all rules for the next line. The second form suppresse
 
 ---
 
-## 📄 License
+## CI Integration
+
+### GitLab CI
+
+Include the template in your `.gitlab-ci.yml`:
+
+```yaml
+include:
+  - remote: 'https://gitlab.com/ThomasTartrau/slopguard/-/raw/main/ci/slopguard.gitlab-ci.yml'
+```
+
+Or copy `ci/slopguard.gitlab-ci.yml` into your project and adjust as needed.
+
+### GitHub Action
+
+```yaml
+- uses: ThomasTartrau/slopguard/.github/actions/slopguard@main
+  with:
+    severity-threshold: warning  # or 'error' to ignore warnings
+    format: text                 # text, json, or sarif
+```
+
+### Pre-commit
+
+Add to your `.pre-commit-config.yaml`:
+
+```yaml
+repos:
+  - repo: https://gitlab.com/ThomasTartrau/slopguard
+    rev: v0.1.5
+    hooks:
+      - id: slopguard
+```
+
+### Cache in CI
+
+slopguard supports a `--cache-dir` flag (and `SLOPGUARD_CACHE_DIR` env var) to persist scan cache across CI runs. The templates above configure this automatically.
+
+Resolution order: `--cache-dir` (CLI) > `SLOPGUARD_CACHE_DIR` (env) > `cache_dir` in `slopguard.toml` > `.slopguard-cache/` in the working directory.
+
+---
+
+## License
 
 MIT - see [LICENSE](LICENSE).
 
