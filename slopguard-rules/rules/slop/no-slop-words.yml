@@ -9,6 +9,8 @@ rule:
     - kind: line_comment
     - kind: block_comment
   regex: '\b(comprehensive|robust|seamless|leverage|utilize|facilitate|streamline|endeavor|foster|harness|delve|intricate|nuanced|pivotal|myriad|plethora|paramount|cutting.edge|state.of.the.art|best.in.class|industry.leading|game.changing)\b'
+ignores:
+  - "**/fixtures/**"
 tests:
   should_match:
     - "// This provides a comprehensive overview"

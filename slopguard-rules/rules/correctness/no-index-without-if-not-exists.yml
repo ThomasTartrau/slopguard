@@ -13,6 +13,8 @@ rule:
 files:
   - "**/migrations/**/*.rs"
   - "**/migrate/**/*.rs"
+ignores:
+  - "**/fixtures/**"
 tests:
   should_match:
     - '"CREATE INDEX idx_users_email ON users (email)"'

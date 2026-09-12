@@ -10,6 +10,8 @@ rule:
     - regex: '\.replace\('
     - not:
         regex: '\.replace\(\s*/'
+ignores:
+  - "**/fixtures/**"
 tests:
   should_match:
     - "const slug = title.replace(' ', '-');"

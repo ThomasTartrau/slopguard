@@ -126,7 +126,7 @@ fn sarif_output() {
 #[test]
 fn threshold_error_ignores_warnings() {
     let dir = tempdir().unwrap();
-    // no-slop-words fires as a warning on comments with "comprehensive"
+    // no-slop-words fires as a warning on AI filler words in comments
     write(
         dir.path().join("lib.rs"),
         "/// A comprehensive guide to the API.\npub fn api() {}\n",

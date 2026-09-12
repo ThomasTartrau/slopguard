@@ -18,6 +18,8 @@ rule:
             kind: call_expression
             regex: '^set[A-Z]\w*\('
             stopBy: end
+ignores:
+  - "**/fixtures/**"
 tests:
   should_match:
     - |

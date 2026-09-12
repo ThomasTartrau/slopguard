@@ -10,6 +10,8 @@ rule:
 files:
   - "**/migrations/**/*.rs"
   - "**/migrate/**/*.rs"
+ignores:
+  - "**/fixtures/**"
 tests:
   should_match:
     - '"ALTER TABLE orders ADD COLUMN amount FLOAT"'

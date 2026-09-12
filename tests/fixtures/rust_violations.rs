@@ -25,7 +25,10 @@ fn _restated() {}
 // --- slop/no-manual-display (warning) ---
 impl fmt::Display for Status {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self.as_str())
+        match self {
+            Status::Active => write!(f, "active"),
+            Status::Inactive => write!(f, "inactive"),
+        }
     }
 }
 

@@ -8,6 +8,8 @@ rule:
   pattern: pub use $MODULE::*;
 files:
   - "**/src/**/*.rs"
+ignores:
+  - "**/fixtures/**"
 tests:
   should_match:
     - "pub use crate::models::*;"

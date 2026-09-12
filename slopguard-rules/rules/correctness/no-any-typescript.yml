@@ -7,6 +7,8 @@ note: "any disables type checking and propagates silently."
 rule:
   kind: predefined_type
   regex: '^any$'
+ignores:
+  - "**/fixtures/**"
 tests:
   should_match:
     - "function parse(data: any): string { return data; }"

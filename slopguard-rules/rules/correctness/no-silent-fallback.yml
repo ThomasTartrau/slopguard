@@ -5,18 +5,23 @@ category: correctness
 message: "unwrap_or/unwrap_or_default hides a potential error. Propagate with ? or ok_or()."
 note: "AI uses a silent fallback instead of propagating the error."
 rule:
-  kind: call_expression
-  regex: '\.(unwrap_or\(\s*(""|"unknown"|0|false|Uuid::nil\(\))\s*\)|unwrap_or_default\(\))'
+  any:
+    - pattern: $EXPR.unwrap_or("")
+    - pattern: $EXPR.unwrap_or("unknown")
+    - pattern: $EXPR.unwrap_or(Uuid::nil())
 ignores:
   - "**/tests/**"
   - "**/test_*"
   - "**/*_test.rs"
+  - "**/fixtures/**"
 skip_test_code: true
 tests:
   should_match:
     - 'let name = user.name.unwrap_or("");'
-    - 'let count = result.unwrap_or(0);'
-    - "let items = fetch_items().unwrap_or_default();"
+    - 'let name = user.name.unwrap_or("unknown");'
+    - "let id = row.id.unwrap_or(Uuid::nil());"
   should_not_match:
     - "let name = user.name.unwrap_or(\"guest\");"
     - "let count = result?;"
+    - "let count = result.unwrap_or(0);"
+    - "let items = fetch_items().unwrap_or_default();"

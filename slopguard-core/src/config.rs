@@ -1,10 +1,12 @@
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use smart_default::SmartDefault;
 use strum::{Display, EnumString};
 use thiserror::Error;
+use toml::de;
 use toml::{Table, Value};
 
 #[derive(Debug, Display, Clone, PartialEq, Eq, Serialize, Deserialize, EnumString, Default)]
@@ -83,18 +85,18 @@ pub enum ConfigError {
     Io {
         path: String,
         #[source]
-        source: std::io::Error,
+        source: io::Error,
     },
 
     #[error("failed to parse config file '{path}': {source}")]
     Parse {
         path: String,
         #[source]
-        source: toml::de::Error,
+        source: de::Error,
     },
 
     #[error("invalid merged config: {0}")]
-    Invalid(#[source] toml::de::Error),
+    Invalid(#[source] de::Error),
 }
 
 /// Overlay `over` onto `base`: nested tables are merged key by key, every

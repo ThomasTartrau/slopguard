@@ -1,5 +1,6 @@
 mod output;
 
+use std::env;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -151,7 +152,7 @@ fn run_scan(
     config_path: Option<PathBuf>,
     no_colors: bool,
 ) -> Result<bool, AppError> {
-    let use_colors = !no_colors && std::env::var_os("NO_COLOR").is_none();
+    let use_colors = !no_colors && env::var_os("NO_COLOR").is_none();
 
     let config = resolve_config(config_path.as_deref())?;
 
@@ -198,7 +199,7 @@ fn resolve_config(config_path: Option<&Path>) -> Result<Config, AppError> {
     match config_path {
         Some(path) => Ok(load_config_file(path)?),
         None => {
-            let cwd = std::env::current_dir().map_err(|e| {
+            let cwd = env::current_dir().map_err(|e| {
                 AppError::Config(ConfigError::Io {
                     path: ".".to_string(),
                     source: e,

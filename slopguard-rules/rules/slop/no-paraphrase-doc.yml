@@ -7,6 +7,8 @@ note: "Classic AI pattern: 'Create a new X' on every constructor, 'Execute the t
 rule:
   kind: line_comment
   regex: '///\s*(Creates?|Constructs?|Build|Returns?|Gets?|Sets?|Execute|Perform|Implement|Initialize|Instantiate)s?\s+(a\s+)?new\s+\w+(\s+(operation|instance|struct|object|client|builder|config|handler|service|provider|context|manager|controller|module))?\.?\s*$'
+ignores:
+  - "**/fixtures/**"
 tests:
   should_match:
     - "/// Creates a new UserService instance."

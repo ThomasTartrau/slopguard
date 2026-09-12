@@ -7,6 +7,8 @@ note: "AI adds 'and more' or 'etc.' to hide that it does not know what follows."
 rule:
   kind: line_comment
   regex: '(?i)///.*(\b(and more|and so on|and others|various|amongst others|and many more|and much more)\b|\betc\.)'
+ignores:
+  - "**/fixtures/**"
 tests:
   should_match:
     - "/// Supports JSON, XML, and more."

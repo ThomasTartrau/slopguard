@@ -28,6 +28,7 @@ ignores:
   - "**/lib.rs"
   - "**/mod.rs"
   - "**/examples/**"
+  - "**/fixtures/**"
 skip_test_code: true
 tests:
   should_match:

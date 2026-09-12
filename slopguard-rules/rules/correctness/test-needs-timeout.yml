@@ -14,6 +14,8 @@ rule:
           has:
             regex: 'timeout'
             stopBy: end
+ignores:
+  - "**/fixtures/**"
 tests:
   should_match:
     - |

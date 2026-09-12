@@ -192,6 +192,9 @@ pub fn scan(paths: &[PathBuf], rules: &[Rule], config: &Config) -> Result<ScanRe
         .flat_map_iter(|(path, lang)| scan_file(path, *lang, &compiled))
         .collect();
     findings.sort_by(|a, b| (&a.file, a.line, a.column).cmp(&(&b.file, b.line, b.column)));
+    findings.dedup_by(|a, b| {
+        a.rule_id == b.rule_id && a.file == b.file && a.line == b.line && a.column == b.column
+    });
 
     let (errors, warnings) =
         findings

@@ -7,6 +7,8 @@ note: "AI pattern: 'This method provides...' or 'Execute the tool against the AP
 rule:
   kind: line_comment
   regex: '///\s*(The|This) (method|function|struct|enum|module|trait|type) (is|provides|represents|contains|holds|stores|manages|handles|implements|defines|describes)\b'
+ignores:
+  - "**/fixtures/**"
 tests:
   should_match:
     - "/// This method provides the user data"

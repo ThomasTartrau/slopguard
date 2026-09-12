@@ -11,6 +11,7 @@ files:
   - "**/src/**/*.rs"
 ignores:
   - "**/tests/**"
+  - "**/fixtures/**"
 skip_test_code: true
 tests:
   should_match:

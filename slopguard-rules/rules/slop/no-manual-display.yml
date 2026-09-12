@@ -2,23 +2,22 @@ id: no-manual-display
 language: rust
 severity: warning
 category: slop
-message: 'Manual Display impl. Use #[derive(Display)] from strum with #[strum(serialize_all = "...")].'
+message: 'Manual Display impl with match. Use #[derive(Display)] from strum with #[strum(serialize_all = "...")].'
 note: "A manual impl with a match arm per variant is replaced by one derive line. Check if strum is already a dependency."
 rule:
-  pattern: impl fmt::Display for $NAME { $$$ }
+  all:
+    - pattern: impl fmt::Display for $NAME { $$$ }
+    - has:
+        kind: match_expression
+        stopBy: end
 ignores:
   - "**/tests/**"
   - "**/test_*"
   - "**/*_test.rs"
+  - "**/fixtures/**"
 skip_test_code: true
 tests:
   should_match:
-    - |
-      impl fmt::Display for Status {
-          fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-              write!(f, "{}", self.as_str())
-          }
-      }
     - |
       impl fmt::Display for Color {
           fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -27,16 +26,37 @@ tests:
               }
           }
       }
+    - |
+      impl fmt::Display for Status {
+          fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+              match self {
+                  Status::Active => write!(f, "active"),
+                  Status::Inactive => write!(f, "inactive"),
+              }
+          }
+      }
   should_not_match:
     - |
-      impl fmt::Debug for Status {
+      impl fmt::Display for RuleId {
+          fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+              f.write_str(&self.0)
+          }
+      }
+    - |
+      impl fmt::Display for Status {
           fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-              write!(f, "Status({})", self.0)
+              write!(f, "{}", self.as_str())
           }
       }
     - |
       impl Display for Error {
           fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
               write!(f, "{}", self.message)
+          }
+      }
+    - |
+      impl fmt::Debug for Status {
+          fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+              write!(f, "Status({})", self.0)
           }
       }
