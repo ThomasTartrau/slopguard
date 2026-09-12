@@ -1,11 +1,11 @@
 use std::path::PathBuf;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::rule::{Category, RuleId, Severity};
 
 /// A single finding from scanning a source file.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Finding {
     pub rule_id: RuleId,
     pub severity: Severity,
@@ -24,7 +24,7 @@ pub struct Finding {
 }
 
 /// Aggregate statistics from a scan run.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScanStats {
     pub errors: usize,
     pub warnings: usize,
@@ -32,9 +32,18 @@ pub struct ScanStats {
     pub files_scanned: usize,
 }
 
+/// Cache statistics for a scan run.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CacheStats {
+    pub cached: usize,
+    pub changed: usize,
+}
+
 /// The result of scanning one or more paths.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScanResult {
     pub findings: Vec<Finding>,
     pub stats: ScanStats,
+    #[serde(default)]
+    pub cache_stats: Option<CacheStats>,
 }

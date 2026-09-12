@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::fs::read_to_string;
+use std::fs::{self, read_to_string};
 use std::path::{Path, PathBuf};
 
 use ast_grep_config::{
@@ -17,9 +17,10 @@ use serde_yaml::{to_value, Value};
 use strum::IntoEnumIterator;
 use thiserror::Error;
 
+use crate::cache::{file_content_hash, rules_hash, CacheStore};
 use crate::config::Config;
 use crate::disable::filter_disabled;
-use crate::finding::{Finding, ScanResult, ScanStats};
+use crate::finding::{CacheStats, Finding, ScanResult, ScanStats};
 use crate::rule::{Language, Rule, RuleId, Severity};
 use crate::test_filter::CfgTestRanges;
 
@@ -220,6 +221,117 @@ pub fn scan(paths: &[PathBuf], rules: &[Rule], config: &Config) -> Result<ScanRe
             total: errors + warnings,
             files_scanned: files.len(),
         },
+        cache_stats: None,
+    })
+}
+
+/// Scan with file-level caching. Files whose content hash matches a cached
+/// entry (and whose rules have not changed) return cached findings without
+/// reparsing.
+pub fn scan_cached(
+    paths: &[PathBuf],
+    rules: &[Rule],
+    config: &Config,
+    cache_root: &Path,
+) -> Result<ScanResult, ScanError> {
+    let compiled = compile_rules(rules)?;
+    let ignores = build_glob_set(&config.scan.ignores)?;
+
+    let files: Vec<(PathBuf, SupportLang)> = paths
+        .iter()
+        .flat_map(|path| WalkBuilder::new(path).build().flatten())
+        .filter(|entry| entry.file_type().is_some_and(|t| t.is_file()))
+        .map(|entry| entry.into_path())
+        .filter(|path| !ignores.is_match(path))
+        .filter_map(|path| extension_to_lang(&path).map(|lang| (path, lang)))
+        .collect();
+
+    let store = CacheStore::new(cache_root);
+    let current_rules_hash = rules_hash(rules);
+    let rules_changed = store
+        .check_rules_changed(&current_rules_hash)
+        .unwrap_or(true);
+
+    let file_contents: Vec<(PathBuf, SupportLang, Vec<u8>, String)> = files
+        .into_iter()
+        .filter_map(|(path, lang)| {
+            let content = fs::read(&path).ok()?;
+            let hash = file_content_hash(&content);
+            Some((path, lang, content, hash))
+        })
+        .collect();
+
+    let mut cached_count = 0usize;
+    let mut changed_count = 0usize;
+    let mut all_findings: Vec<Finding> = Vec::new();
+
+    struct FileWork {
+        path: PathBuf,
+        lang: SupportLang,
+        hash: String,
+    }
+
+    let mut to_scan: Vec<FileWork> = Vec::new();
+
+    for (path, lang, _content, hash) in file_contents.iter() {
+        if !rules_changed {
+            if let Some(cached_findings) = store.get(hash) {
+                cached_count += 1;
+                all_findings.extend(cached_findings);
+                continue;
+            }
+        }
+        changed_count += 1;
+        to_scan.push(FileWork {
+            path: path.clone(),
+            lang: *lang,
+            hash: hash.clone(),
+        });
+    }
+
+    let scanned_findings: Vec<(String, Vec<Finding>)> = to_scan
+        .par_iter()
+        .map(|work| {
+            let findings = scan_file(&work.path, work.lang, &compiled);
+            (work.hash.clone(), findings)
+        })
+        .collect();
+
+    for (hash, findings) in scanned_findings {
+        store.put(&hash, &findings).ok();
+        all_findings.extend(findings);
+    }
+
+    let current_hashes: Vec<String> = file_contents.iter().map(|(_, _, _, h)| h.clone()).collect();
+    store.cleanup(&current_hashes).ok();
+
+    all_findings.sort_by(|a, b| (&a.file, a.line, a.column).cmp(&(&b.file, b.line, b.column)));
+    all_findings.dedup_by(|a, b| {
+        a.rule_id == b.rule_id && a.file == b.file && a.line == b.line && a.column == b.column
+    });
+
+    let (errors, warnings) =
+        all_findings
+            .iter()
+            .fold((0, 0), |(errors, warnings), f| match f.severity {
+                Severity::Error => (errors + 1, warnings),
+                Severity::Warning => (errors, warnings + 1),
+            });
+
+    let files_scanned = cached_count + changed_count;
+
+    Ok(ScanResult {
+        findings: all_findings,
+        stats: ScanStats {
+            errors,
+            warnings,
+            total: errors + warnings,
+            files_scanned,
+        },
+        cache_stats: Some(CacheStats {
+            cached: cached_count,
+            changed: changed_count,
+        }),
     })
 }
 
@@ -554,5 +666,34 @@ skip_test_code: true
         );
         let compiled = compile_rules(&rules).expect("all builtin rules should compile");
         assert_eq!(compiled.by_id.len(), rules.len());
+    }
+
+    #[test]
+    fn scan_with_cache() {
+        let dir = tempdir().unwrap();
+        write(
+            dir.path().join("main.rs"),
+            "fn main() {\n    foo().unwrap();\n}\n",
+        )
+        .unwrap();
+
+        let rules = [unwrap_rule()];
+        let config = Config::default();
+
+        let result1 =
+            scan_cached(&[dir.path().to_path_buf()], &rules, &config, dir.path()).unwrap();
+
+        assert_eq!(result1.findings.len(), 1);
+        let cache_stats1 = result1.cache_stats.as_ref().unwrap();
+        assert_eq!(cache_stats1.cached, 0, "first scan: nothing cached");
+        assert_eq!(cache_stats1.changed, 1, "first scan: one file scanned");
+
+        let result2 =
+            scan_cached(&[dir.path().to_path_buf()], &rules, &config, dir.path()).unwrap();
+
+        assert_eq!(result2.findings.len(), 1);
+        let cache_stats2 = result2.cache_stats.as_ref().unwrap();
+        assert_eq!(cache_stats2.cached, 1, "second scan: one file from cache");
+        assert_eq!(cache_stats2.changed, 0, "second scan: nothing changed");
     }
 }
