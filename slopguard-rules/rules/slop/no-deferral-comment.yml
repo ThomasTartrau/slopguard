@@ -1,0 +1,28 @@
+id: no-deferral-comment
+language: rust
+severity: warning
+category: slop
+message: "Deferral language in comment. Fix it now or open an issue."
+note: "AI pattern: 'for now', 'temporary fix', 'will refactor later' accumulate debt (AntiSlop)."
+rule:
+  all:
+    - any:
+        - kind: line_comment
+        - kind: block_comment
+    - regex: '\b(temporary fix|will refactor|refactor later|clean up later|revisit later|good enough for now|quick and dirty|band.aid|stop.gap|will improve|change this later|update this later|fix this later)\b'
+    - not:
+        regex: '^//[/!]'
+ignores:
+  - "**/fixtures/**"
+skip_test_code: true
+tests:
+  should_match:
+    - "// temporary fix until the API changes"
+    - "// will refactor later"
+    - "// good enough for now"
+    - "/* quick and dirty solution */"
+  should_not_match:
+    - "// Parses the input string"
+    - "// Final implementation"
+    - "/// Placeholder type for generic parameters"
+    - "// Production-ready handler"

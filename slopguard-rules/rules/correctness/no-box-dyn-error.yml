@@ -1,0 +1,24 @@
+id: no-box-dyn-error
+language: rust
+severity: warning
+category: correctness
+message: "Box<dyn Error> loses error context. Use thiserror for typed errors."
+note: "Box<dyn Error> erases the concrete error type. thiserror gives typed, matchable errors."
+fix: "Define an error enum with #[derive(thiserror::Error)]."
+rule:
+  kind: type_identifier
+  regex: '^Box$'
+  precedes:
+    kind: type_arguments
+    regex: 'dyn\s+(std::error::)?Error'
+ignores:
+  - "**/tests/**"
+  - "**/fixtures/**"
+skip_test_code: true
+tests:
+  should_match:
+    - "fn f() -> Result<(), Box<dyn Error>> { Ok(()) }"
+    - "fn f() -> Result<(), Box<dyn std::error::Error>> { Ok(()) }"
+  should_not_match:
+    - "fn f() -> Result<(), MyError> { Ok(()) }"
+    - "fn f() -> Result<(), anyhow::Error> { Ok(()) }"

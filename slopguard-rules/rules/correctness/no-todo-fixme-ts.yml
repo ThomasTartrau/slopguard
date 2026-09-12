@@ -1,0 +1,20 @@
+id: no-todo-fixme
+language: typescript
+severity: warning
+category: correctness
+message: "TODO/FIXME left in code. Resolve it or open an issue."
+note: "AI-generated code frequently scatters unresolved TODOs. Track them properly."
+rule:
+  kind: comment
+  regex: '\b(TODO|FIXME|HACK|XXX|TEMP)\b'
+ignores:
+  - "**/fixtures/**"
+tests:
+  should_match:
+    - "// TODO: implement this later"
+    - "// FIXME: this is broken"
+    - "/* HACK: workaround for upstream bug */"
+  should_not_match:
+    - "// This function parses the config"
+    - "// Returns the result"
+    - "/* Standard helper function */"

@@ -1,0 +1,29 @@
+id: no-println-in-prod
+language: rust
+severity: warning
+category: correctness
+message: "println!/eprintln! in production code. Use tracing macros instead."
+note: "println! bypasses structured logging. Use tracing::info!, warn!, error!."
+fix: "Replace with tracing::info!, tracing::warn!, or tracing::error!."
+rule:
+  kind: macro_invocation
+  has:
+    kind: identifier
+    regex: '^(println|eprintln)$'
+ignores:
+  - "**/tests/**"
+  - "**/test_*"
+  - "**/*_test.rs"
+  - "**/examples/**"
+  - "**/benches/**"
+  - "**/fixtures/**"
+  - "**/main.rs"
+  - "**/build.rs"
+skip_test_code: true
+tests:
+  should_match:
+    - 'fn handle() { println!("debug: {}", value); }'
+    - 'fn handle() { eprintln!("error occurred"); }'
+  should_not_match:
+    - 'fn handle() { tracing::info!("processing request"); }'
+    - 'fn handle() { log::error!("failed"); }'

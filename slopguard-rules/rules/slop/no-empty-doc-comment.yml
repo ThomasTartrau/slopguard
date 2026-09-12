@@ -1,0 +1,19 @@
+id: no-empty-doc-comment
+language: rust
+severity: warning
+category: slop
+message: "Empty doc comment. Add documentation or remove it."
+note: "AI pattern: generating /// with no content to look documented."
+enabled: false
+rule:
+  kind: line_comment
+  regex: '^///\s*$'
+ignores:
+  - "**/fixtures/**"
+tests:
+  should_match:
+    - "///"
+    - "///  "
+  should_not_match:
+    - "/// Returns the user count"
+    - "/// # Examples"

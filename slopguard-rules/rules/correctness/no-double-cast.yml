@@ -1,0 +1,20 @@
+id: no-double-cast
+language: typescript
+severity: error
+category: correctness
+message: "'as unknown as T' bypasses type safety. Use a type guard or proper conversion."
+note: "Double casting is a code smell that hides type mismatches."
+rule:
+  kind: as_expression
+  has:
+    kind: as_expression
+    stopBy: end
+ignores:
+  - "**/fixtures/**"
+tests:
+  should_match:
+    - "const x = value as unknown as string;"
+    - "const x = (data as any) as User;"
+  should_not_match:
+    - "const x = value as string;"
+    - "const x = value as unknown;"

@@ -1,0 +1,34 @@
+id: no-doc-hidden-public
+language: rust
+severity: warning
+category: slop
+message: "#[doc(hidden)] on a public item. Make it pub(crate) or document it."
+note: "AI pattern: hiding public items from docs instead of scoping visibility correctly."
+enabled: false
+rule:
+  kind: attribute_item
+  regex: 'doc\(hidden\)'
+  precedes:
+    has:
+      kind: visibility_modifier
+      regex: '^pub'
+      stopBy: end
+ignores:
+  - "**/tests/**"
+  - "**/fixtures/**"
+skip_test_code: true
+tests:
+  should_match:
+    - |
+      #[doc(hidden)]
+      pub fn internal_helper() {}
+    - |
+      #[doc(hidden)]
+      pub struct InternalState {}
+  should_not_match:
+    - |
+      #[doc(hidden)]
+      fn private_helper() {}
+    - |
+      /// Documented public function
+      pub fn helper() {}

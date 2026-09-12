@@ -1,0 +1,26 @@
+id: no-dbg-in-prod
+language: rust
+severity: error
+category: correctness
+message: "dbg!() left in production code. Remove it."
+note: "dbg!() writes to stderr and should never be committed."
+rule:
+  kind: macro_invocation
+  has:
+    kind: identifier
+    regex: '^dbg$'
+ignores:
+  - "**/tests/**"
+  - "**/test_*"
+  - "**/*_test.rs"
+  - "**/examples/**"
+  - "**/benches/**"
+  - "**/fixtures/**"
+skip_test_code: true
+tests:
+  should_match:
+    - "fn handle() { dbg!(value); }"
+    - "fn handle() { let x = dbg!(compute()); }"
+  should_not_match:
+    - "fn handle() { tracing::debug!(?value); }"
+    - "fn handle() { log::debug!(\"value: {}\", value); }"
