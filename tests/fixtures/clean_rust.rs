@@ -1,8 +1,8 @@
 use std::collections::HashMap;
-use std::error::Error;
+use std::io;
 
 /// Panics if the connection pool is exhausted.
-fn fetch_user(id: i64) -> Result<String, Box<dyn Error>> {
+fn fetch_user(id: i64) -> Result<String, io::Error> {
     let name = get_name(id)?;
     Ok(name)
 }

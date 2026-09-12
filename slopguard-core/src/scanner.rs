@@ -57,12 +57,19 @@ pub struct AstGrepRule<'a> {
 /// produced each ast-grep config.
 struct CompiledRules<'a> {
     collection: RuleCollection<SupportLang>,
-    by_id: HashMap<&'a str, &'a Rule>,
+    by_id: HashMap<(&'a str, Language), &'a Rule>,
 }
 
 fn extension_to_lang(path: &Path) -> Option<SupportLang> {
     SupportLang::from_path(path)
         .filter(|lang| Language::iter().any(|l| l.ast_grep_langs().contains(lang)))
+}
+
+fn support_lang_to_language(lang: SupportLang) -> Language {
+    match lang {
+        SupportLang::Rust => Language::Rust,
+        _ => Language::TypeScript,
+    }
 }
 
 pub(crate) fn compile_ast_grep_rule(
@@ -105,7 +112,7 @@ fn compile_rules(rules: &[Rule]) -> Result<CompiledRules<'_>, ScanError> {
         collection: RuleCollection::try_new(configs)?,
         by_id: rules
             .iter()
-            .map(|rule| (rule.id.as_str(), rule))
+            .map(|rule| ((rule.id.as_str(), rule.language.clone()), rule))
             .collect::<HashMap<_, _>>(),
     })
 }
@@ -139,7 +146,8 @@ fn scan_file(path: &Path, lang: SupportLang, rules: &CompiledRules) -> Vec<Findi
         .matches
         .into_iter()
         .filter_map(|(config, matches)| {
-            let rule = rules.by_id.get(config.id.as_str())?;
+            let rule_lang = support_lang_to_language(lang);
+            let rule = rules.by_id.get(&(config.id.as_str(), rule_lang))?;
             Some((*rule, matches))
         })
         .flat_map(|(rule, matches)| {
@@ -540,8 +548,8 @@ skip_test_code: true
     fn all_builtin_rules_compile() {
         let rules = load_builtin_rules().unwrap();
         assert!(
-            rules.len() >= 34,
-            "expected at least 34 rules, got {}",
+            rules.len() >= 55,
+            "expected at least 55 rules, got {}",
             rules.len()
         );
         let compiled = compile_rules(&rules).expect("all builtin rules should compile");

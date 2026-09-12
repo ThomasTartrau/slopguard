@@ -1,0 +1,25 @@
+id: no-arc-mutex-prefer-rwlock
+language: rust
+severity: warning
+category: correctness
+message: "Arc<Mutex<T>> when reads dominate writes. Consider Arc<RwLock<T>>."
+note: "Mutex blocks all readers during a write. RwLock allows concurrent reads."
+fix: "Replace Mutex with RwLock if the data is read more than written."
+enabled: false
+rule:
+  kind: type_identifier
+  regex: '^Arc$'
+  precedes:
+    kind: type_arguments
+    regex: 'Mutex<'
+ignores:
+  - "**/tests/**"
+  - "**/fixtures/**"
+skip_test_code: true
+tests:
+  should_match:
+    - "fn f(state: Arc<Mutex<AppState>>) {}"
+    - "let shared: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));"
+  should_not_match:
+    - "fn f(state: Arc<RwLock<AppState>>) {}"
+    - "fn f(state: Mutex<AppState>) {}"

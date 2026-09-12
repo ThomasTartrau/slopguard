@@ -1,0 +1,17 @@
+id: no-eval
+language: typescript
+severity: error
+category: security
+message: "eval() is a code injection vector. Use a safer alternative."
+note: "eval() executes arbitrary code and is banned by most security policies (OWASP)."
+rule:
+  pattern: eval($$$)
+ignores:
+  - "**/fixtures/**"
+tests:
+  should_match:
+    - 'eval("alert(1)");'
+    - 'eval(userInput);'
+  should_not_match:
+    - 'JSON.parse(data);'
+    - 'new Function("return 1")();'

@@ -48,7 +48,7 @@ pub enum Severity {
     Warning,
 }
 
-#[derive(Debug, Display, EnumIter, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Display, EnumIter, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 #[strum(serialize_all = "lowercase")]
 pub enum Language {
@@ -267,11 +267,13 @@ pub fn load_all_rules(config: &crate::config::Config) -> Result<Vec<Rule>, RuleE
     Ok(rules)
 }
 
-/// Validate that all rule ids are unique.
+/// Validate that all rule (id, language) pairs are unique. The same rule id
+/// may appear for different languages (e.g. `no-todo-fixme` for both Rust and
+/// TypeScript), so a single `rules.disable` entry covers both variants.
 pub fn validate_unique_ids(rules: &[Rule]) -> Result<(), RuleError> {
     let mut seen = HashSet::new();
     for rule in rules {
-        if !seen.insert(&rule.id) {
+        if !seen.insert((&rule.id, &rule.language)) {
             return Err(RuleError::DuplicateId {
                 id: rule.id.clone(),
             });
@@ -460,8 +462,8 @@ rule:
         let rules = load_builtin_rules().unwrap();
         assert_eq!(
             rules.len(),
-            34,
-            "expected 34 builtin rules, got {}",
+            55,
+            "expected 55 builtin rules, got {}",
             rules.len()
         );
 
@@ -477,9 +479,9 @@ rule:
             .iter()
             .filter(|r| r.category == Some(Category::Correctness))
             .count();
-        assert_eq!(slop_count, 9, "expected 9 slop rules");
-        assert_eq!(security_count, 8, "expected 8 security rules");
-        assert_eq!(correctness_count, 17, "expected 17 correctness rules");
+        assert_eq!(slop_count, 17, "expected 17 slop rules");
+        assert_eq!(security_count, 11, "expected 11 security rules");
+        assert_eq!(correctness_count, 27, "expected 27 correctness rules");
 
         assert!(rules
             .iter()
@@ -511,7 +513,7 @@ rule:
     }
 
     #[test]
-    fn reject_duplicate_ids() {
+    fn reject_duplicate_ids_same_language() {
         let rule1 = parse_rule(
             r#"
 id: same-id
@@ -544,6 +546,33 @@ rule:
             msg.contains("same-id"),
             "expected same-id in error, got: {msg}"
         );
+    }
+
+    #[test]
+    fn allow_same_id_different_language() {
+        let rust_rule = parse_rule(
+            r#"
+id: shared-rule
+language: rust
+severity: error
+message: "Rust variant"
+rule:
+  pattern: $X
+"#,
+        )
+        .unwrap();
+        let ts_rule = parse_rule(
+            r#"
+id: shared-rule
+language: typescript
+severity: error
+message: "TypeScript variant"
+rule:
+  pattern: $X
+"#,
+        )
+        .unwrap();
+        validate_unique_ids(&[rust_rule, ts_rule]).unwrap();
     }
 
     #[test]

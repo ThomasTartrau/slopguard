@@ -1,0 +1,28 @@
+id: no-hedging-comment
+language: rust
+severity: warning
+category: slop
+message: "Hedging language in comment. Be precise or remove."
+note: "AI pattern: 'hopefully', 'should work', 'might need' betray uncertainty (AntiSlop)."
+rule:
+  all:
+    - any:
+        - kind: line_comment
+        - kind: block_comment
+    - regex: '\b(hopefully|should work|might need|probably works|not sure if|I think|I believe|I assume|as far as I know)\b'
+    - not:
+        regex: '^//[/!]'
+ignores:
+  - "**/fixtures/**"
+skip_test_code: true
+tests:
+  should_match:
+    - "// hopefully this works"
+    - "// should work for most cases"
+    - "// might need refactoring later"
+    - "/* probably works with the new API */"
+  should_not_match:
+    - "// Parses the input string"
+    - "/// This might be useful for downstream users"
+    - "/* Returns None on invalid input */"
+    - "// This is the correct approach"

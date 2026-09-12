@@ -1,0 +1,23 @@
+id: no-todo-fixme
+language: rust
+severity: warning
+category: correctness
+message: "TODO/FIXME left in code. Resolve it or open an issue."
+note: "AI-generated code frequently scatters unresolved TODOs. Track them properly."
+rule:
+  any:
+    - kind: line_comment
+    - kind: block_comment
+  regex: '\b(TODO|FIXME|HACK|XXX|TEMP)\b'
+ignores:
+  - "**/fixtures/**"
+skip_test_code: true
+tests:
+  should_match:
+    - "// TODO: implement this later"
+    - "// FIXME: this is broken"
+    - "/* HACK: workaround for upstream bug */"
+  should_not_match:
+    - "// This function parses the config"
+    - "// Returns the result"
+    - "/* Standard helper function */"

@@ -1,0 +1,24 @@
+id: no-unnecessary-clone
+language: rust
+severity: warning
+category: correctness
+message: "Unnecessary .clone() on a value that is already owned or trivially copyable."
+note: "AI frequently inserts .clone() as a reflex. Without type info, this rule catches obvious patterns."
+fix: "Remove the .clone() or pass by reference."
+rule:
+  any:
+    - pattern: $X.to_string().clone()
+    - pattern: $X.to_owned().clone()
+    - pattern: String::from($X).clone()
+    - pattern: format!($$$).clone()
+ignores:
+  - "**/fixtures/**"
+skip_test_code: true
+tests:
+  should_match:
+    - 'fn f() { let s = name.to_string().clone(); }'
+    - 'fn f() { let s = name.to_owned().clone(); }'
+    - 'fn f() { let s = String::from("hello").clone(); }'
+  should_not_match:
+    - 'fn f() { let s = name.to_string(); }'
+    - 'fn f() { let s = name.clone(); }'

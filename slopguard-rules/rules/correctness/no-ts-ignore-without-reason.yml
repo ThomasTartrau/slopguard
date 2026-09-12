@@ -1,0 +1,19 @@
+id: no-ts-ignore-without-reason
+language: typescript
+severity: warning
+category: correctness
+message: "@ts-ignore without a justification. Add a reason or fix the type error."
+note: "Bare @ts-ignore suppresses errors silently. Use @ts-expect-error with a comment."
+fix: "Replace with // @ts-expect-error: <reason> or fix the underlying type error."
+rule:
+  kind: comment
+  regex: '@ts-ignore\s*$'
+ignores:
+  - "**/fixtures/**"
+tests:
+  should_match:
+    - "// @ts-ignore"
+    - "// @ts-ignore  "
+  should_not_match:
+    - "// @ts-ignore: legacy API returns wrong type until v3"
+    - "// @ts-expect-error: testing error path"

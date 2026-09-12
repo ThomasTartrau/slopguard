@@ -1,0 +1,23 @@
+id: no-commented-out-code
+language: typescript
+severity: warning
+category: slop
+message: "Commented-out code. Remove it, version control keeps history."
+note: "AI-generated code leaves dead code in comments at 90% prevalence (OX Security)."
+enabled: false
+rule:
+  kind: comment
+  regex: '//\s*(const\s+\w+\s*=|let\s+\w+\s*=|var\s+\w+\s*=|function\s+\w+|import\s+|export\s+(default\s+)?(function|class|const|let|interface|type)|return\s+\w+|if\s*\(|class\s+\w+|interface\s+\w+|type\s+\w+\s*=)'
+ignores:
+  - "**/fixtures/**"
+tests:
+  should_match:
+    - "// const oldValue = 42;"
+    - "// function deprecated() {"
+    - "// import { User } from './types';"
+    - "// export default function handler() {"
+  should_not_match:
+    - "// This function handles authentication"
+    - "// Returns the user count"
+    - "// BUG: see issue #42"
+    - "// TODO: implement later"
