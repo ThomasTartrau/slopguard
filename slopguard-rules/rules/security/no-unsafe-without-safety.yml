@@ -7,9 +7,22 @@ note: "Every unsafe block must be preceded by a // SAFETY: comment explaining th
 rule:
   kind: unsafe_block
   not:
-    follows:
-      kind: line_comment
-      regex: 'SAFETY'
+    any:
+      - follows:
+          kind: line_comment
+          regex: 'SAFETY'
+      - inside:
+          any:
+            - kind: expression_statement
+            - kind: let_declaration
+          follows:
+            kind: line_comment
+            regex: 'SAFETY'
+ignores:
+  - "**/tests/**"
+  - "**/test_*"
+  - "**/*_test.rs"
+skip_test_code: true
 tests:
   should_match:
     - |

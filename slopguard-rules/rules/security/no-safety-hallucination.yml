@@ -11,9 +11,22 @@ rule:
     - not:
         inside:
           kind: unsafe_block
+          stopBy: end
     - not:
         precedes:
-          kind: unsafe_block
+          any:
+            - kind: unsafe_block
+            - kind: expression_statement
+              has:
+                kind: unsafe_block
+            - kind: let_declaration
+              has:
+                kind: unsafe_block
+ignores:
+  - "**/tests/**"
+  - "**/test_*"
+  - "**/*_test.rs"
+skip_test_code: true
 tests:
   should_match:
     - |

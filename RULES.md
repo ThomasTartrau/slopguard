@@ -85,6 +85,7 @@ rule:
 # Scope
 files: ["**/src/**/*.rs"]          # only scan these
 ignores: ["**/tests/**"]           # skip these
+skip_test_code: true               # also drop findings inside #[cfg(test)] blocks (Rust)
 
 # Inline tests
 tests:

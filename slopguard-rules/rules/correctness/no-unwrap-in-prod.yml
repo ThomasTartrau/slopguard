@@ -13,6 +13,7 @@ ignores:
   - "**/*_test.rs"
   - "**/examples/**"
   - "**/benches/**"
+skip_test_code: true
 tests:
   should_match:
     - "let user = db.get_user(id).unwrap();"

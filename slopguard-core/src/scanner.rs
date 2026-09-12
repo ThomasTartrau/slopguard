@@ -21,6 +21,7 @@ use crate::config::Config;
 use crate::disable::filter_disabled;
 use crate::finding::{Finding, ScanResult, ScanStats};
 use crate::rule::{Language, Rule, RuleId, Severity};
+use crate::test_filter::CfgTestRanges;
 
 #[derive(Debug, Error)]
 pub enum ScanError {
@@ -130,6 +131,10 @@ fn scan_file(path: &Path, lang: SupportLang, rules: &CompiledRules) -> Vec<Findi
     let combined = CombinedScan::new(applicable);
     let result = combined.scan(&root, false);
 
+    let cfg_test = (lang == SupportLang::Rust && !result.matches.is_empty())
+        .then(|| CfgTestRanges::from_root(&root));
+    let cfg_test = cfg_test.as_ref();
+
     let findings = result
         .matches
         .into_iter()
@@ -138,24 +143,30 @@ fn scan_file(path: &Path, lang: SupportLang, rules: &CompiledRules) -> Vec<Findi
             Some((*rule, matches))
         })
         .flat_map(|(rule, matches)| {
-            matches.into_iter().map(move |node_match| {
-                let start = node_match.start_pos();
-                let end = node_match.end_pos();
-                Finding {
-                    rule_id: rule.id.clone(),
-                    severity: rule.severity.clone(),
-                    category: rule.category.clone().unwrap_or_default(),
-                    message: rule.message.clone(),
-                    note: rule.note.clone(),
-                    fix: rule.fix.clone(),
-                    file: path.to_path_buf(),
-                    line: start.line() + 1,
-                    column: start.byte_point().1 + 1,
-                    end_line: end.line() + 1,
-                    end_column: end.byte_point().1 + 1,
-                    matched_text: node_match.text().to_string(),
-                }
-            })
+            let skip_test_code = rule.skip_test_code;
+            matches
+                .into_iter()
+                .map(move |node_match| {
+                    let start = node_match.start_pos();
+                    let end = node_match.end_pos();
+                    Finding {
+                        rule_id: rule.id.clone(),
+                        severity: rule.severity.clone(),
+                        category: rule.category.clone().unwrap_or_default(),
+                        message: rule.message.clone(),
+                        note: rule.note.clone(),
+                        fix: rule.fix.clone(),
+                        file: path.to_path_buf(),
+                        line: start.line() + 1,
+                        column: start.byte_point().1 + 1,
+                        end_line: end.line() + 1,
+                        end_column: end.byte_point().1 + 1,
+                        matched_text: node_match.text().to_string(),
+                    }
+                })
+                .filter(move |f| {
+                    !(skip_test_code && cfg_test.is_some_and(|r| r.contains_line(f.line)))
+                })
         })
         .collect();
 
@@ -470,6 +481,56 @@ rule:
         .unwrap();
         let result = scan_dir(dir.path(), &[unwrap_rule()]);
         assert_eq!(result.findings.len(), 0);
+    }
+
+    fn unwrap_rule_skipping_test_code() -> Rule {
+        parse_rule(
+            r#"
+id: test-unwrap
+language: rust
+severity: error
+category: correctness
+message: ".unwrap() forbidden"
+rule:
+  kind: call_expression
+  regex: '\.unwrap\(\)\s*$'
+skip_test_code: true
+"#,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn cfg_test_block_excluded_by_post_filter() {
+        let dir = tempdir().unwrap();
+        write(
+            dir.path().join("main.rs"),
+            "fn prod() {\n    foo().unwrap();\n}\n\n#[cfg(test)]\nmod tests {\n    fn test_it() {\n        bar().unwrap();\n    }\n}\n",
+        )
+        .unwrap();
+        let result = scan_dir(dir.path(), &[unwrap_rule_skipping_test_code()]);
+        assert_eq!(
+            result.findings.len(),
+            1,
+            "should only find the prod unwrap, not the one inside #[cfg(test)]"
+        );
+        assert_eq!(result.findings[0].line, 2);
+    }
+
+    #[test]
+    fn cfg_test_kept_without_skip_test_code() {
+        let dir = tempdir().unwrap();
+        write(
+            dir.path().join("main.rs"),
+            "fn prod() {\n    foo().unwrap();\n}\n\n#[cfg(test)]\nmod tests {\n    fn test_it() {\n        bar().unwrap();\n    }\n}\n",
+        )
+        .unwrap();
+        let result = scan_dir(dir.path(), &[unwrap_rule()]);
+        assert_eq!(
+            result.findings.len(),
+            2,
+            "rule without skip_test_code should find both"
+        );
     }
 
     #[test]

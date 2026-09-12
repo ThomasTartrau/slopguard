@@ -6,7 +6,7 @@ message: "Trivial doc-comment restating the name. Remove or document non-obvious
 note: "AI pattern: 'This method provides...' or 'Execute the tool against the API.' copy-pasted everywhere."
 rule:
   kind: line_comment
-  regex: '///\s*(The |This (method|function|struct|enum|module|trait|type) )(is |provides |represents |contains |holds |stores |manages |handles |implements |defines |describes )'
+  regex: '///\s*(The|This) (method|function|struct|enum|module|trait|type) (is|provides|represents|contains|holds|stores|manages|handles|implements|defines|describes)\b'
 tests:
   should_match:
     - "/// This method provides the user data"

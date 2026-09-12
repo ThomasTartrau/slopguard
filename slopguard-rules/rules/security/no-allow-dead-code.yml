@@ -11,6 +11,7 @@ files:
   - "**/src/**/*.rs"
 ignores:
   - "**/tests/**"
+skip_test_code: true
 tests:
   should_match:
     - "#[allow(dead_code)]"

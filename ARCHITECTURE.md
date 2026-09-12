@@ -120,6 +120,7 @@ ignores: ["**/tests/**"]       # glob exclude patterns
 # Slopguard extensions
 category: slop                 # slop | security | correctness (derived from ruleset dir if omitted)
 fix: "Use X instead of Y"     # textual suggestion (v0.1), ast-grep rewrite pattern (future)
+skip_test_code: true           # drop findings inside #[cfg(test)] blocks (Rust only, default false)
 tests:                         # inline test cases
   should_match:
     - "code snippet that triggers the rule"

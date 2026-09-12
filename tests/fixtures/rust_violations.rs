@@ -104,7 +104,7 @@ fn _ok_chain() {
 }
 
 // --- correctness/pub-fn-needs-tracing (warning) ---
-pub fn create_user(name: &str) -> Result<User> {
+pub async fn create_user(name: &str) -> Result<User> {
     Ok(User { name: name.to_string() })
 }
 

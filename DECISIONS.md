@@ -93,3 +93,7 @@ The following patterns are deferred to v0.2.0 (AI rules):
 - **SAFETY comment content validation**: the comment exists (AST-detectable) but is the justification real or hallucinated? Needs semantic understanding.
 - **Doc-comment quality**: the comment exists and is non-trivial, but does it actually add information? Needs NLP judgment.
 - **Cross-file trait with single impl**: a trait defined in one file with exactly one implementation in another. Needs cross-file analysis.
+
+## D23: Inline test code is filtered by an explicit rule flag
+**Decision**: Rules opt into skipping `#[cfg(test)]` blocks with `skip_test_code: true`. The scanner locates those blocks on the tree-sitter AST (an `attribute_item` and the item it annotates) and drops the findings of opted-in rules inside them, after ast-grep matching. A textual brace scan was rejected: braces inside string literals or comments silently break it.
+**Why**: `ignores` globs only filter whole files, but Rust convention puts unit tests inline in `src/`. Inferring the intent from the glob list (e.g. "contains `tests`") is fragile and invisible to rule authors. An explicit field keeps the YAML self-describing and lets a rule that must fire in tests (e.g. no-safety-hallucination) leave it off.

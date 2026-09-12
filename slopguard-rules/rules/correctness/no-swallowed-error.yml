@@ -11,6 +11,7 @@ ignores:
   - "**/tests/**"
   - "**/test_*"
   - "**/*_test.rs"
+skip_test_code: true
 tests:
   should_match:
     - 'file.read_to_string(&mut buf).map_err(|_| AppError::ReadFailed);'

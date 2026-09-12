@@ -10,6 +10,7 @@ ignores:
   - "**/tests/**"
   - "**/test_*"
   - "**/*_test.rs"
+skip_test_code: true
 tests:
   should_match:
     - |

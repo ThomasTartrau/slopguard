@@ -2,7 +2,7 @@ id: pub-fn-needs-tracing
 language: rust
 severity: warning
 category: correctness
-message: "Public method without #[tracing::instrument]. Breaks OTel trace continuity."
+message: "Public async method without #[tracing::instrument]. Breaks OTel trace continuity."
 note: "Add #[tracing::instrument(skip(self))] or skip_all depending on context."
 rule:
   kind: function_item
@@ -10,10 +10,14 @@ rule:
     - has:
         kind: visibility_modifier
         regex: '^pub'
+    - regex: '\basync\b'
     - not:
-        has:
+        follows:
           kind: attribute_item
           regex: 'tracing::instrument'
+          stopBy:
+            not:
+              kind: attribute_item
 files:
   - "**/src/**/*.rs"
 ignores:
@@ -24,23 +28,24 @@ ignores:
   - "**/lib.rs"
   - "**/mod.rs"
   - "**/examples/**"
+skip_test_code: true
 tests:
   should_match:
-    - |
-      pub fn create_user(name: &str) -> Result<User> {
-          Ok(User { name: name.to_string() })
-      }
     - |
       pub async fn fetch_orders(pool: &PgPool) -> Result<Vec<Order>> {
           todo!()
       }
+    - |
+      pub async fn create_user(name: &str) -> Result<User> {
+          Ok(User { name: name.to_string() })
+      }
   should_not_match:
     - |
       #[tracing::instrument(skip(self))]
-      pub fn create_user(name: &str) -> Result<User> {
-          Ok(User { name: name.to_string() })
+      pub async fn fetch_orders(pool: &PgPool) -> Result<Vec<Order>> {
+          todo!()
       }
     - |
-      fn private_helper() -> i32 {
-          42
+      pub fn new(name: &str) -> Self {
+          Self { name: name.to_string() }
       }

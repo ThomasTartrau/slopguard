@@ -11,12 +11,15 @@ rule:
         field: macro
         regex: '^format$'
     - has:
-        kind: string_literal
-        regex: '(https?://|\{[^}]*(url|host|base|endpoint)[^}]*\}/|\{[^}]*(id|name|key|uid|slug)[^}]*\})'
+        kind: token_tree
+        has:
+          kind: string_literal
+          regex: '(https?://|\{[^}]*(url|host|base|endpoint)[^}]*\}/|/\{[^}]*(id|name|key|uid|slug)[^}]*\}|\{[^}]*(id|name|key|uid|slug)[^}]*\}/)'
 ignores:
   - "**/tests/**"
   - "**/test_*"
   - "**/*_test.rs"
+skip_test_code: true
 tests:
   should_match:
     - 'let url = format!("https://api.example.com/users/{}", user_id);'

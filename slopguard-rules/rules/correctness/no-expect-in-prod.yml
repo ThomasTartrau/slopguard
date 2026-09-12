@@ -14,6 +14,7 @@ ignores:
   - "**/examples/**"
   - "**/benches/**"
   - "**/main.rs"
+skip_test_code: true
 tests:
   should_match:
     - 'let conn = pool.get().expect("pool exhausted");'

@@ -11,12 +11,15 @@ rule:
         field: macro
         regex: '^format$'
     - has:
-        kind: string_literal
-        regex: '(/tmp/|/var/|/etc/|\.pdf|\.json|\.csv|\.txt|\.log|\.toml|\.yaml|\.yml)\{|\{[^}]*(path|file|dir|name|id)[^}]*\}\.(pdf|json|csv|txt|log)'
+        kind: token_tree
+        has:
+          kind: string_literal
+          regex: '(/tmp/|/var/|/etc/|\.pdf|\.json|\.csv|\.txt|\.log|\.toml|\.yaml|\.yml)\{|\{[^}]*(path|file|dir|name|id)[^}]*\}\.(pdf|json|csv|txt|log)'
 ignores:
   - "**/tests/**"
   - "**/test_*"
   - "**/*_test.rs"
+skip_test_code: true
 tests:
   should_match:
     - 'let p = format!("/tmp/{}.json", user_id);'

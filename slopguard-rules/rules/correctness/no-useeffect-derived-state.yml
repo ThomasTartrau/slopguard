@@ -7,12 +7,17 @@ note: "useEffect + setState to derive a value causes an unnecessary re-render an
 rule:
   kind: call_expression
   all:
-    - regex: 'useEffect\('
     - has:
-        kind: arrow_function
+        field: function
+        regex: '^useEffect$'
+    - has:
+        field: arguments
         has:
-          kind: call_expression
-          regex: 'set[A-Z]\w*\('
+          kind: arrow_function
+          has:
+            kind: call_expression
+            regex: '^set[A-Z]\w*\('
+            stopBy: end
 tests:
   should_match:
     - |

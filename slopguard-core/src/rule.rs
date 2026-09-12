@@ -114,6 +114,10 @@ pub struct Rule {
     pub files: Option<Vec<String>>,
     #[serde(default)]
     pub ignores: Option<Vec<String>>,
+    /// Drop findings located inside `#[cfg(test)]` blocks of scanned Rust files.
+    /// Complements `ignores`, which only filters whole files by path.
+    #[serde(default)]
+    pub skip_test_code: bool,
     #[serde(default)]
     pub tests: Option<RuleTests>,
 }
@@ -275,6 +279,7 @@ files:
   - "**/src/**/*.rs"
 ignores:
   - "**/tests/**"
+skip_test_code: true
 tests:
   should_match:
     - "let x = foo().unwrap();"
@@ -282,6 +287,7 @@ tests:
     - "let x = foo()?;"
 "#;
         let rule = parse_rule(yaml).unwrap();
+        assert!(rule.skip_test_code);
         assert_eq!(rule.id, RuleId::from("test-rule"));
         assert_eq!(rule.language, Language::Rust);
         assert_eq!(rule.severity, Severity::Error);
@@ -315,6 +321,7 @@ rule:
         assert!(rule.fix.is_none());
         assert!(rule.files.is_none());
         assert!(rule.ignores.is_none());
+        assert!(!rule.skip_test_code);
         assert!(rule.tests.is_none());
     }
 

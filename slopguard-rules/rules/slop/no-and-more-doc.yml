@@ -6,7 +6,7 @@ message: "Vague documentation ('and more', 'etc.', 'various'). List concretely o
 note: "AI adds 'and more' or 'etc.' to hide that it does not know what follows."
 rule:
   kind: line_comment
-  regex: '///.*\b(and more|etc\.|and so on|and others|various|amongst others|and many more|and much more)\b'
+  regex: '(?i)///.*(\b(and more|and so on|and others|various|amongst others|and many more|and much more)\b|\betc\.)'
 tests:
   should_match:
     - "/// Supports JSON, XML, and more."
