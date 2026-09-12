@@ -97,6 +97,10 @@ pub struct RuleTests {
     pub should_not_match: Vec<String>,
 }
 
+fn default_enabled() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Rule {
     pub id: RuleId,
@@ -116,6 +120,8 @@ pub struct Rule {
     pub ignores: Option<Vec<String>>,
     /// Drop findings located inside `#[cfg(test)]` blocks of scanned Rust files.
     /// Complements `ignores`, which only filters whole files by path.
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
     #[serde(default)]
     pub skip_test_code: bool,
     #[serde(default)]
@@ -220,19 +226,30 @@ pub fn load_custom_rules(dirs: &[PathBuf]) -> Result<Vec<Rule>, RuleError> {
     Ok(rules)
 }
 
+/// Whether a builtin rule takes part in a scan under `config`.
+///
+/// A rule listed in `rules.enable` is always active. Otherwise it must be
+/// enabled by default, belong to an active ruleset, and not be listed in
+/// `rules.disable`.
+pub fn is_rule_active(rule: &Rule, config: &crate::config::Config) -> bool {
+    let listed = |ids: &[String]| ids.iter().any(|id| id == rule.id.as_str());
+    if listed(&config.rules.enable) {
+        return true;
+    }
+    let ruleset_on = match rule.category.as_ref().unwrap_or(&Category::Correctness) {
+        Category::Slop => config.rulesets.slop,
+        Category::Security => config.rulesets.security,
+        Category::Correctness => config.rulesets.correctness,
+    };
+    ruleset_on && rule.enabled && !listed(&config.rules.disable)
+}
+
 /// Load all effective rules based on config: builtin (filtered by rulesets and
-/// disabled list) plus custom rules from configured directories.
+/// the enable/disable lists) plus custom rules from configured directories.
 pub fn load_effective_rules(config: &crate::config::Config) -> Result<Vec<Rule>, RuleError> {
     let mut rules: Vec<Rule> = load_builtin_rules()?
         .into_iter()
-        .filter(
-            |rule| match rule.category.as_ref().unwrap_or(&Category::Correctness) {
-                Category::Slop => config.rulesets.slop,
-                Category::Security => config.rulesets.security,
-                Category::Correctness => config.rulesets.correctness,
-            },
-        )
-        .filter(|rule| !config.rules.disable.iter().any(|d| d == rule.id.as_str()))
+        .filter(|rule| is_rule_active(rule, config))
         .collect();
 
     let custom = load_custom_rules(&config.rules.custom_dirs)?;
@@ -323,6 +340,50 @@ rule:
         assert!(rule.ignores.is_none());
         assert!(!rule.skip_test_code);
         assert!(rule.tests.is_none());
+        assert!(rule.enabled);
+    }
+
+    #[test]
+    fn rule_activation_precedence() {
+        let opt_in = parse_rule(
+            r#"
+id: opt-in
+language: rust
+severity: warning
+category: slop
+enabled: false
+message: "Opt-in"
+rule:
+  pattern: $X.unwrap()
+"#,
+        )
+        .unwrap();
+        let mut config = crate::config::Config::default();
+
+        assert!(!is_rule_active(&opt_in, &config), "enabled: false is off");
+
+        config.rules.enable.push("opt-in".to_string());
+        assert!(is_rule_active(&opt_in, &config), "enable list turns it on");
+
+        config.rules.disable.push("opt-in".to_string());
+        assert!(is_rule_active(&opt_in, &config), "enable wins over disable");
+
+        config.rulesets.slop = false;
+        assert!(is_rule_active(&opt_in, &config), "enable wins over ruleset");
+
+        config.rules.enable.clear();
+        config.rules.disable.clear();
+        config.rulesets.slop = true;
+        let mut default_on = opt_in.clone();
+        default_on.enabled = true;
+        assert!(is_rule_active(&default_on, &config));
+
+        config.rules.disable.push("opt-in".to_string());
+        assert!(!is_rule_active(&default_on, &config), "disable list");
+
+        config.rules.disable.clear();
+        config.rulesets.slop = false;
+        assert!(!is_rule_active(&default_on, &config), "ruleset off");
     }
 
     #[test]

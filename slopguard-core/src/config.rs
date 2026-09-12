@@ -44,6 +44,9 @@ pub struct RulesetsConfig {
 #[serde(default)]
 pub struct RulesConfig {
     pub disable: Vec<String>,
+    /// Rule ids to activate regardless of `disable`, the rulesets switches,
+    /// or the rule's own `enabled: false` (opt-in rules).
+    pub enable: Vec<String>,
     pub custom_dirs: Vec<PathBuf>,
 }
 
@@ -196,6 +199,7 @@ correctness = false
 
 [rules]
 disable = ["pub-fn-needs-tracing", "no-glob-reexport"]
+enable = ["test-needs-timeout"]
 custom_dirs = ["./my-rules"]
 
 [scan]
@@ -220,6 +224,7 @@ model = "claude-sonnet-5"
             cfg.rules.disable,
             vec!["pub-fn-needs-tracing", "no-glob-reexport"]
         );
+        assert_eq!(cfg.rules.enable, vec!["test-needs-timeout"]);
         assert_eq!(cfg.rules.custom_dirs, vec![PathBuf::from("./my-rules")]);
         assert_eq!(cfg.scan.ignores, vec!["target/", "generated/"]);
         assert_eq!(cfg.output.format, OutputFormat::Json);

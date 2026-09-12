@@ -130,7 +130,8 @@ security = true     # Security anti-patterns
 correctness = true  # Error handling, type safety
 
 [rules]
-disable = ["pub-fn-needs-tracing"]
+disable = ["no-glob-reexport"]
+enable = ["pub-fn-needs-tracing"]  # opt-in rules are off by default
 custom_dirs = ["./my-rules"]
 
 [scan]

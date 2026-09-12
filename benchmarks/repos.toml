@@ -1,0 +1,28 @@
+# Repos used for precision benchmarking.
+# Pin each repo to a specific commit so results are reproducible.
+# Last updated: 2026-09-12
+
+[[repo]]
+name = "ripgrep"
+url = "https://github.com/BurntSushi/ripgrep.git"
+rev = "HEAD"
+
+[[repo]]
+name = "axum"
+url = "https://github.com/tokio-rs/axum.git"
+rev = "HEAD"
+
+[[repo]]
+name = "serde"
+url = "https://github.com/serde-rs/serde.git"
+rev = "HEAD"
+
+[[repo]]
+name = "tokio"
+url = "https://github.com/tokio-rs/tokio.git"
+rev = "HEAD"
+
+[[repo]]
+name = "cargo"
+url = "https://github.com/rust-lang/cargo.git"
+rev = "HEAD"
