@@ -1,0 +1,26 @@
+id: no-empty-catch
+language: typescript
+severity: error
+category: correctness
+message: "Empty catch block silently swallows errors. Log or rethrow."
+note: "Silent catch hides bugs. At minimum, log the error."
+rule:
+  kind: catch_clause
+  has:
+    kind: statement_block
+    regex: '^\{\s*\}$'
+    stopBy: end
+ignores:
+  - "**/fixtures/**"
+tests:
+  should_match:
+    - |
+      try { doSomething(); } catch (e) {}
+    - |
+      try { doSomething(); } catch (e) {
+      }
+  should_not_match:
+    - |
+      try { doSomething(); } catch (e) { console.error(e); }
+    - |
+      try { doSomething(); } catch (e) { throw e; }

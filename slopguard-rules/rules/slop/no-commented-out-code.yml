@@ -1,0 +1,25 @@
+id: no-commented-out-code
+language: rust
+severity: warning
+category: slop
+message: "Commented-out code. Remove it, version control keeps history."
+note: "AI-generated code leaves dead code in comments at 90% prevalence (OX Security)."
+enabled: false
+rule:
+  kind: line_comment
+  regex: '//\s*(fn\s+\w+|let\s+(mut\s+)?\w+\s*=|pub\s+(fn|struct|enum|mod|use|type|trait|const|static)|use\s+\w+::|impl\s+|mod\s+\w+|struct\s+\w+|enum\s+\w+|return\s+\w+|match\s+\w+)'
+ignores:
+  - "**/tests/**"
+  - "**/fixtures/**"
+skip_test_code: true
+tests:
+  should_match:
+    - "// fn old_handler() {"
+    - "// let old_value = 42;"
+    - "// pub fn deprecated_method() {"
+    - "// use std::collections::HashMap;"
+  should_not_match:
+    - "// This function handles authentication"
+    - "// Returns the user count"
+    - "/// Creates a new instance"
+    - "// BUG: see issue #42"
