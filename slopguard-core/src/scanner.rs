@@ -687,16 +687,26 @@ skip_test_code: true
         let rules = [unwrap_rule()];
         let config = Config::default();
 
-        let result1 =
-            scan_cached(&[src_dir.path().to_path_buf()], &rules, &config, &cache_path).unwrap();
+        let result1 = scan_cached(
+            &[src_dir.path().to_path_buf()],
+            &rules,
+            &config,
+            &cache_path,
+        )
+        .unwrap();
 
         assert_eq!(result1.findings.len(), 1);
         let cache_stats1 = result1.cache_stats.as_ref().unwrap();
         assert_eq!(cache_stats1.cached, 0, "first scan: nothing cached");
         assert_eq!(cache_stats1.changed, 1, "first scan: one file scanned");
 
-        let result2 =
-            scan_cached(&[src_dir.path().to_path_buf()], &rules, &config, &cache_path).unwrap();
+        let result2 = scan_cached(
+            &[src_dir.path().to_path_buf()],
+            &rules,
+            &config,
+            &cache_path,
+        )
+        .unwrap();
 
         assert_eq!(result2.findings.len(), 1);
         let cache_stats2 = result2.cache_stats.as_ref().unwrap();
