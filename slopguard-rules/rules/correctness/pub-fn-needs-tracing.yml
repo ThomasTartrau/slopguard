@@ -2,8 +2,9 @@ id: pub-fn-needs-tracing
 language: rust
 severity: warning
 category: correctness
+enabled: false
 message: "Public async method without #[tracing::instrument]. Breaks OTel trace continuity."
-note: "Add #[tracing::instrument(skip(self))] or skip_all depending on context."
+note: "Add #[tracing::instrument(skip(self))] or skip_all depending on context. Opt-in rule: enable in slopguard.toml."
 rule:
   kind: function_item
   all:
