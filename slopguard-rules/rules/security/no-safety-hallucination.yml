@@ -22,6 +22,14 @@ rule:
             - kind: let_declaration
               has:
                 kind: unsafe_block
+          stopBy:
+            kind: line_comment
+    - not:
+        inside:
+          kind: block
+          has:
+            kind: unsafe_block
+            stopBy: end
 ignores:
   - "**/tests/**"
   - "**/test_*"

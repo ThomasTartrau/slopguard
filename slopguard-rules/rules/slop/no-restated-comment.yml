@@ -6,7 +6,11 @@ message: "Comment restating the code. Remove it, the code is already readable."
 note: "AI pattern: '// increment the counter' above counter += 1."
 rule:
   kind: line_comment
-  regex: '//\s*(increment|decrement|set|get|return|check|validate|create|update|delete|remove|add|initialize|init|call|invoke|send|fetch|load|save|store|parse|convert|transform|iterate|loop|log|print|import|export)\s+(the\s+)?\w+'
+  all:
+    - regex: '//\s*(increment|decrement|set|get|return|check|validate|create|update|delete|remove|add|initialize|init|call|invoke|send|fetch|load|save|store|parse|convert|transform|iterate|loop|log|print|import|export)\s+(the\s+)?\w+'
+    - regex: '//\s*\w+(\s+the)?\s+\w+\s*\.?\s*$'
+    - not:
+        regex: '(BUG|TODO|HACK|NOTE|FIXME|WARNING|SAFETY|XXX|PERF|#\d)'
 ignores:
   - "**/tests/**"
   - "**/fixtures/**"

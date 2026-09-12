@@ -22,8 +22,24 @@ rule:
     - not:
         inside:
           kind: attribute_item
+    - not:
+        inside:
+          kind: impl_item
+          has:
+            kind: scoped_type_identifier
+            regex: '^(std|core)::(fmt|error|iter|convert|ops|hash|cmp|future|marker|any|clone|default|io)::'
+            stopBy: end
+    - not:
+        regex: '^std::(fmt|error|io)::(Display|Debug|Formatter|Result|Error|Write|Read|Seek|BufRead)$'
 ignores:
   - "**/fixtures/**"
+  - "**/build.rs"
+  - "**/tests/**"
+  - "**/test_*"
+  - "**/*_test.rs"
+  - "**/*-test-*/**"
+  - "**/examples/**"
+  - "**/benches/**"
 tests:
   should_match:
     - "let map: std::collections::HashMap<String, i32> = std::collections::HashMap::new();"

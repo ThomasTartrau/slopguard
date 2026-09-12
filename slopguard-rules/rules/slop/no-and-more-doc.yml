@@ -6,15 +6,19 @@ message: "Vague documentation ('and more', 'etc.', 'various'). List concretely o
 note: "AI adds 'and more' or 'etc.' to hide that it does not know what follows."
 rule:
   kind: line_comment
-  regex: '(?i)///.*(\b(and more|and so on|and others|various|amongst others|and many more|and much more)\b|\betc\.)'
+  all:
+    - regex: '(?i)///.*(\b(and more|and so on|and others|amongst others|and many more|and much more)\b|\betc\.)'
+    - not:
+        regex: '(?i)///.*\b(such as|e\.g\.|for example|including|like)\b'
 ignores:
   - "**/fixtures/**"
 tests:
   should_match:
     - "/// Supports JSON, XML, and more."
     - "/// Handles validation, parsing, etc."
-    - "/// Various utility functions"
   should_not_match:
     - "/// Supports JSON and XML"
     - "/// Handles validation and parsing"
     - "// and more (not a doc-comment)"
+    - "/// Various utility functions"
+    - "/// Supports JSON, XML, and more, such as YAML and TOML."

@@ -278,7 +278,7 @@ fn run_list(
             Category::Security => config.rulesets.security,
             Category::Correctness => config.rulesets.correctness,
         };
-        cat_on && !config.rules.disable.iter().any(|d| d == r.id.as_str())
+        cat_on && r.enabled && !config.rules.disable.iter().any(|d| d == r.id.as_str())
     };
 
     let entries: Vec<ListEntry> = rules

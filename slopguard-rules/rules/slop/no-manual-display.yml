@@ -10,6 +10,13 @@ rule:
     - has:
         kind: match_expression
         stopBy: end
+    - not:
+        pattern: impl fmt::Display for $NAME { $$$ }
+        has:
+          kind: identifier
+          field: type
+          regex: '(Error|Err|Failure|Fault|Problem|Violation|Exception)$'
+          stopBy: end
 ignores:
   - "**/tests/**"
   - "**/test_*"

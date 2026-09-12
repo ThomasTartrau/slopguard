@@ -8,15 +8,17 @@ rule:
   any:
     - kind: line_comment
     - kind: block_comment
-  regex: '\b(comprehensive|robust|seamless|leverage|utilize|facilitate|streamline|endeavor|foster|harness|delve|intricate|nuanced|pivotal|myriad|plethora|paramount|cutting.edge|state.of.the.art|best.in.class|industry.leading|game.changing)\b'
+  regex: '\b(seamless|utilize|facilitate|streamline|endeavor|foster|delve|intricate|pivotal|myriad|plethora|paramount|cutting.edge|state.of.the.art|best.in.class|industry.leading|game.changing)\b'
 ignores:
   - "**/fixtures/**"
 tests:
   should_match:
-    - "// This provides a comprehensive overview"
-    - "// Leverage the robust framework"
     - "/* A seamless integration layer */"
+    - "// We need to utilize this framework"
+    - "// This will streamline the process"
   should_not_match:
     - "// This function parses the input"
     - "// Returns the user count"
     - "/* Helper for date formatting */"
+    - "// This provides a comprehensive overview"
+    - "// Leverage the robust framework"
