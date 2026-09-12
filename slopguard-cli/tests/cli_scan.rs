@@ -222,6 +222,51 @@ fn custom_config_disables_rule() {
 }
 
 #[test]
+fn scan_rule_filter() {
+    let dir = tempdir().unwrap();
+    // This file triggers both no-unwrap-in-prod (error) and no-expect-in-prod (error)
+    write(
+        dir.path().join("bad.rs"),
+        "fn main() {\n    foo().unwrap();\n    bar().expect(\"boom\");\n}\n",
+    )
+    .unwrap();
+
+    let output = slopguard()
+        .args([
+            "scan",
+            "--rule",
+            "no-unwrap-in-prod",
+            "--no-colors",
+            dir.path().to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(1));
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout.contains("no-unwrap-in-prod"),
+        "should contain the filtered rule, got: {stdout}"
+    );
+    assert!(
+        !stdout.contains("no-expect-in-prod"),
+        "should NOT contain other rules, got: {stdout}"
+    );
+}
+
+#[test]
+fn scan_rule_unknown_exit_two() {
+    let dir = tempdir().unwrap();
+    write(dir.path().join("main.rs"), "fn main() {}\n").unwrap();
+
+    slopguard()
+        .args(["scan", "--rule", "fake-rule", dir.path().to_str().unwrap()])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("unknown rule"));
+}
+
+#[test]
 fn text_summary_line() {
     let dir = tempdir().unwrap();
     write(

@@ -258,6 +258,15 @@ pub fn load_effective_rules(config: &crate::config::Config) -> Result<Vec<Rule>,
     Ok(rules)
 }
 
+/// Load all rules (builtin + custom) without filtering by activation status.
+/// Used by `explain` to look up any rule regardless of config.
+pub fn load_all_rules(config: &crate::config::Config) -> Result<Vec<Rule>, RuleError> {
+    let mut rules = load_builtin_rules()?;
+    let custom = load_custom_rules(&config.rules.custom_dirs)?;
+    rules.extend(custom);
+    Ok(rules)
+}
+
 /// Validate that all rule ids are unique.
 pub fn validate_unique_ids(rules: &[Rule]) -> Result<(), RuleError> {
     let mut seen = HashSet::new();

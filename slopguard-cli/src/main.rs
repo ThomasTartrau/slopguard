@@ -1,5 +1,6 @@
 mod output;
 
+use std::cmp::Ordering;
 use std::env;
 use std::fs;
 use std::io::{self, Write};
@@ -7,12 +8,14 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand, ValueEnum};
+use strsim::normalized_levenshtein;
 use thiserror::Error;
 
 use slopguard_core::config::{load_config, load_config_file, Config, ConfigError, OutputFormat};
 use slopguard_core::finding::ScanResult;
 use slopguard_core::rule::{
-    is_rule_active, load_builtin_rules, load_effective_rules, Category, RuleError, Severity,
+    is_rule_active, load_all_rules, load_builtin_rules, load_effective_rules, Category, Rule,
+    RuleError, Severity,
 };
 use slopguard_core::scanner::{scan, ScanError};
 use slopguard_core::testing::{self, RuleTestStatus, TestError, TestFailureKind};
@@ -86,6 +89,10 @@ enum Command {
         /// Enable specific rules even if disabled by default or config (repeatable)
         #[arg(long = "enable", value_name = "RULE_ID")]
         cli_enable: Vec<String>,
+
+        /// Scan with only this rule
+        #[arg(long = "rule", value_name = "RULE_ID")]
+        rule_filter: Option<String>,
     },
     /// Generate a slopguard.toml config file
     Init {
@@ -95,6 +102,19 @@ enum Command {
     },
     /// Validate inline tests for all rules
     Test {
+        /// Path to a specific slopguard.toml config file
+        #[arg(long)]
+        config: Option<PathBuf>,
+    },
+    /// Show details of a specific rule
+    Explain {
+        /// The rule id to explain
+        rule_id: String,
+
+        /// Output format
+        #[arg(long)]
+        format: Option<Format>,
+
         /// Path to a specific slopguard.toml config file
         #[arg(long)]
         config: Option<PathBuf>,
@@ -153,7 +173,16 @@ enum AppError {
     Io(#[from] io::Error),
 }
 
-fn run_scan(
+fn suggest_similar<'a>(id: &str, rules: &'a [Rule]) -> Option<&'a str> {
+    rules
+        .iter()
+        .map(|r| (r.id.as_str(), normalized_levenshtein(id, r.id.as_str())))
+        .filter(|(_, score)| *score >= 0.6)
+        .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(Ordering::Equal))
+        .map(|(id, _)| id)
+}
+
+struct ScanOpts {
     paths: Vec<PathBuf>,
     format: Option<Format>,
     severity_threshold: SeverityThreshold,
@@ -161,7 +190,20 @@ fn run_scan(
     no_colors: bool,
     cli_disable: Vec<String>,
     cli_enable: Vec<String>,
-) -> Result<bool, AppError> {
+    rule_filter: Option<String>,
+}
+
+fn run_scan(opts: ScanOpts) -> Result<bool, AppError> {
+    let ScanOpts {
+        paths,
+        format,
+        severity_threshold,
+        config_path,
+        no_colors,
+        cli_disable,
+        cli_enable,
+        rule_filter,
+    } = opts;
     let use_colors = !no_colors && env::var_os("NO_COLOR").is_none();
 
     let mut config = resolve_config(config_path.as_deref())?;
@@ -174,7 +216,25 @@ fn run_scan(
         OutputFormat::Sarif => Format::Sarif,
     });
 
-    let rules = load_effective_rules(&config)?;
+    let mut rules = load_effective_rules(&config)?;
+
+    if let Some(ref filter_id) = rule_filter {
+        let found = rules.iter().any(|r| r.id.as_str() == filter_id);
+        if !found {
+            let suggestion = suggest_similar(filter_id, &rules);
+            if let Some(suggested) = suggestion {
+                eprintln!("error: unknown rule '{filter_id}'. Did you mean '{suggested}'?");
+            } else {
+                eprintln!("error: unknown rule '{filter_id}'");
+            }
+            return Err(AppError::Io(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("unknown rule '{filter_id}'"),
+            )));
+        }
+        rules.retain(|r| r.id.as_str() == filter_id);
+    }
+
     let result = scan(&paths, &rules, &config)?;
     let has_findings = has_findings_above_threshold(&result, &severity_threshold);
 
@@ -183,6 +243,48 @@ fn run_scan(
     write_output(&result, &format, &mut out, use_colors)?;
 
     Ok(has_findings)
+}
+
+fn run_explain(
+    rule_id: String,
+    format: Option<Format>,
+    config_path: Option<PathBuf>,
+) -> Result<(), AppError> {
+    let config = resolve_config(config_path.as_deref())?;
+    let rules = load_all_rules(&config)?;
+
+    let rule = rules.iter().find(|r| r.id.as_str() == rule_id);
+    match rule {
+        Some(r) => {
+            let format = format.unwrap_or(Format::Text);
+            let stdout = io::stdout();
+            let mut out = stdout.lock();
+            match format {
+                Format::Text => text::format_explain(r, &mut out),
+                Format::Json => json::format_explain_json(r, &mut out),
+                Format::Sarif => {
+                    eprintln!("error: SARIF format is not supported for explain");
+                    return Err(AppError::Io(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "SARIF format is not supported for explain",
+                    )));
+                }
+            }?;
+            Ok(())
+        }
+        None => {
+            let suggestion = suggest_similar(&rule_id, &rules);
+            if let Some(suggested) = suggestion {
+                eprintln!("error: unknown rule '{rule_id}'. Did you mean '{suggested}'?");
+            } else {
+                eprintln!("error: unknown rule '{rule_id}'");
+            }
+            Err(AppError::Io(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("unknown rule '{rule_id}'"),
+            )))
+        }
+    }
 }
 
 const DEFAULT_CONFIG: &str = r#"[rulesets]
@@ -390,17 +492,30 @@ fn main() -> ExitCode {
             no_colors,
             cli_disable,
             cli_enable,
-        } => match run_scan(
+            rule_filter,
+        } => match run_scan(ScanOpts {
             paths,
             format,
             severity_threshold,
-            config,
+            config_path: config,
             no_colors,
             cli_disable,
             cli_enable,
-        ) {
+            rule_filter,
+        }) {
             Ok(true) => ExitCode::from(1),
             Ok(false) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("error: {e}");
+                ExitCode::from(2)
+            }
+        },
+        Command::Explain {
+            rule_id,
+            format,
+            config,
+        } => match run_explain(rule_id, format, config) {
+            Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
                 eprintln!("error: {e}");
                 ExitCode::from(2)
