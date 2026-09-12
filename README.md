@@ -43,7 +43,7 @@ You can extend slopguard with your own YAML rules, disable rules per-line with i
 ## 🏗️ Architecture
 
 | Crate | Version | Role |
-|---|---|---|
+| --- | --- | --- |
 | [`slopguard-cli`](https://crates.io/crates/slopguard-cli) | ![](https://img.shields.io/crates/v/slopguard-cli.svg?label=) | CLI binary: scan, init, test, list commands |
 | [`slopguard-core`](https://crates.io/crates/slopguard-core) | ![](https://img.shields.io/crates/v/slopguard-core.svg?label=) | Analysis engine: scanner, config, rule loading, inline disable |
 | [`slopguard-rules`](https://crates.io/crates/slopguard-rules) | ![](https://img.shields.io/crates/v/slopguard-rules.svg?label=) | Builtin YAML rules embedded at compile time |
@@ -74,9 +74,43 @@ You can extend slopguard with your own YAML rules, disable rules per-line with i
 
 ## ⚡ Quick Start
 
+### Install
+
+**Pre-built binary (recommended):**
+
+```bash
+curl -fsSL https://gitlab.com/ThomasTartrau/slopguard/-/raw/main/install.sh | sh
+```
+
+Or install a specific version:
+
+```bash
+curl -fsSL https://gitlab.com/ThomasTartrau/slopguard/-/raw/main/install.sh | VERSION=0.1.0 sh
+```
+
+By default, the binary is installed to `~/.local/bin/`. Override with `INSTALL_DIR`:
+
+```bash
+curl -fsSL https://gitlab.com/ThomasTartrau/slopguard/-/raw/main/install.sh | INSTALL_DIR=/usr/local/bin sh
+```
+
+Pre-built binaries are available for:
+
+| OS | Architecture | Target |
+| ---- | ------------- | -------- |
+| Linux | x86_64 | `x86_64-unknown-linux-gnu`, `x86_64-unknown-linux-musl` |
+| macOS | ARM (M1+) | `aarch64-apple-darwin` |
+| macOS | Intel | `x86_64-apple-darwin` |
+
+You can also download archives directly from the [releases page](https://gitlab.com/ThomasTartrau/slopguard/-/releases).
+
+**From source (requires Rust toolchain):**
+
 ```bash
 cargo install slopguard-cli
 ```
+
+### Usage
 
 ```bash
 slopguard scan .
@@ -110,7 +144,7 @@ slopguard init                       # generate slopguard.toml
 ## 📋 Rulesets
 
 | Ruleset | What it catches |
-|---------|-----------------|
+| --------- | ----------------- |
 | **slop** | AI-generated code patterns: filler words, trivial doc-comments, restated comments, unnecessary manual impls |
 | **security** | Security anti-patterns: secrets in Debug, path traversal, URL injection, unsafe without SAFETY comment, HTTP clients without timeout |
 | **correctness** | Error handling issues: unwrap/expect in production, swallowed errors, silent fallbacks, ignored Results, float money |
