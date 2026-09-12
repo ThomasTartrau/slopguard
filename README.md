@@ -1,53 +1,125 @@
+<div align="center">
+
+```text
+     _                                       _
+ ___| | ___  _ __   __ _ _   _  __ _ _ __ __| |
+/ __| |/ _ \| '_ \ / _` | | | |/ _` | '__/ _` |
+\__ \ | (_) | |_) | (_| | |_| | (_| | | | (_| |
+|___/_|\___/| .__/ \__, |\__,_|\__,_|_|  \__,_|
+            |_|    |___/
+```
+
 # slopguard
 
-Static analysis tool that catches AI-generated code patterns ("slop") and common correctness/security issues. Built in Rust, powered by tree-sitter via ast-grep-core.
+[![pipeline status](https://img.shields.io/gitlab/pipeline-status/ThomasTartrau%2Fslopguard?branch=main&style=for-the-badge&logo=gitlab&logoColor=white)](https://gitlab.com/ThomasTartrau/slopguard/-/pipelines)
+[![slopguard-cli](https://img.shields.io/crates/v/slopguard-cli.svg?style=for-the-badge&logo=rust&logoColor=white&label=cli)](https://crates.io/crates/slopguard-cli)
+[![slopguard-core](https://img.shields.io/crates/v/slopguard-core.svg?style=for-the-badge&logo=rust&logoColor=white&label=core)](https://crates.io/crates/slopguard-core)
+[![slopguard-rules](https://img.shields.io/crates/v/slopguard-rules.svg?style=for-the-badge&logo=rust&logoColor=white&label=rules)](https://crates.io/crates/slopguard-rules)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](LICENSE)
+[![Rust](https://img.shields.io/badge/Rust-stable-orange?style=for-the-badge&logo=rust&logoColor=white)](https://www.rust-lang.org/)
 
-## Why
+**Catch AI-generated code patterns and common correctness/security issues via static analysis.**
 
-AI code generators produce recurring anti-patterns: trivial doc-comments, swallowed errors, silent fallbacks, filler words in comments, missing timeouts, redundant string conversions. These patterns are structurally detectable but no existing tool catches them for Rust.
+[Quick Start](#-quick-start) -
+[Architecture](#%EF%B8%8F-architecture) -
+[Rulesets](#-rulesets) -
+[Configuration](#%EF%B8%8F-configuration) -
+[Custom Rules](#-custom-rules)
 
-slopguard fills that gap with:
-- **34 builtin rules** across 3 rulesets (slop, security, correctness)
-- **Rust + TypeScript** support via tree-sitter grammars
-- **YAML rules** (superset of ast-grep format) with inline tests
-- **Custom rules** per project via `slopguard.toml`
-- **AI-powered analysis** (v0.2+) for semantic patterns that AST matching cannot catch
+</div>
 
-## Install
+---
 
-```sh
-cargo install slopguard
+## What is slopguard?
+
+AI code generators produce recurring anti-patterns: trivial doc-comments, swallowed errors, silent fallbacks, filler words in comments, missing timeouts, redundant string conversions. These patterns are structurally detectable but no existing tool catches them systematically.
+
+slopguard fills that gap with builtin rules organized into three rulesets (**slop**, **security**, **correctness**), covering both **Rust and TypeScript**. Rules are defined in YAML using ast-grep pattern syntax, powered by tree-sitter for AST-level matching. Every rule ships with inline tests.
+
+You can extend slopguard with your own YAML rules, disable rules per-line with inline suppression comments, and output findings as colored text (rustc-style), JSON, or SARIF for CI integration.
+
+---
+
+## 🏗️ Architecture
+
+| Crate | Version | Role |
+|---|---|---|
+| [`slopguard-cli`](https://crates.io/crates/slopguard-cli) | ![](https://img.shields.io/crates/v/slopguard-cli.svg?label=) | CLI binary: scan, init, test, list commands |
+| [`slopguard-core`](https://crates.io/crates/slopguard-core) | ![](https://img.shields.io/crates/v/slopguard-core.svg?label=) | Analysis engine: scanner, config, rule loading, inline disable |
+| [`slopguard-rules`](https://crates.io/crates/slopguard-rules) | ![](https://img.shields.io/crates/v/slopguard-rules.svg?label=) | Builtin YAML rules embedded at compile time |
+
+```text
+  files on disk
+       |
+       v
+  file walker (ignore crate, respects .gitignore)
+       |
+       v
+  AST parser (tree-sitter via ast-grep-core)
+       |
+       v
+  rule matcher (pattern + kind + regex combinators)
+       |
+       v
+  inline disable filter (// slopguard-disable-next-line)
+       |
+       v
+  findings
+       |
+       v
+  formatter (text / json / sarif)
 ```
 
-## Usage
+---
 
-```sh
-# Scan the current project
-slopguard scan
+## ⚡ Quick Start
 
-# Scan specific paths
-slopguard scan src/api/ src/handlers/
-
-# Output as JSON for CI
-slopguard scan --format json
-
-# Output as SARIF for GitHub/GitLab integration
-slopguard scan --format sarif
-
-# Only fail on errors, not warnings
-slopguard scan --severity-threshold error
-
-# List active rules
-slopguard list
-
-# Test all rules (builtin + custom)
-slopguard test
-
-# Generate a slopguard.toml config
-slopguard init
+```bash
+cargo install slopguard-cli
 ```
 
-## Configuration
+```bash
+slopguard scan .
+```
+
+Example output:
+
+```text
+error[no-unwrap-in-prod]: .unwrap() forbidden in production. Use ? or .expect('explicit message').
+   --> src/api/handler.rs:42:5
+    |
+ 42 |     let user = db.get_user(id).unwrap();
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = unwrap() crashes the process on a single invalid input.
+```
+
+Other commands:
+
+```bash
+slopguard scan src/ --format json    # JSON output for CI
+slopguard scan --format sarif        # SARIF for GitLab/GitHub integration
+slopguard scan --severity-threshold error  # exit 0 on warnings-only
+slopguard list                       # show active rules
+slopguard test                       # validate all rule inline tests
+slopguard init                       # generate slopguard.toml
+```
+
+---
+
+## 📋 Rulesets
+
+| Ruleset | What it catches |
+|---------|-----------------|
+| **slop** | AI-generated code patterns: filler words, trivial doc-comments, restated comments, unnecessary manual impls |
+| **security** | Security anti-patterns: secrets in Debug, path traversal, URL injection, unsafe without SAFETY comment, HTTP clients without timeout |
+| **correctness** | Error handling issues: unwrap/expect in production, swallowed errors, silent fallbacks, ignored Results, float money |
+
+Run `slopguard list` for the full list with notes, or see [RULES.md](RULES.md) for detailed documentation.
+
+---
+
+## ⚙️ Configuration
 
 Create a `slopguard.toml` at your project root (or run `slopguard init`):
 
@@ -58,46 +130,18 @@ security = true     # Security anti-patterns
 correctness = true  # Error handling, type safety
 
 [rules]
-# Disable specific rules
 disable = ["pub-fn-needs-tracing"]
-
-# Custom rule directories
-custom_dirs = ["./slopguard-rules"]
+custom_dirs = ["./my-rules"]
 
 [scan]
-# Files/dirs to ignore
 ignores = ["target/", "generated/", "vendor/"]
-
-[ai]
-enabled = false     # Enable AI-powered rules (v0.2+)
-# provider = "anthropic"
-# model = "claude-sonnet-5"
 ```
 
-Hierarchical config: `~/.config/slopguard/config.toml` (global) is overridden by project-level `slopguard.toml`.
+Hierarchical config: `~/.config/slopguard/config.toml` (global defaults) is overridden by project-level `slopguard.toml`, which is overridden by CLI flags.
 
-## Inline suppression
+---
 
-```rust
-// slopguard-disable-next-line
-let value = risky_call().unwrap();
-
-// slopguard-disable-next-line no-unwrap-in-prod
-let value = safe_call().unwrap();
-```
-
-## Rulesets
-
-### slop (AI code patterns)
-Detects patterns that AI code generators produce at abnormally high rates.
-
-### security
-Catches security anti-patterns: secrets in Debug, path traversal via format!(), HTTP clients without timeouts, empty env secrets.
-
-### correctness
-Error handling issues: unwrap/expect in production, swallowed errors, silent fallbacks, ignored Results.
-
-## Writing custom rules
+## 🔧 Custom Rules
 
 Rules use YAML with ast-grep pattern syntax:
 
@@ -122,8 +166,43 @@ tests:
     - "// TODOIST integration"
 ```
 
-Run `slopguard test` to validate your rules.
+Place your rules in a directory and point to it in `slopguard.toml`:
 
-## License
+```toml
+[rules]
+custom_dirs = ["./slopguard-rules"]
+```
 
-MIT
+Run `slopguard test` to validate all rules (builtin + custom) against their inline tests.
+
+---
+
+## 🚫 Inline Suppression
+
+```rust
+// slopguard-disable-next-line
+let value = risky_call().unwrap();
+
+// slopguard-disable-next-line no-unwrap-in-prod
+let value = safe_call().unwrap();
+```
+
+The first form suppresses all rules for the next line. The second form suppresses only the named rule.
+
+---
+
+## 📄 License
+
+MIT - see [LICENSE](LICENSE).
+
+---
+
+<div align="center">
+
+**[GitLab](https://gitlab.com/ThomasTartrau/slopguard)**
+
+[cli](https://crates.io/crates/slopguard-cli) -
+[core](https://crates.io/crates/slopguard-core) -
+[rules](https://crates.io/crates/slopguard-rules)
+
+</div>

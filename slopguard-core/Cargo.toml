@@ -7,6 +7,7 @@ repository.workspace = true
 keywords.workspace = true
 categories.workspace = true
 description = "Core analysis engine for slopguard"
+readme = "README.md"
 
 [dependencies]
 ast-grep-core = "0.45"

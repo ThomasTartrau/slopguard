@@ -7,6 +7,7 @@ repository.workspace = true
 keywords.workspace = true
 categories.workspace = true
 description = "Builtin rule definitions for slopguard"
+readme = "README.md"
 
 [dependencies]
 rust-embed = "8"
