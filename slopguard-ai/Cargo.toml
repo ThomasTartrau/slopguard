@@ -10,7 +10,7 @@ description = "AI analysis pipeline for slopguard (LLM provider, prompt, cache)"
 readme = "README.md"
 
 [dependencies]
-slopguard-core = { path = "../slopguard-core", version = "0.1.6" }
+slopguard-core = { path = "../slopguard-core", version = "0.1.7" }
 ironflow-core = { version = "3.15.1", features = [
     "provider-anthropic-api",
     "provider-openai",
