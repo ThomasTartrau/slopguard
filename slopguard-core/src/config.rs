@@ -19,14 +19,26 @@ pub enum OutputFormat {
     Sarif,
 }
 
+/// Transport used to reach the LLM.
 #[derive(Debug, Display, Clone, PartialEq, Eq, Serialize, Deserialize, EnumString, Default)]
 #[serde(rename_all = "lowercase")]
 #[strum(serialize_all = "lowercase")]
-pub enum AiProvider {
+pub enum AiTransport {
+    /// Direct HTTP calls to a provider API (default).
+    #[default]
+    Api,
+    /// Shell out to the local `claude` CLI (uses the Claude subscription).
+    Cli,
+}
+
+/// Vendor used when `provider = "api"`.
+#[derive(Debug, Display, Clone, PartialEq, Eq, Serialize, Deserialize, EnumString, Default)]
+#[serde(rename_all = "lowercase")]
+#[strum(serialize_all = "lowercase")]
+pub enum AiVendor {
     #[default]
     Anthropic,
     OpenAI,
-    Ollama,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, SmartDefault)]
@@ -66,12 +78,26 @@ pub struct OutputConfig {
     pub colors: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+fn default_concurrency() -> usize {
+    4
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, SmartDefault)]
 #[serde(default)]
 pub struct AiConfig {
     pub enabled: bool,
-    pub provider: Option<AiProvider>,
+    /// Transport: `api` (HTTP) or `cli` (local `claude`).
+    pub provider: AiTransport,
+    /// Vendor used when `provider = "api"`.
+    pub vendor: AiVendor,
     pub model: Option<String>,
+    /// Maximum number of concurrent LLM calls.
+    #[default = 4]
+    #[serde(default = "default_concurrency")]
+    pub concurrency: usize,
+    /// API key. When omitted, read from the vendor's env var
+    /// (`ANTHROPIC_API_KEY` / `OPENAI_API_KEY`).
+    pub api_key: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -213,8 +239,11 @@ colors = false
 
 [ai]
 enabled = true
-provider = "anthropic"
+provider = "cli"
+vendor = "openai"
 model = "claude-sonnet-5"
+concurrency = 8
+api_key = "sk-test"
 "#;
         write(dir.path().join("slopguard.toml"), toml).unwrap();
 
@@ -232,8 +261,11 @@ model = "claude-sonnet-5"
         assert_eq!(cfg.output.format, OutputFormat::Json);
         assert!(!cfg.output.colors);
         assert!(cfg.ai.enabled);
-        assert_eq!(cfg.ai.provider, Some(AiProvider::Anthropic));
+        assert_eq!(cfg.ai.provider, AiTransport::Cli);
+        assert_eq!(cfg.ai.vendor, AiVendor::OpenAI);
         assert_eq!(cfg.ai.model.as_deref(), Some("claude-sonnet-5"));
+        assert_eq!(cfg.ai.concurrency, 8);
+        assert_eq!(cfg.ai.api_key.as_deref(), Some("sk-test"));
     }
 
     #[test]
@@ -253,6 +285,10 @@ slop = false
         assert_eq!(cfg.output.format, OutputFormat::Text);
         assert!(cfg.output.colors);
         assert!(!cfg.ai.enabled);
+        // defaults hold when [ai] is absent
+        assert_eq!(cfg.ai.provider, AiTransport::Api);
+        assert_eq!(cfg.ai.vendor, AiVendor::Anthropic);
+        assert_eq!(cfg.ai.concurrency, 4);
     }
 
     #[test]
@@ -401,8 +437,11 @@ format = "xml"
         assert_eq!(cfg.output.format, OutputFormat::Text);
         assert!(cfg.output.colors);
         assert!(!cfg.ai.enabled);
-        assert!(cfg.ai.provider.is_none());
+        assert_eq!(cfg.ai.provider, AiTransport::Api);
+        assert_eq!(cfg.ai.vendor, AiVendor::Anthropic);
+        assert_eq!(cfg.ai.concurrency, 4);
         assert!(cfg.ai.model.is_none());
+        assert!(cfg.ai.api_key.is_none());
     }
 
     #[test]
@@ -435,7 +474,9 @@ ignores = ["target/"]
     fn enum_string_roundtrip() {
         assert_eq!(OutputFormat::Sarif.to_string(), "sarif");
         assert_eq!("json".parse::<OutputFormat>().unwrap(), OutputFormat::Json);
-        assert_eq!(AiProvider::OpenAI.to_string(), "openai");
-        assert_eq!("openai".parse::<AiProvider>().unwrap(), AiProvider::OpenAI);
+        assert_eq!(AiVendor::OpenAI.to_string(), "openai");
+        assert_eq!("openai".parse::<AiVendor>().unwrap(), AiVendor::OpenAI);
+        assert_eq!(AiTransport::Cli.to_string(), "cli");
+        assert_eq!("api".parse::<AiTransport>().unwrap(), AiTransport::Api);
     }
 }

@@ -29,6 +29,11 @@ struct ExplainOutput<'a> {
     note: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     fix: Option<&'a str>,
+    /// "ai" for rules with an `ai_check`, "ast" otherwise.
+    kind: &'a str,
+    /// The LLM prompt template, present only for AI rules.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    prompt: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     should_match: Option<&'a [String]>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -45,6 +50,8 @@ pub fn format_explain_json(rule: &Rule, w: &mut impl Write) -> io::Result<()> {
         message: &rule.message,
         note: rule.note.as_deref(),
         fix: rule.fix.as_deref(),
+        kind: if rule.ai_check.is_some() { "ai" } else { "ast" },
+        prompt: rule.ai_check.as_ref().map(|a| a.prompt.as_str()),
         should_match: rule.tests.as_ref().map(|t| t.should_match.as_slice()),
         should_not_match: rule.tests.as_ref().map(|t| t.should_not_match.as_slice()),
     };

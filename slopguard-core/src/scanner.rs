@@ -171,6 +171,7 @@ fn scan_file(path: &Path, lang: SupportLang, rules: &CompiledRules) -> Vec<Findi
                         end_line: end.line() + 1,
                         end_column: end.byte_point().1 + 1,
                         matched_text: node_match.text().to_string(),
+                        confidence: None,
                     }
                 })
                 .filter(move |f| {

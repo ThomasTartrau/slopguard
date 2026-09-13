@@ -1,29 +1,26 @@
 [package]
-name = "slopguard-cli"
+name = "slopguard-ai"
 version = "0.1.6"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 keywords.workspace = true
 categories.workspace = true
-description = "CLI tool to catch AI-generated code patterns via static analysis"
+description = "AI analysis pipeline for slopguard (LLM provider, prompt, cache)"
 readme = "README.md"
-
-[[bin]]
-name = "slopguard"
-path = "src/main.rs"
 
 [dependencies]
 slopguard-core = { path = "../slopguard-core", version = "0.1.6" }
-slopguard-ai = { path = "../slopguard-ai", version = "0.1.6" }
-clap = { version = "4", features = ["derive"] }
+ironflow-core = { version = "3.15.1", features = [
+    "provider-anthropic-api",
+    "provider-openai",
+] }
+tokio = { version = "1", features = ["rt-multi-thread", "time", "macros"] }
+futures = "0.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+schemars = "1"
 thiserror = "2"
-strsim = "0.11"
 
 [dev-dependencies]
-assert_cmd = "2"
-predicates = "3"
 tempfile = "3"
-serde_json = "1"

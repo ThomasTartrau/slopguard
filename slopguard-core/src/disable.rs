@@ -68,6 +68,7 @@ mod tests {
             end_line: line,
             end_column: 10,
             matched_text: "test".to_string(),
+            confidence: None,
         }
     }
 

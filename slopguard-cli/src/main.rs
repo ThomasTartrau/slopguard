@@ -1,6 +1,7 @@
 mod output;
 
 use std::cmp::Ordering;
+use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::io::{self, Write};
@@ -11,11 +12,12 @@ use clap::{Parser, Subcommand, ValueEnum};
 use strsim::normalized_levenshtein;
 use thiserror::Error;
 
+use slopguard_ai::{build_provider, run_ai_pass, AiCache, AiCandidate, DEFAULT_MODEL};
 use slopguard_core::config::{load_config, load_config_file, Config, ConfigError, OutputFormat};
-use slopguard_core::finding::ScanResult;
+use slopguard_core::finding::{Finding, ScanResult, ScanStats};
 use slopguard_core::rule::{
-    is_rule_active, load_all_rules, load_builtin_rules, load_effective_rules, Category, Rule,
-    RuleError, Severity,
+    is_rule_active, load_all_rules, load_builtin_rules, load_effective_rules, Category, Language,
+    Rule, RuleError, Severity,
 };
 use slopguard_core::scanner::{scan, scan_cached, ScanError};
 use slopguard_core::testing::{self, RuleTestStatus, TestError, TestFailureKind};
@@ -101,6 +103,10 @@ enum Command {
         /// Directory to store the scan cache (overrides SLOPGUARD_CACHE_DIR and config)
         #[arg(long, value_name = "PATH")]
         cache_dir: Option<PathBuf>,
+
+        /// Skip AI rules entirely (no LLM calls), even if a provider is configured
+        #[arg(long)]
+        no_ai: bool,
     },
     /// Generate a slopguard.toml config file
     Init {
@@ -201,6 +207,7 @@ struct ScanOpts {
     rule_filter: Option<String>,
     no_cache: bool,
     cache_dir: Option<PathBuf>,
+    no_ai: bool,
 }
 
 fn run_scan(opts: ScanOpts) -> Result<bool, AppError> {
@@ -215,6 +222,7 @@ fn run_scan(opts: ScanOpts) -> Result<bool, AppError> {
         rule_filter,
         no_cache,
         cache_dir,
+        no_ai,
     } = opts;
     let use_colors = !no_colors && env::var_os("NO_COLOR").is_none();
 
@@ -247,12 +255,29 @@ fn run_scan(opts: ScanOpts) -> Result<bool, AppError> {
         rules.retain(|r| r.id.as_str() == filter_id);
     }
 
-    let result = if no_cache {
-        scan(&paths, &rules, &config)?
+    // --no-ai: exclude AI rules entirely so their AST pre-filter matches
+    // never appear as unconfirmed findings.
+    if no_ai {
+        rules.retain(|r| r.ai_check.is_none());
+    }
+
+    let (ai_rules, ast_rules): (Vec<Rule>, Vec<Rule>) =
+        rules.into_iter().partition(|r| r.ai_check.is_some());
+
+    let resolved_cache_dir = resolve_cache_dir(cache_dir, &config);
+    let mut result = if no_cache {
+        scan(&paths, &ast_rules, &config)?
     } else {
-        let resolved_cache_dir = resolve_cache_dir(cache_dir, &config);
-        scan_cached(&paths, &rules, &config, &resolved_cache_dir)?
+        scan_cached(&paths, &ast_rules, &config, &resolved_cache_dir)?
     };
+
+    if !ai_rules.is_empty() {
+        let ai_findings = run_ai_phase(&paths, &ai_rules, &config, no_cache, &resolved_cache_dir)?;
+        if !ai_findings.is_empty() {
+            merge_ai_findings(&mut result, ai_findings);
+        }
+    }
+
     let has_findings = has_findings_above_threshold(&result, &severity_threshold);
 
     let stdout = io::stdout();
@@ -260,6 +285,129 @@ fn run_scan(opts: ScanOpts) -> Result<bool, AppError> {
     write_output(&result, &format, &mut out, use_colors)?;
 
     Ok(has_findings)
+}
+
+/// Map a file path to the rule language it is scanned as.
+fn language_for_path(path: &Path) -> Option<Language> {
+    match path.extension().and_then(|e| e.to_str()) {
+        Some("rs") => Some(Language::Rust),
+        Some("ts" | "tsx") => Some(Language::TypeScript),
+        _ => None,
+    }
+}
+
+/// Find the `ai_check` rule that produced a candidate finding, matching on id
+/// and (when possible) the file's language, so a shared id across Rust and
+/// TypeScript resolves to the right variant.
+fn find_ai_rule<'a>(ai_rules: &'a [Rule], finding: &Finding) -> Option<&'a Rule> {
+    let lang = language_for_path(&finding.file);
+    ai_rules
+        .iter()
+        .find(|r| r.id == finding.rule_id && Some(&r.language) == lang.as_ref())
+        .or_else(|| ai_rules.iter().find(|r| r.id == finding.rule_id))
+}
+
+/// Turn AST candidate findings into AI candidates: attach each rule's prompt,
+/// resolved model, and the file content used for context and cache keys. Files
+/// are read once each; unreadable files or unmatched findings are skipped.
+fn build_candidates(
+    findings: Vec<Finding>,
+    ai_rules: &[Rule],
+    config: &Config,
+) -> Vec<AiCandidate> {
+    let mut contents: HashMap<PathBuf, Option<String>> = HashMap::new();
+    let mut candidates = Vec::new();
+    for finding in findings {
+        let Some(rule) = find_ai_rule(ai_rules, &finding) else {
+            continue;
+        };
+        let Some(ai_check) = rule.ai_check.as_ref() else {
+            continue;
+        };
+        let content = contents
+            .entry(finding.file.clone())
+            .or_insert_with(|| fs::read_to_string(&finding.file).ok());
+        let Some(file_content) = content.clone() else {
+            continue;
+        };
+        let model = ai_check
+            .model
+            .clone()
+            .or_else(|| config.ai.model.clone())
+            .unwrap_or_else(|| DEFAULT_MODEL.to_string());
+        let rule_context = rule.note.clone().unwrap_or_else(|| rule.message.clone());
+        candidates.push(AiCandidate {
+            finding,
+            file_content,
+            prompt_template: ai_check.prompt.clone(),
+            model,
+            rule_context,
+        });
+    }
+    candidates
+}
+
+/// Merge AI-confirmed findings into the AST result, keeping ordering, dedup,
+/// and severity counts consistent (`files_scanned` is preserved).
+fn merge_ai_findings(result: &mut ScanResult, ai_findings: Vec<Finding>) {
+    result.findings.extend(ai_findings);
+    result
+        .findings
+        .sort_by(|a, b| (&a.file, a.line, a.column).cmp(&(&b.file, b.line, b.column)));
+    result.findings.dedup_by(|a, b| {
+        a.rule_id == b.rule_id && a.file == b.file && a.line == b.line && a.column == b.column
+    });
+    let (errors, warnings) = result
+        .findings
+        .iter()
+        .fold((0, 0), |(errors, warnings), f| match f.severity {
+            Severity::Error => (errors + 1, warnings),
+            Severity::Warning => (errors, warnings + 1),
+        });
+    result.stats = ScanStats {
+        errors,
+        warnings,
+        total: errors + warnings,
+        files_scanned: result.stats.files_scanned,
+    };
+}
+
+/// Run the AI confirmation phase for `ai_rules`.
+///
+/// When the provider cannot be built (disabled, missing credentials), a single
+/// warning is emitted and no LLM call is made. Otherwise the AST pre-filter
+/// produces candidates that the LLM confirms.
+fn run_ai_phase(
+    paths: &[PathBuf],
+    ai_rules: &[Rule],
+    config: &Config,
+    no_cache: bool,
+    cache_dir: &Path,
+) -> Result<Vec<Finding>, AppError> {
+    let provider = match build_provider(&config.ai) {
+        Ok(provider) => provider,
+        Err(err) => {
+            // Clear, credential-specific reason (disabled, missing API key,
+            // missing claude binary, missing OAuth token). Non-fatal: the AST
+            // findings still stand.
+            eprintln!("warning: {} AI rules skipped ({err})", ai_rules.len());
+            return Ok(Vec::new());
+        }
+    };
+
+    // Pre-filter: run the AST patterns of the AI rules to collect candidates.
+    let candidate_result = scan(paths, ai_rules, config)?;
+    if candidate_result.findings.is_empty() {
+        return Ok(Vec::new());
+    }
+    let candidates = build_candidates(candidate_result.findings, ai_rules, config);
+    let cache = (!no_cache).then(|| AiCache::new(cache_dir));
+    Ok(run_ai_pass(
+        &*provider,
+        candidates,
+        config.ai.concurrency,
+        cache.as_ref(),
+    ))
 }
 
 fn run_explain(
@@ -324,9 +472,12 @@ format = "text"
 colors = true
 
 # [ai]
-# ai.enabled = false
-# provider = "anthropic"
-# model = "claude-sonnet-5"
+# enabled = false
+# provider = "api"        # "api" (HTTP) | "cli" (local claude)
+# vendor = "anthropic"    # "anthropic" | "openai" (for provider = "api")
+# model = "claude-haiku-4-5"
+# concurrency = 4
+# api_key via ANTHROPIC_API_KEY / OPENAI_API_KEY env, or ai.api_key
 "#;
 
 fn resolve_cache_dir(cli_flag: Option<PathBuf>, config: &Config) -> PathBuf {
@@ -404,6 +555,7 @@ struct ListEntry {
     language: String,
     severity: String,
     category: String,
+    kind: String,
     status: String,
 }
 
@@ -432,6 +584,11 @@ fn run_list(
                 .as_ref()
                 .unwrap_or(&Category::Correctness)
                 .to_string(),
+            kind: if r.ai_check.is_some() {
+                "ai".to_string()
+            } else {
+                "ast".to_string()
+            },
             status: if !show_all || is_rule_active(r, &config) {
                 "enabled".to_string()
             } else {
@@ -479,19 +636,25 @@ fn run_list(
         .max()
         .unwrap_or(8)
         .max(8);
+    let kind_w = filtered
+        .iter()
+        .map(|e| e.kind.len())
+        .max()
+        .unwrap_or(4)
+        .max(4);
 
     println!(
-        "{:<id_w$}  {:<lang_w$}  {:<sev_w$}  {:<cat_w$}  status",
-        "id", "language", "severity", "category"
+        "{:<id_w$}  {:<lang_w$}  {:<sev_w$}  {:<cat_w$}  {:<kind_w$}  status",
+        "id", "language", "severity", "category", "type"
     );
     println!(
-        "{:<id_w$}  {:<lang_w$}  {:<sev_w$}  {:<cat_w$}  ------",
-        "--", "--------", "--------", "--------"
+        "{:<id_w$}  {:<lang_w$}  {:<sev_w$}  {:<cat_w$}  {:<kind_w$}  ------",
+        "--", "--------", "--------", "--------", "----"
     );
     for e in &filtered {
         println!(
-            "{:<id_w$}  {:<lang_w$}  {:<sev_w$}  {:<cat_w$}  {}",
-            e.id, e.language, e.severity, e.category, e.status
+            "{:<id_w$}  {:<lang_w$}  {:<sev_w$}  {:<cat_w$}  {:<kind_w$}  {}",
+            e.id, e.language, e.severity, e.category, e.kind, e.status
         );
     }
 
@@ -528,6 +691,7 @@ fn main() -> ExitCode {
             rule_filter,
             no_cache,
             cache_dir,
+            no_ai,
         } => match run_scan(ScanOpts {
             paths,
             format,
@@ -539,6 +703,7 @@ fn main() -> ExitCode {
             rule_filter,
             no_cache,
             cache_dir,
+            no_ai,
         }) {
             Ok(true) => ExitCode::from(1),
             Ok(false) => ExitCode::SUCCESS,

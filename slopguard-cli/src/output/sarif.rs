@@ -61,6 +61,15 @@ struct SarifResult<'a> {
     locations: [SarifLocation; 1],
     #[serde(skip_serializing_if = "Option::is_none")]
     fixes: Option<[SarifFix<'a>; 1]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    properties: Option<SarifResultProperties>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SarifResultProperties {
+    /// LLM confidence for AI-confirmed findings.
+    confidence: f64,
 }
 
 #[derive(Serialize)]
@@ -166,6 +175,9 @@ pub fn format_sarif(result: &ScanResult, w: &mut impl Write) -> io::Result<()> {
                         description: SarifMessage { text: fix },
                     }]
                 }),
+                properties: f
+                    .confidence
+                    .map(|confidence| SarifResultProperties { confidence }),
             }
         })
         .collect();
