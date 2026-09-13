@@ -1,0 +1,97 @@
+id: ai-safety-comment-validation
+language: rust
+severity: error
+category: security
+message: >-
+  SAFETY comment may not justify the unsafe block. AI often writes
+  generic reassurances instead of real invariants.
+note: >-
+  A // SAFETY: comment must state the concrete invariants and preconditions
+  that make this unsafe block sound, not a generic 'this is safe because we
+  checked'.
+rule:
+  kind: unsafe_block
+  any:
+    # SAFETY comment directly precedes the block.
+    - follows:
+        kind: line_comment
+        regex: '(?i)^//[/!]?\s*safety\b'
+        stopBy:
+          not:
+            kind: line_comment
+    # SAFETY comment precedes the statement/expression that contains the block
+    # (let x = unsafe {...}, if let Some(x) = unsafe {...}, foo(unsafe {...})).
+    - inside:
+        follows:
+          kind: line_comment
+          regex: '(?i)^//[/!]?\s*safety\b'
+          stopBy:
+            not:
+              kind: line_comment
+        stopBy: end
+    # SAFETY comment sits inside the block itself.
+    - has:
+        kind: line_comment
+        regex: '(?i)^//[/!]?\s*safety\b'
+        stopBy: end
+ai_check:
+  prompt: |
+    You are auditing a Rust // SAFETY comment on an unsafe block in
+    {{filename}}.
+
+    A valid SAFETY comment names the concrete invariants, preconditions, or
+    ownership guarantees that make the unsafe operations sound (for example:
+    "ptr is non-null, aligned, and valid for reads because the caller holds
+    an exclusive borrow"). An invalid one is generic, circular, or unrelated
+    to the actual unsafe operations ("this is safe", "we checked", "trust
+    me", or a justification that does not match the code).
+
+    Context: {{rule_context}}
+
+    Code (SAFETY comment plus surrounding lines):
+    {{code}}
+
+    Decide whether the SAFETY comment fails to justify the unsafe block. Set
+    is_issue to true only when the justification is missing, generic, or does
+    not correspond to the unsafe operations shown.
+ignores:
+  - "**/tests/**"
+  - "**/test_*"
+  - "**/*_test.rs"
+  - "**/fixtures/**"
+  - "**/benches/**"
+  - "**/examples/**"
+skip_test_code: true
+tests:
+  should_match:
+    - |
+      fn foo() {
+          // SAFETY: p is valid
+          unsafe { ptr::read(p) };
+      }
+    - |
+      fn bar() {
+          // SAFETY: raw is exclusively owned
+          let x = unsafe { *raw };
+      }
+    - |
+      fn baz() {
+          unsafe {
+              // SAFETY: index is in bounds
+              *slice.get_unchecked(i)
+          };
+      }
+  should_not_match:
+    - |
+      fn foo() {
+          unsafe { ptr::read(p) };
+      }
+    - |
+      fn bar() {
+          let x = 42;
+      }
+    - |
+      fn baz() {
+          // regular comment
+          unsafe { *raw };
+      }

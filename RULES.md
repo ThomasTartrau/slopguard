@@ -7,7 +7,7 @@ All 34 rules with their current YAML definitions. Source files are in `personal-
 AI-generated code patterns detected at abnormally high rates.
 
 | Rule | Lang | Severity | What it catches |
-|------|------|----------|-----------------|
+| ------ | ------ | ---------- | ----------------- |
 | no-slop-words | rust | warning | AI filler words in comments (comprehensive, robust, seamless, leverage...) |
 | no-trivial-doc | rust | warning | Doc-comments like "This method provides..." that restate the name |
 | no-paraphrase-doc | rust | warning | Doc-comments like "Create a new X" on every constructor |
@@ -23,7 +23,7 @@ AI-generated code patterns detected at abnormally high rates.
 Security anti-patterns.
 
 | Rule | Lang | Severity | What it catches |
-|------|------|----------|-----------------|
+| ------ | ------ | ---------- | ----------------- |
 | no-debug-on-secrets | rust | error | derive(Debug) on structs with secret/token/password fields |
 | no-empty-env-secret | rust | error | env::var() for secrets without rejecting empty strings |
 | no-format-path | rust | error | format!() to build file paths (path traversal risk) |
@@ -38,8 +38,9 @@ Security anti-patterns.
 Error handling, type safety, and correctness issues.
 
 ### Rust (13 rules)
+
 | Rule | Lang | Severity | What it catches |
-|------|------|----------|-----------------|
+| ------ | ------ | ---------- | ----------------- |
 | no-unwrap-in-prod | rust | error | .unwrap() outside tests/examples |
 | no-expect-in-prod | rust | error | .expect() outside tests/examples/main |
 | no-ignored-result | rust | error | `let _ = fallible_call()` |
@@ -54,13 +55,32 @@ Error handling, type safety, and correctness issues.
 | test-needs-timeout | rust | warning | Async tests without tokio::time::timeout |
 
 ### TypeScript (5 rules)
+
 | Rule | Lang | Severity | What it catches |
-|------|------|----------|-----------------|
+| ------ | ------ | ---------- | ----------------- |
 | no-any-typescript | ts | error | `any` type usage |
 | no-async-foreach | ts | error | Async callbacks in forEach/map/filter/reduce |
 | no-replace-single | ts | warning | .replace() without /g (only replaces first occurrence) |
 | no-sort-without-comparator | ts | error | .sort() without comparator (lexicographic, not numeric) |
 | no-useeffect-derived-state | ts | warning | useEffect + setState for derived state |
+
+## AI rules (4 rules)
+
+Rules that pair an AST pre-filter with an LLM confirmation step. The `rule`
+pattern collects candidates; the `ai_check.prompt` template is sent to the
+configured provider, and only confirmed candidates are reported. They are off
+unless `[ai].enabled = true`, are skipped entirely with `--no-ai`, and show as
+`type: ai` in `slopguard list`. See the "AI Rules" section of the README for
+configuration.
+
+| Rule | Ruleset | Lang | Severity | What it catches |
+| ------ | --------- | ------ | ---------- | ----------------- |
+| ai-safety-comment-validation | security | rust | error | `// SAFETY:` comments that reassure ("trust me", "this is safe") instead of stating the concrete invariants that make the unsafe block sound |
+| ai-doc-comment-quality | slop | rust | warning | Doc-comments that only restate the function name and add no information a reader could not get from the signature |
+| ai-intermediate-row-struct | correctness | rust | warning | Redundant `*Row` structs with String fields mirroring an already-typed struct, an artifact of AI-generated data mapping |
+| ai-redundant-to-string-serialize | correctness | rust | warning | `.to_string()` calls on values that already implement `Serialize` and are about to be serialized |
+
+Inspect the exact prompt sent to the model with `slopguard explain <rule-id>`.
 
 ## Rule anatomy
 

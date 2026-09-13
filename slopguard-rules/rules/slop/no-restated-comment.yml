@@ -5,8 +5,16 @@ category: slop
 message: "Comment restating the code. Remove it, the code is already readable."
 note: "AI pattern: '// increment the counter' above counter += 1."
 rule:
-  kind: line_comment
-  regex: '//\s*(increment|decrement|set|get|return|check|validate|create|update|delete|remove|add|initialize|init|call|invoke|send|fetch|load|save|store|parse|convert|transform|iterate|loop|log|print|import|export)\s+(the\s+)?\w+'
+  all:
+    - kind: line_comment
+    - any:
+        - regex: '^//\s*(increment|decrement|set|get)\s+(the\s+)?\w+'
+        - regex: '^//\s*(return|check|validate|create)\s+(the\s+)?\w+'
+        - regex: '^//\s*(update|delete|remove|add|init)\s+(the\s+)?\w+'
+        - regex: '^//\s*(initialize|call|invoke|send)\s+(the\s+)?\w+'
+        - regex: '^//\s*(fetch|load|save|store|parse)\s+(the\s+)?\w+'
+        - regex: '^//\s*(convert|transform|iterate|loop)\s+(the\s+)?\w+'
+        - regex: '^//\s*(log|print|import|export)\s+(the\s+)?\w+'
 ignores:
   - "**/tests/**"
   - "**/fixtures/**"
@@ -20,3 +28,5 @@ tests:
     - "// BUG: increment wraps at u32::MAX, see issue #42"
     - "/// Returns the parsed config"
     - "// TODO: refactor this later"
+    - "/// call site: the scan continues without AI"
+    - "//! load the plugin registry at startup"

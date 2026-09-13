@@ -1,0 +1,52 @@
+id: ai-redundant-to-string-serialize
+language: rust
+severity: warning
+category: correctness
+message: >-
+  to_string() may be redundant on a Serialize type. AI stringifies values
+  that the serializer would encode directly.
+note: >-
+  Calling .to_string() on a value that already implements Serialize often
+  forces manual stringification where the serializer would handle the type
+  directly. Pass the value, not its string form.
+rule:
+  pattern: $X.to_string()
+ai_check:
+  prompt: |
+    You are auditing a Rust .to_string() call in {{filename}}.
+
+    A redundant call converts a value to a String right before handing it to a
+    serializer (serde_json, a query builder, a structured logger) that already
+    knows how to encode the value's type because it derives or implements
+    Serialize. A legitimate call targets a type that is not Serialize, or builds
+    a plain String needed as an owned String for its own sake.
+
+    Context: {{rule_context}}
+
+    Code (the call plus surrounding context, including visible derives):
+    {{code}}
+
+    Decide whether this .to_string() is a redundant stringification of a
+    Serialize type. Set is_issue to true only when the receiver implements
+    Serialize and the string form is not otherwise required.
+ignores:
+  - "**/fixtures/**"
+tests:
+  should_match:
+    - |
+      fn f() {
+          let s = value.to_string();
+      }
+    - |
+      fn g() {
+          map.insert(key.to_string(), 1);
+      }
+  should_not_match:
+    - |
+      fn f() {
+          let s = format!("{}", value);
+      }
+    - |
+      fn g() {
+          let n = text.parse::<i32>();
+      }

@@ -1,5 +1,5 @@
 [workspace]
-members = ["slopguard-cli", "slopguard-core", "slopguard-rules"]
+members = ["slopguard-ai", "slopguard-cli", "slopguard-core", "slopguard-rules"]
 resolver = "2"
 
 [workspace.package]

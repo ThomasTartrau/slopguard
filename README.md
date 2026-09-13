@@ -24,7 +24,8 @@
 [Architecture](#%EF%B8%8F-architecture) -
 [Rulesets](#-rulesets) -
 [Configuration](#%EF%B8%8F-configuration) -
-[Custom Rules](#-custom-rules)
+[Custom Rules](#-custom-rules) -
+[AI Rules](#-ai-rules)
 
 </div>
 
@@ -44,9 +45,10 @@ You can extend slopguard with your own YAML rules, disable rules per-line with i
 
 | Crate | Version | Role |
 | --- | --- | --- |
-| [`slopguard-cli`](https://crates.io/crates/slopguard-cli) | ![](https://img.shields.io/crates/v/slopguard-cli.svg?label=) | CLI binary: scan, init, test, list commands |
+| [`slopguard-cli`](https://crates.io/crates/slopguard-cli) | ![](https://img.shields.io/crates/v/slopguard-cli.svg?label=) | CLI binary: scan, init, test, list, explain commands |
 | [`slopguard-core`](https://crates.io/crates/slopguard-core) | ![](https://img.shields.io/crates/v/slopguard-core.svg?label=) | Analysis engine: scanner, config, rule loading, inline disable |
 | [`slopguard-rules`](https://crates.io/crates/slopguard-rules) | ![](https://img.shields.io/crates/v/slopguard-rules.svg?label=) | Builtin YAML rules embedded at compile time |
+| [`slopguard-ai`](https://gitlab.com/ThomasTartrau/slopguard/-/tree/main/slopguard-ai) | - | AI confirmation pipeline: provider selection, prompt, cache |
 
 ```text
   files on disk
@@ -134,7 +136,9 @@ Other commands:
 slopguard scan src/ --format json    # JSON output for CI
 slopguard scan --format sarif        # SARIF for GitLab/GitHub integration
 slopguard scan --severity-threshold error  # exit 0 on warnings-only
-slopguard list                       # show active rules
+slopguard scan --no-ai               # AST-only, skip AI rules (no LLM calls)
+slopguard list                       # show active rules (with ast/ai type)
+slopguard explain no-unwrap-in-prod  # rule details (prompt template for AI rules)
 slopguard test                       # validate all rule inline tests
 slopguard init                       # generate slopguard.toml
 ```
@@ -209,6 +213,83 @@ custom_dirs = ["./slopguard-rules"]
 ```
 
 Run `slopguard test` to validate all rules (builtin + custom) against their inline tests.
+
+---
+
+## 🤖 AI Rules
+
+Some rules cannot be decided by an AST pattern alone: whether a `// SAFETY:`
+comment states a real invariant, or whether a doc-comment adds information
+beyond the function name, is a judgement call. slopguard expresses these as
+**AI rules**: the `rule` AST pattern is a cheap pre-filter, and each match
+becomes a *candidate* that an LLM confirms or rejects before it is ever
+reported.
+
+AI rules are marked `ai` in the `type` column of `slopguard list`; every other
+rule is `ast` and never triggers a network call.
+
+### Pipeline (AST + LLM)
+
+1. The AST pattern runs like any other rule and collects candidates.
+2. Each candidate's file content plus the rule's prompt template is sent to the
+   configured provider.
+3. Only candidates the model confirms are reported. Unconfirmed candidates are
+   dropped, so a passing AST match never produces a false positive on its own.
+4. Results are cached by file content hash, so unchanged files are not
+   re-sent on the next scan.
+
+### Configuration
+
+AI is **off by default**. Enable it in `slopguard.toml`:
+
+```toml
+[ai]
+enabled = true
+provider = "api"          # "api" (HTTP) or "cli" (local claude binary)
+vendor = "anthropic"      # "anthropic" or "openai" (only for provider = "api")
+model = "claude-haiku-4-5" # optional; per-rule model overrides win
+concurrency = 4            # candidates confirmed in parallel
+# api_key = "..."          # optional; prefer the env var below
+```
+
+**Provider `api`** reads the key from `[ai].api_key`, or from the vendor's
+environment variable when omitted:
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...   # vendor = "anthropic"
+export OPENAI_API_KEY=sk-...          # vendor = "openai"
+```
+
+**Provider `cli`** shells out to the local `claude` binary and requires:
+
+```bash
+export CLAUDE_CODE_OAUTH_TOKEN=...    # and `claude` on your PATH
+```
+
+If a provider is enabled but its credentials are missing, slopguard prints a
+single clear warning naming the missing credential and continues with the AST
+findings only. It never fails the scan on a missing key.
+
+### Skipping AI
+
+Use `--no-ai` for a fast, fully local, deterministic scan. It skips every AI
+rule with no LLM call and no warning:
+
+```bash
+slopguard scan . --no-ai
+```
+
+### Builtin AI rules
+
+| Rule | Ruleset | What it catches |
+| ---- | ------- | --------------- |
+| `ai-safety-comment-validation` | security | `// SAFETY:` comments that reassure instead of stating real invariants |
+| `ai-doc-comment-quality` | slop | Doc-comments that only restate the function name |
+| `ai-intermediate-row-struct` | correctness | Redundant `*Row` structs mirroring an already-typed struct |
+| `ai-redundant-to-string-serialize` | correctness | `.to_string()` on values that are already `Serialize` |
+
+Inspect any of them, including the exact prompt sent to the model, with
+`slopguard explain <rule-id>`.
 
 ---
 

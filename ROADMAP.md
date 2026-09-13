@@ -3,6 +3,7 @@
 ## v0.1.0 - MVP (ast-grep only)
 
 ### Core
+
 - [x] Cargo workspace: slopguard-cli, slopguard-core, slopguard-rules
 - [x] Embed ast-grep-core + ast-grep-language + ast-grep-config as lib dependencies
 - [x] Rule loader: parse YAML rules from embedded builtin + custom dirs
@@ -12,6 +13,7 @@
 - [x] File walker: gitignore-aware traversal via `ignore` crate, respect `files`/`ignores` globs
 
 ### CLI (clap)
+
 - [x] `slopguard scan [paths]` with `--format text|json|sarif`, `--severity-threshold`, `--config`
 - [x] `slopguard init` generates slopguard.toml with defaults
 - [x] `slopguard test` validates should_match/should_not_match for all rules
@@ -19,7 +21,8 @@
 - [x] Exit codes: 0 clean, 1 findings, 2 config error
 - [x] Colored text output (rustc-style diagnostics)
 
-### Rules (34 builtin)
+### Rules (55 builtin)
+
 - [x] Migrate 27 Rust rules from personal-config/slopguard/rules/
 - [x] Migrate 5 TypeScript rules from personal-config/slopguard/rules/
 - [x] Migrate 2 new rules (no-manual-display, no-manual-rfc3339)
@@ -28,6 +31,7 @@
 - [x] Add `category` field to every rule
 
 ### Testing
+
 - [x] Unit tests for config parsing
 - [x] Unit tests for rule loading and validation
 - [x] Unit tests for inline disable parsing
@@ -39,6 +43,7 @@
 - [x] Test exit codes
 
 ### Distribution
+
 - [x] Publish to crates.io as `slopguard`
 - [x] CI: GitLab CI (test, clippy, fmt, release via release-plz)
 
@@ -47,6 +52,7 @@
 ## v0.1.x - Polish and validation
 
 ### Documentation
+
 - [x] Refaire le README principal (badges, ASCII art, table des crates, architecture diagram, quick start)
 - [x] Creer README pour slopguard-cli
 - [x] Creer README pour slopguard-core
@@ -54,66 +60,78 @@
 - [x] Ajouter `readme = "README.md"` dans chaque Cargo.toml de sous-crate
 
 ### Distribution
-- [ ] Binaires pre-compiles via GitLab CI (perdu dans le revert de #14, a restaurer)
-- [ ] Script d'installation `install.sh` (perdu dans le revert de #14, a restaurer)
-- [ ] Republier sur crates.io avec les README
+
+- [x] Binaires pre-compiles via GitLab CI ([#19](https://gitlab.com/ThomasTartrau/slopguard/-/issues/19))
+- [x] Script d'installation `install.sh` ([#19](https://gitlab.com/ThomasTartrau/slopguard/-/issues/19))
+- [x] Republier sur crates.io avec les README
 
 ### Validation sur le terrain
+
 - [x] Scanner tokio, axum, ripgrep, cargo, serde pour mesurer faux positifs et performance
 - [x] Script de benchmark reproductible (benchmarks/bench.sh + repos.toml)
 - [x] Ajuster les regles bruyantes (opt-in pour pub-fn-needs-tracing, test-needs-timeout)
 - [x] `--enable`/`--disable` CLI flags et `rules.enable` config
 
 ### Nouvelles regles ([#15](https://gitlab.com/ThomasTartrau/slopguard/-/issues/15))
-- [ ] Tier 1 : no-todo-fixme, no-empty-catch, no-println-in-prod, no-dbg-in-prod, no-commented-out-code, no-hedging-comment, no-deferral-comment, no-hardcoded-secret, no-eval
-- [ ] Tier 2 : no-unnecessary-clone, no-double-cast, no-ts-ignore-without-reason, no-box-dyn-error, no-excessive-comment-ratio
-- [ ] Tier 3 : no-arc-mutex-prefer-rwlock, no-doc-hidden-public, no-empty-doc-comment
+
+- [x] Tier 1 : no-todo-fixme, no-empty-catch, no-println-in-prod, no-dbg-in-prod, no-commented-out-code, no-hedging-comment, no-deferral-comment, no-hardcoded-secret, no-eval
+- [x] Tier 2 : no-unnecessary-clone, no-double-cast, no-ts-ignore-without-reason, no-box-dyn-error, no-excessive-comment-ratio
+- [x] Tier 3 : no-arc-mutex-prefer-rwlock, no-doc-hidden-public, no-empty-doc-comment
 
 ### Fonctionnalites
-- [ ] `slopguard explain <rule-id>` + `--rule <id>` ([#16](https://gitlab.com/ThomasTartrau/slopguard/-/issues/16))
-- [ ] Cache SHA256 des fichiers pour re-scans ([#17](https://gitlab.com/ThomasTartrau/slopguard/-/issues/17))
+
+- [x] `slopguard explain <rule-id>` + `--rule <id>` ([#16](https://gitlab.com/ThomasTartrau/slopguard/-/issues/16))
+- [x] Cache SHA256 des fichiers pour re-scans ([#17](https://gitlab.com/ThomasTartrau/slopguard/-/issues/17))
 
 ### CI integration ([#18](https://gitlab.com/ThomasTartrau/slopguard/-/issues/18))
-- [ ] GitLab CI template (`.gitlab-ci.yml` snippet pour les projets utilisateurs)
-- [ ] Pre-commit hook support
-- [ ] GitHub Action officielle
+
+- [x] GitLab CI template (`.gitlab-ci.yml` snippet pour les projets utilisateurs)
+- [x] Pre-commit hook support
+- [x] GitHub Action officielle
 
 ---
 
 ## v0.2.0 - AI analysis
 
 ### AI integration
-- [ ] Add slopguard-ai crate (or module in core)
-- [ ] Integrate ironflow SDK: LlmProvider trait + Operations
-- [ ] `ai_check` field in rule YAML (prompt template)
-- [ ] AI rules: pre-filter candidates with AST, send context to LLM
-- [ ] Multi-provider support: Anthropic, OpenAI, ollama
-- [ ] Warning when AI rules skipped (no API key configured)
-- [ ] `--no-ai` flag for fast local scans
-- [ ] `ai.enabled`, `ai.provider`, `ai.model` in slopguard.toml
+
+- [x] Add slopguard-ai crate (or module in core)
+- [x] Integrate ironflow SDK: LlmProvider trait + Operations
+- [x] `ai_check` field in rule YAML (prompt template)
+- [x] AI rules: pre-filter candidates with AST, send context to LLM
+- [x] Multi-provider support: Anthropic, OpenAI (`api`) and local claude (`cli`)
+- [x] Warning when AI rules skipped (no API key / credentials configured)
+- [x] `--no-ai` flag for fast local scans
+- [x] `ai.enabled`, `ai.provider`, `ai.model` in slopguard.toml
+- [x] Runtime provider selection with clear errors on missing credentials
+- [x] `slopguard list` shows rule type (ast vs ai); `explain` shows the prompt template
 
 ### AI-powered rules (candidates)
-- [ ] Intermediate Row struct detection (struct with Row suffix, String fields mirroring typed fields)
-- [ ] Redundant .to_string() on Serialize types
-- [ ] SAFETY comment content validation (is the justification real or hallucinated?)
-- [ ] Doc-comment quality (does it add information beyond the function name?)
+
+- [x] Intermediate Row struct detection (struct with Row suffix, String fields mirroring typed fields)
+- [x] Redundant .to_string() on Serialize types
+- [x] SAFETY comment content validation (is the justification real or hallucinated?)
+- [x] Doc-comment quality (does it add information beyond the function name?)
 - [ ] Cross-file pattern: trait with a single impl
 
 ### Cache
-- [ ] Cache AI results by file content hash + rule version
-- [ ] Store in .slopguard-cache/ (gitignored)
-- [ ] `--no-cache` flag to force re-analysis
+
+- [x] Cache AI results by file content hash + rule version
+- [x] Store in .slopguard-cache/ (gitignored)
+- [x] `--no-cache` flag to force re-analysis
 
 ---
 
 ## v0.3.0 - Auto-fix and CI integration
 
 ### Auto-fix
+
 - [ ] `fix` field supports ast-grep rewrite patterns
 - [ ] `slopguard scan --fix` applies safe fixes
 - [ ] `slopguard scan --fix --dry-run` previews fixes
 
 ### CI integration
+
 - [ ] GitHub Action (`slopguard/action`)
 - [ ] GitLab CI template
 - [ ] Pre-commit hook support
@@ -124,14 +142,17 @@
 ## v0.4.0 - Community and extensibility
 
 ### Rule sharing
+
 - [ ] `slopguard add <ruleset-url>` installs third-party rulesets
 - [ ] Registry of community rulesets
 - [ ] Rule documentation site (generated from YAML)
 
 ### Additional languages
+
 - [ ] Python support
 - [ ] Go support
 
 ### Distribution
+
 - [ ] Homebrew tap
 - [ ] Pre-compiled binaries via cargo-dist / GitHub Releases

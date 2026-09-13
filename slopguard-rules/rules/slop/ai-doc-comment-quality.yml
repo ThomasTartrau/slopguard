@@ -1,0 +1,67 @@
+id: ai-doc-comment-quality
+language: rust
+severity: warning
+category: slop
+message: >-
+  Doc-comment on a public item may add nothing beyond the name. AI
+  paraphrases the signature instead of documenting behavior.
+note: >-
+  A doc-comment on a pub fn or pub struct should add information the reader
+  cannot get from the name and signature: preconditions, errors, panics, or
+  non-obvious behavior.
+rule:
+  kind: line_comment
+  all:
+    - regex: '^///'
+    - precedes:
+        all:
+          - any:
+              - kind: function_item
+              - kind: struct_item
+          - has:
+              kind: visibility_modifier
+        stopBy:
+          not:
+            kind: line_comment
+ai_check:
+  prompt: |
+    You are auditing a Rust doc-comment on a public item in {{filename}}.
+
+    A useful doc-comment adds information the reader cannot recover from the
+    item name and signature: what it returns in edge cases, when it errors or
+    panics, invariants, units, or non-obvious behavior. A low-value
+    doc-comment merely restates the name ("Returns the user" on get_user,
+    "Creates a new Config" on Config::new, "The user struct" on struct User).
+
+    Context: {{rule_context}}
+
+    Code (doc-comment plus the item it documents):
+    {{code}}
+
+    Decide whether the doc-comment only paraphrases the name and signature.
+    Set is_issue to true only when it adds no information beyond what the name
+    already conveys.
+ignores:
+  - "**/fixtures/**"
+tests:
+  should_match:
+    - |
+      /// Returns the user.
+      pub fn get_user() -> User { todo!() }
+    - |
+      /// The configuration.
+      pub struct Config {
+          name: String,
+      }
+    - |
+      /// Creates a new client.
+      pub fn new_client() -> Client { todo!() }
+  should_not_match:
+    - |
+      /// Returns the user.
+      fn get_user() -> User { todo!() }
+    - |
+      // Regular comment, not a doc-comment.
+      pub fn get_user() -> User { todo!() }
+    - |
+      pub fn get_user() -> User { todo!() }

@@ -21,6 +21,11 @@ pub struct Finding {
     pub end_line: usize,
     pub end_column: usize,
     pub matched_text: String,
+    /// LLM confidence in `[0.0, 1.0]` for findings confirmed by an AI rule.
+    /// `None` for pure AST findings. Serialized in JSON/SARIF only; the text
+    /// output ignores it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confidence: Option<f64>,
 }
 
 /// Aggregate statistics from a scan run.

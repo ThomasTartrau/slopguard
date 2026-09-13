@@ -97,6 +97,20 @@ pub struct RuleTests {
     pub should_not_match: Vec<String>,
 }
 
+/// Optional AI confirmation step for a rule. When present, the rule's `rule`
+/// AST pattern acts as a cheap pre-filter: matches become candidates that an
+/// LLM must confirm before they are reported. The AST layer never executes
+/// this field; the AI pipeline in `slopguard-ai` reads it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AiCheck {
+    /// Prompt template sent to the model. Supports the variables `{{code}}`,
+    /// `{{filename}}`, and `{{rule_context}}`.
+    pub prompt: String,
+    /// Model override for this rule. Falls back to `[ai].model` in config.
+    #[serde(default)]
+    pub model: Option<String>,
+}
+
 fn default_enabled() -> bool {
     true
 }
@@ -126,6 +140,10 @@ pub struct Rule {
     pub skip_test_code: bool,
     #[serde(default)]
     pub tests: Option<RuleTests>,
+    /// When set, matches of `rule` are candidates confirmed by an LLM before
+    /// being reported. See [`AiCheck`]. The AST scanner ignores this field.
+    #[serde(default)]
+    pub ai_check: Option<AiCheck>,
 }
 
 #[derive(Debug, Error)]
@@ -332,6 +350,49 @@ tests:
     }
 
     #[test]
+    fn parse_rule_with_ai_check() {
+        let yaml = r#"
+id: ai-rule
+language: rust
+severity: warning
+category: slop
+message: "needs AI confirmation"
+rule:
+  kind: line_comment
+  regex: 'SAFETY'
+ai_check:
+  prompt: "Is this SAFETY comment meaningful?\n{{code}}"
+  model: "claude-haiku-4-5"
+"#;
+        let rule = parse_rule(yaml).unwrap();
+        let ai = rule.ai_check.as_ref().expect("ai_check should be present");
+        assert_eq!(ai.prompt, "Is this SAFETY comment meaningful?\n{{code}}");
+        assert_eq!(ai.model.as_deref(), Some("claude-haiku-4-5"));
+    }
+
+    #[test]
+    fn parse_rule_ai_check_without_model() {
+        let yaml = r#"
+id: ai-rule-no-model
+language: rust
+severity: warning
+category: slop
+message: "needs AI confirmation"
+rule:
+  kind: line_comment
+ai_check:
+  prompt: "check {{filename}}"
+"#;
+        let rule = parse_rule(yaml).unwrap();
+        let ai = rule.ai_check.as_ref().unwrap();
+        assert_eq!(ai.prompt, "check {{filename}}");
+        assert!(
+            ai.model.is_none(),
+            "model falls back to config when omitted"
+        );
+    }
+
+    #[test]
     fn parse_minimal_rule() {
         let yaml = r#"
 id: minimal-rule
@@ -352,6 +413,7 @@ rule:
         assert!(!rule.skip_test_code);
         assert!(rule.tests.is_none());
         assert!(rule.enabled);
+        assert!(rule.ai_check.is_none());
     }
 
     #[test]
@@ -462,8 +524,8 @@ rule:
         let rules = load_builtin_rules().unwrap();
         assert_eq!(
             rules.len(),
-            55,
-            "expected 55 builtin rules, got {}",
+            59,
+            "expected 59 builtin rules, got {}",
             rules.len()
         );
 
@@ -479,9 +541,9 @@ rule:
             .iter()
             .filter(|r| r.category == Some(Category::Correctness))
             .count();
-        assert_eq!(slop_count, 17, "expected 17 slop rules");
-        assert_eq!(security_count, 11, "expected 11 security rules");
-        assert_eq!(correctness_count, 27, "expected 27 correctness rules");
+        assert_eq!(slop_count, 18, "expected 18 slop rules");
+        assert_eq!(security_count, 12, "expected 12 security rules");
+        assert_eq!(correctness_count, 29, "expected 29 correctness rules");
 
         assert!(rules
             .iter()
