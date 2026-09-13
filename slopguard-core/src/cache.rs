@@ -11,6 +11,27 @@ use crate::rule::Rule;
 const RULES_HASH_FILE: &str = "rules.hash";
 const CACHE_GITIGNORE: &str = "*\n";
 
+/// Hex-encoded SHA256 of `data`. Shared by every cache key in the workspace.
+pub fn sha256_hex(data: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(data);
+    format!("{:x}", hasher.finalize())
+}
+
+/// Create `dir` (and parents) if missing and drop a `.gitignore` that ignores
+/// the entire cache directory. Idempotent.
+///
+/// # Errors
+///
+/// Returns an [`io::Error`] if the directory or `.gitignore` cannot be written.
+pub fn ensure_gitignored_dir(dir: &Path) -> Result<(), io::Error> {
+    if !dir.exists() {
+        fs::create_dir_all(dir)?;
+        fs::write(dir.join(".gitignore"), CACHE_GITIGNORE)?;
+    }
+    Ok(())
+}
+
 #[derive(Debug, Error)]
 pub enum CacheError {
     #[error("cache I/O error: {0}")]
@@ -33,9 +54,7 @@ pub fn rules_hash(rules: &[Rule]) -> String {
 
 /// Compute the SHA256 hash of a file's content.
 pub fn file_content_hash(content: &[u8]) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(content);
-    format!("{:x}", hasher.finalize())
+    sha256_hex(content)
 }
 
 /// A file-based cache store for scan findings.
@@ -61,10 +80,7 @@ impl CacheStore {
     }
 
     fn ensure_dir(&self) -> Result<(), CacheError> {
-        if !self.dir.exists() {
-            fs::create_dir_all(&self.dir)?;
-            fs::write(self.dir.join(".gitignore"), CACHE_GITIGNORE)?;
-        }
+        ensure_gitignored_dir(&self.dir)?;
         Ok(())
     }
 
@@ -188,6 +204,7 @@ rule:
             end_line: 2,
             end_column: 20,
             matched_text: "foo().unwrap()".to_string(),
+            confidence: None,
         }
     }
 

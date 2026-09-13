@@ -9,24 +9,23 @@ rule:
     - any:
         - kind: scoped_identifier
         - kind: scoped_type_identifier
-    - regex: '^(std|serde|serde_json|chrono|reqwest|tokio|sqlx|base64|url|aws_sdk_\w+)::\w+::\w+'
+    - any:
+        - regex: '^(std|serde|serde_json|chrono)::\w+::\w+'
+        - regex: '^(reqwest|tokio|sqlx|base64|url)::\w+::\w+'
+        - regex: '^aws_sdk_\w+::\w+::\w+'
     - not:
         inside:
           kind: use_declaration
-    - not:
-        inside:
-          kind: use_as_clause
-    - not:
-        inside:
-          kind: use_list
+          stopBy: end
     - not:
         inside:
           kind: attribute_item
+          stopBy: end
 ignores:
   - "**/fixtures/**"
 tests:
   should_match:
-    - "let map: std::collections::HashMap<String, i32> = std::collections::HashMap::new();"
+    - "let v = std::collections::HashMap::new();"
     - "let dur = tokio::time::Duration::from_secs(5);"
   should_not_match:
     - |
@@ -36,3 +35,5 @@ tests:
     - "use std::io::Error as IoError;"
     - |
       use std::fmt::{Display, Formatter};
+    - "use std::sync::atomic::{AtomicUsize, Ordering};"
+    - "use std::collections::hash_map::Entry;"

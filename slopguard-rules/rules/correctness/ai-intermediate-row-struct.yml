@@ -1,0 +1,59 @@
+id: ai-intermediate-row-struct
+language: rust
+severity: warning
+category: correctness
+message: >-
+  Struct named *Row may be a redundant intermediate. AI often adds a
+  stringly-typed Row struct that duplicates a typed one.
+note: >-
+  An intermediate Row struct whose fields are String copies of a typed
+  struct's fields adds a lossy conversion layer for no benefit. Map directly
+  into the typed struct.
+rule:
+  kind: struct_item
+  has:
+    kind: type_identifier
+    regex: 'Row'
+ai_check:
+  prompt: |
+    You are auditing a Rust struct whose name contains "Row" in {{filename}}.
+
+    A redundant intermediate Row struct has String (or otherwise loosely typed)
+    fields that duplicate the fields of another struct nearby, forcing a lossy
+    conversion (parse/format) for no benefit. A legitimate Row struct maps a
+    database row with types that genuinely differ from the domain struct, or has
+    no typed counterpart at all.
+
+    Context: {{rule_context}}
+
+    Code (the struct plus surrounding structs and impls):
+    {{code}}
+
+    Decide whether this Row struct is a redundant stringly-typed duplicate of
+    another struct. Set is_issue to true only when its fields duplicate a typed
+    struct and the indirection adds no value.
+ignores:
+  - "**/fixtures/**"
+tests:
+  should_match:
+    - |
+      struct UserRow {
+          id: String,
+          name: String,
+      }
+    - |
+      pub struct OrderRowData {
+          total: String,
+      }
+  should_not_match:
+    - |
+      struct User {
+          id: i64,
+          name: String,
+      }
+    - |
+      struct Config {
+          name: String,
+      }
+    - |
+      fn row() -> i32 { 0 }

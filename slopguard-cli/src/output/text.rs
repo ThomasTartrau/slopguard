@@ -149,6 +149,21 @@ pub fn format_explain(rule: &Rule, w: &mut impl Write) -> io::Result<()> {
     if let Some(fix) = &rule.fix {
         writeln!(w, "fix:       {fix}")?;
     }
+    writeln!(
+        w,
+        "type:      {}",
+        if rule.ai_check.is_some() { "ai" } else { "ast" }
+    )?;
+    if let Some(ai_check) = &rule.ai_check {
+        if let Some(model) = &ai_check.model {
+            writeln!(w, "model:     {model}")?;
+        }
+        writeln!(w)?;
+        writeln!(w, "prompt:")?;
+        for line in ai_check.prompt.lines() {
+            writeln!(w, "  {line}")?;
+        }
+    }
 
     if let Some(tests) = &rule.tests {
         if !tests.should_match.is_empty() {
