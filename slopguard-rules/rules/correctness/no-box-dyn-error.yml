@@ -13,6 +13,8 @@ rule:
     regex: 'dyn\s+(std::error::)?Error'
 ignores:
   - "**/tests/**"
+  - "**/*_tests/**"
+  - "**/*_test/**"
   - "**/fixtures/**"
 skip_test_code: true
 tests:

@@ -131,12 +131,19 @@ fn build_glob_set(patterns: &[String]) -> Result<GlobSet, GlobError> {
 /// Rust integration tests, benchmarks, and examples are not `#[cfg(test)]`
 /// modules, so `CfgTestRanges` cannot see them. Rules with `skip_test_code`
 /// should treat these whole files as test code.
+///
+/// Matches exact directory names (`tests`, `benches`, `examples`) and also
+/// crate-level test directories whose name ends with `_test` or `_tests`
+/// (e.g. `integrations_tests`, `e2e_tests`).
 fn is_test_path(path: &Path) -> bool {
     let in_test_dir = path.components().any(|c| {
-        matches!(
-            c.as_os_str().to_str(),
-            Some("tests") | Some("benches") | Some("examples")
-        )
+        let Some(name) = c.as_os_str().to_str() else {
+            return false;
+        };
+        matches!(name, "tests" | "benches" | "examples")
+            || name.ends_with("_tests")
+            || name.ends_with("_test")
+            || name.starts_with("test_")
     });
     let test_file_name = path
         .file_stem()
@@ -720,6 +727,50 @@ skip_test_code: true
             result.findings.len(),
             1,
             "rule without skip_test_code should still flag tests/ files"
+        );
+    }
+
+    #[test]
+    fn test_crate_directory_excluded_by_skip_test_code() {
+        let dir = tempdir().unwrap();
+        let test_crate = dir
+            .path()
+            .join("crates")
+            .join("integrations_tests")
+            .join("src");
+        std::fs::create_dir_all(&test_crate).unwrap();
+        write(
+            test_crate.join("api.rs"),
+            "fn check() {\n    foo().unwrap();\n}\n",
+        )
+        .unwrap();
+        let result = scan_dir(dir.path(), &[unwrap_rule_skipping_test_code()]);
+        assert_eq!(
+            result.findings.len(),
+            0,
+            "unwrap inside a *_tests crate should be skipped"
+        );
+    }
+
+    #[test]
+    fn test_crate_directory_kept_without_skip_test_code() {
+        let dir = tempdir().unwrap();
+        let test_crate = dir
+            .path()
+            .join("crates")
+            .join("integrations_tests")
+            .join("src");
+        std::fs::create_dir_all(&test_crate).unwrap();
+        write(
+            test_crate.join("api.rs"),
+            "fn check() {\n    foo().unwrap();\n}\n",
+        )
+        .unwrap();
+        let result = scan_dir(dir.path(), &[unwrap_rule()]);
+        assert_eq!(
+            result.findings.len(),
+            1,
+            "rule without skip_test_code should still flag *_tests crate files"
         );
     }
 

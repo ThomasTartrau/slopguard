@@ -2,21 +2,25 @@ id: no-ok-chain
 language: rust
 severity: warning
 category: correctness
-message: ".ok() silently converts an error to None. Use ? or match to handle the error."
-note: "The .ok().and_then().map() chain swallows errors and causes silent successes."
+message: ".ok() followed by unwrap is redundant. Use .unwrap_or() directly on the Result."
+note: ".ok().unwrap_or() is equivalent to .unwrap_or() on the Result. .ok().map() is a valid Result-to-Option conversion."
 rule:
   kind: call_expression
-  regex: '\.ok\(\)\.\w+\('
+  regex: '\.ok\(\)\.(unwrap|unwrap_or|unwrap_or_default|unwrap_or_else)\('
 ignores:
   - "**/tests/**"
+  - "**/*_tests/**"
+  - "**/*_test/**"
   - "**/test_*"
   - "**/*_test.rs"
   - "**/fixtures/**"
 skip_test_code: true
 tests:
   should_match:
-    - 'let val = result.ok().map(|v| v.len());'
-    - 'let val = parse_int(s).ok().and_then(|n| validate(n));'
+    - 'let val = result.ok().unwrap_or(0);'
+    - 'let val = result.ok().unwrap_or_default();'
   should_not_match:
     - "let val = result?;"
     - "let val = result.ok();"
+    - 'let val = result.ok().map(|v| v.len());'
+    - 'let val = result.ok().and_then(|v| validate(v));'

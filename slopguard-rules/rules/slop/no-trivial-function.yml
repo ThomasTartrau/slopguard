@@ -3,33 +3,39 @@ language: rust
 severity: warning
 category: slop
 message: "Trivial wrapper function. Inline it or call the target directly."
-note: "AI adds pass-through functions that only forward a call or read a field."
+note: "AI adds pass-through functions that only forward a call or read a field. Trait impl methods (From, Deref, etc.) and newtype accessors are excluded."
 rule:
-  kind: function_item
-  has:
-    field: body
-    kind: block
-    all:
-      - not:
-          has:
-            kind: let_declaration
-            stopBy: neighbor
-      - not:
-          has:
-            kind: expression_statement
-            stopBy: neighbor
-      - has:
-          any:
-            - kind: field_expression
-            - all:
-                - kind: call_expression
-                - has:
-                    field: function
-                    kind: identifier
-                    not:
-                      regex: '^(Self|[A-Z])'
-                    stopBy: neighbor
-          stopBy: neighbor
+  all:
+    - kind: function_item
+    - has:
+        field: body
+        kind: block
+        all:
+          - not:
+              has:
+                kind: let_declaration
+                stopBy: neighbor
+          - not:
+              has:
+                kind: expression_statement
+                stopBy: neighbor
+          - has:
+              any:
+                - kind: field_expression
+                - all:
+                    - kind: call_expression
+                    - has:
+                        field: function
+                        kind: identifier
+                        not:
+                          regex: '^(Self|[A-Z])'
+                        stopBy: neighbor
+              stopBy: neighbor
+    - not:
+        has:
+          field: name
+          kind: identifier
+          regex: '^(new|from|into|into_inner|deref|deref_mut|as_ref|as_mut|default|fmt|clone|try_from|try_into|inner|value|get|id)$'
 ignores:
   - "**/fixtures/**"
 skip_test_code: true
@@ -40,3 +46,7 @@ tests:
   should_not_match:
     - "fn calc(a: i32, b: i32) -> i32 { let s = a + b; s * 2 }"
     - "fn process(items: &[i32]) -> i32 { items.iter().sum() }"
+    - "fn from(value: Foo) -> Self { value.0 }"
+    - "fn into_inner(self) -> T { self.0 }"
+    - "fn new(value: T) -> Self { Self(value) }"
+    - "fn deref(&self) -> &Self::Target { &self.0 }"
