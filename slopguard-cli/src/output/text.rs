@@ -252,5 +252,13 @@ pub fn format_text(result: &ScanResult, w: &mut impl Write, use_colors: bool) ->
         )?;
     }
 
+    if result.stats.baseline_filtered > 0 {
+        writeln!(
+            w,
+            "{} findings filtered by baseline",
+            result.stats.baseline_filtered
+        )?;
+    }
+
     Ok(())
 }

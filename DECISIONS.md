@@ -97,3 +97,9 @@ The following patterns are deferred to v0.2.0 (AI rules):
 ## D23: Inline test code is filtered by an explicit rule flag
 **Decision**: Rules opt into skipping `#[cfg(test)]` blocks with `skip_test_code: true`. The scanner locates those blocks on the tree-sitter AST (an `attribute_item` and the item it annotates) and drops the findings of opted-in rules inside them, after ast-grep matching. A textual brace scan was rejected: braces inside string literals or comments silently break it.
 **Why**: `ignores` globs only filter whole files, but Rust convention puts unit tests inline in `src/`. Inferring the intent from the glob list (e.g. "contains `tests`") is fragile and invisible to rule authors. An explicit field keeps the YAML self-describing and lets a rule that must fire in tests (e.g. no-safety-hallucination) leave it off.
+
+## D24: Baseline hash excludes the line number, includes 2 lines of context
+
+**Decision**: `slopguard baseline` hashes each finding as `sha256(rule_id + relative_file + matched_text + 2_lines_before_and_after)`, deliberately leaving the line number out. The baseline file (`.slopguard-baseline.json`) is committed to the repo, not gitignored like the scan cache.
+
+**Why**: Hashing the line number would break the baseline on every unrelated edit above the flagged line (a new import, a reordered function), forcing constant re-baselining and defeating the feature's purpose. The 2-line context window keeps the hash specific enough that an actual edit to the flagged code (not just a shift) still produces a new, unfiltered finding. Committing the file is required for it to do its job: it needs to be identical across every contributor's and CI's scan, which only works if it lives in version control like the source it describes.
