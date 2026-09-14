@@ -1,0 +1,191 @@
+id: max-function-lines
+language: rust
+severity: warning
+category: slop
+message: "Function exceeds 80 lines. Split it into smaller units."
+note: "Opt-in. Very long functions from AI mix many concerns. Extract helpers."
+enabled: false
+rule:
+  any:
+    - kind: function_item
+  regex: '(?s)\A(?:[^\n]*\n){80,}'
+ignores:
+  - "**/fixtures/**"
+skip_test_code: true
+tests:
+  should_match:
+    - |
+      fn big1() {
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      }
+    - |
+      fn big2() {
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      }
+  should_not_match:
+    - "fn small() { let x = 1; }"
+    - "fn tiny() {}"

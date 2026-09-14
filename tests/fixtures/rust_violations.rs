@@ -66,6 +66,11 @@ fn _safety_hallucination() {
 #[allow(dead_code)]
 fn _dead() {}
 
+// --- slop/no-trivial-function (warning) ---
+fn _trivial_wrapper(x: i32) -> i32 {
+    helper(x)
+}
+
 // --- security/no-client-without-timeout (error) ---
 fn _client() {
     let client = Client::new();

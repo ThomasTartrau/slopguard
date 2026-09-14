@@ -1,0 +1,25 @@
+id: no-obvious-comment
+language: rust
+severity: warning
+category: slop
+message: "Obvious comment restating the code. Remove it."
+note: "AI narrates each line with '// get user' style comments adding nothing."
+rule:
+  all:
+    - kind: line_comment
+    - any:
+        - regex: '^//\s*(get|set|return|returns)\s+\w+'
+        - regex: '^//\s*(create|initialize|init|check if)\s+\w+'
+        - regex: '^//\s*(increment|decrement|update|delete)\s+\w+'
+        - regex: '^//\s*(add|remove|call|loop|iterate)\s+\w+'
+ignores:
+  - "**/tests/**"
+  - "**/fixtures/**"
+skip_test_code: true
+tests:
+  should_match:
+    - "// get user"
+    - "// return result"
+  should_not_match:
+    - "// TODO: fix this later"
+    - "/// Returns the parsed config"

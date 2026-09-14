@@ -1,0 +1,24 @@
+id: no-magic-number
+language: typescript
+severity: warning
+category: correctness
+message: "Magic number in logic. Extract it to a named const with intent."
+note: "AI code embeds unexplained numeric literals. Name them for readability."
+# Opt-in: too noisy on real code (small ints, buffer sizes). Enable per project.
+enabled: false
+rule:
+  kind: number
+  not:
+    any:
+      - regex: '^(0|1|2|10|24|60|100|200|204|400)$'
+      - regex: '^(401|403|404|409|429|500|502|503)$'
+      - regex: '^(1000|1024|3600|8080|65535)$'
+ignores:
+  - "**/fixtures/**"
+tests:
+  should_match:
+    - "const timeout = 3000;"
+    - "if (retries > 7) { stop(); }"
+  should_not_match:
+    - "const status = 200;"
+    - "const first = arr[0];"

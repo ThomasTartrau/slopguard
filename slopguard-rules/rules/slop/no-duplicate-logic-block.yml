@@ -1,0 +1,23 @@
+id: no-duplicate-logic-block
+language: typescript
+severity: warning
+category: slop
+message: "Consecutive identical statements. Factor the duplicated logic."
+note: "AI pastes the same statement twice instead of extracting a helper."
+rule:
+  pattern: |
+    {
+      $$$
+      $S
+      $S
+      $$$
+    }
+ignores:
+  - "**/fixtures/**"
+tests:
+  should_match:
+    - "function f() { doThing(a); doThing(a); }"
+    - "function f() { if (a) { run(); } if (a) { run(); } }"
+  should_not_match:
+    - "function f() { doThing(a); doThing(b); }"
+    - "function f() { start(); finish(); }"

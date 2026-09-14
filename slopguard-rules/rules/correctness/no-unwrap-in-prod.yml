@@ -13,6 +13,7 @@ ignores:
   - "**/*_test.rs"
   - "**/examples/**"
   - "**/benches/**"
+  - "**/build.rs"
   - "**/fixtures/**"
 skip_test_code: true
 tests:

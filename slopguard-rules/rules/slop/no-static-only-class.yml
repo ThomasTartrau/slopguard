@@ -1,0 +1,35 @@
+id: no-static-only-class
+language: typescript
+severity: warning
+category: slop
+message: "Class with only static members. Use a module with exported functions."
+note: "AI reaches for static-only classes out of Java habit. Prefer a module."
+rule:
+  kind: class_declaration
+  all:
+    - has:
+        any:
+          - kind: method_definition
+            regex: '^static\b'
+          - kind: public_field_definition
+            regex: '^static\b'
+        stopBy: end
+    - not:
+        has:
+          any:
+            - kind: method_definition
+              not:
+                regex: '^static\b'
+            - kind: public_field_definition
+              not:
+                regex: '^static\b'
+          stopBy: end
+ignores:
+  - "**/fixtures/**"
+tests:
+  should_match:
+    - "class Utils { static add(a, b) { return a + b; } }"
+    - "class Config { static load() { return {}; } static P = 1; }"
+  should_not_match:
+    - "class Service { constructor() {} static create() {} }"
+    - "class Point { x = 0; static origin() { return new Point(); } }"

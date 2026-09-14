@@ -64,7 +64,6 @@ fn scan_rust_violations() {
         "no-restated-comment",
         "no-manual-display",
         "no-manual-rfc3339",
-        "no-inline-qualified-path",
         "no-glob-reexport",
         "no-debug-on-secrets",
         "no-unsafe-without-safety",
@@ -78,6 +77,8 @@ fn scan_rust_violations() {
         "no-silent-fallback",
         "no-double-fallback",
         "no-ok-chain",
+        "no-obvious-comment",
+        "no-trivial-function",
     ];
 
     for rule_id in &expected_rules {
@@ -86,6 +87,16 @@ fn scan_rust_violations() {
             1,
             "expected exactly 1 finding for rule '{rule_id}', got {}",
             counts.get(rule_id).copied().unwrap_or(0)
+        );
+    }
+
+    // These rules are opt-in (enabled: false); they must not fire by default,
+    // even though the fixture contains code that would trigger them.
+    for rule_id in ["no-magic-number", "no-inline-qualified-path"] {
+        assert_eq!(
+            counts.get(rule_id).copied().unwrap_or(0),
+            0,
+            "opt-in rule '{rule_id}' should not fire under default config"
         );
     }
 
@@ -355,8 +366,8 @@ fn scan_custom_config() {
 
     assert_eq!(
         findings.len(),
-        19,
-        "expected 19 findings (21 active minus 2 disabled), got {}",
+        20,
+        "expected 20 findings (22 default-on minus 2 disabled by config), got {}",
         findings.len()
     );
 }

@@ -1,0 +1,26 @@
+id: no-async-without-await
+language: typescript
+severity: warning
+category: correctness
+message: "async function never awaits. Remove async or use await."
+note: "AI marks helpers async by reflex, adding a needless promise wrapper."
+rule:
+  any:
+    - kind: function_declaration
+    - kind: arrow_function
+    - kind: method_definition
+    - kind: function_expression
+  regex: '^async\b'
+  not:
+    has:
+      kind: await_expression
+      stopBy: end
+ignores:
+  - "**/fixtures/**"
+tests:
+  should_match:
+    - "async function load() { return 42; }"
+    - "const f = async () => { doStuff(); };"
+  should_not_match:
+    - "async function load() { return await fetch('/'); }"
+    - "function load() { return 42; }"
