@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.1.5](https://gitlab.com/ThomasTartrau/slopguard/compare/slopguard-rules-v0.1.4...slopguard-rules-v0.1.5) - 2026-09-14
+
+### Added
+
+- #23 add 18 builtin rules for Rust and TypeScript
+
 ## [0.1.4](https://gitlab.com/ThomasTartrau/slopguard/compare/slopguard-rules-v0.1.3...slopguard-rules-v0.1.4) - 2026-09-13
 
 ### Added
