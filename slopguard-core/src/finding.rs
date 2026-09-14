@@ -35,6 +35,8 @@ pub struct ScanStats {
     pub warnings: usize,
     pub total: usize,
     pub files_scanned: usize,
+    #[serde(default)]
+    pub baseline_filtered: usize,
 }
 
 /// Cache statistics for a scan run.

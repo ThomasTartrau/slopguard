@@ -13,6 +13,7 @@ use strsim::normalized_levenshtein;
 use thiserror::Error;
 
 use slopguard_ai::{build_provider, run_ai_pass, AiCache, AiCandidate, DEFAULT_MODEL};
+use slopguard_core::baseline::{self, BaselineError};
 use slopguard_core::config::{load_config, load_config_file, Config, ConfigError, OutputFormat};
 use slopguard_core::finding::{Finding, ScanResult, ScanStats};
 use slopguard_core::rule::{
@@ -107,6 +108,24 @@ enum Command {
         /// Skip AI rules entirely (no LLM calls), even if a provider is configured
         #[arg(long)]
         no_ai: bool,
+
+        /// Force a full scan, ignoring any baseline
+        #[arg(long)]
+        no_baseline: bool,
+
+        /// Path to a specific baseline file
+        #[arg(long, value_name = "PATH")]
+        baseline: Option<PathBuf>,
+    },
+    /// Capture current findings into .slopguard-baseline.json
+    Baseline {
+        /// Paths to scan (defaults to current directory)
+        #[arg(default_value = ".")]
+        paths: Vec<PathBuf>,
+
+        /// Path to a specific slopguard.toml config file
+        #[arg(long)]
+        config: Option<PathBuf>,
     },
     /// Generate a slopguard.toml config file
     Init {
@@ -185,6 +204,8 @@ enum AppError {
     Test(#[from] TestError),
     #[error("{0}")]
     Io(#[from] io::Error),
+    #[error("{0}")]
+    Baseline(#[from] BaselineError),
 }
 
 fn suggest_similar<'a>(id: &str, rules: &'a [Rule]) -> Option<&'a str> {
@@ -208,6 +229,8 @@ struct ScanOpts {
     no_cache: bool,
     cache_dir: Option<PathBuf>,
     no_ai: bool,
+    no_baseline: bool,
+    baseline: Option<PathBuf>,
 }
 
 fn run_scan(opts: ScanOpts) -> Result<bool, AppError> {
@@ -223,6 +246,8 @@ fn run_scan(opts: ScanOpts) -> Result<bool, AppError> {
         no_cache,
         cache_dir,
         no_ai,
+        no_baseline,
+        baseline: baseline_cli_flag,
     } = opts;
     let use_colors = !no_colors && env::var_os("NO_COLOR").is_none();
 
@@ -275,6 +300,16 @@ fn run_scan(opts: ScanOpts) -> Result<bool, AppError> {
         let ai_findings = run_ai_phase(&paths, &ai_rules, &config, no_cache, &resolved_cache_dir)?;
         if !ai_findings.is_empty() {
             merge_ai_findings(&mut result, ai_findings);
+        }
+    }
+
+    if !no_baseline {
+        let project_root = env::current_dir()?;
+        let baseline_path =
+            baseline_cli_flag.or_else(|| baseline::find_baseline_file(&project_root));
+        if let Some(path) = baseline_path {
+            let loaded = baseline::load(&path)?;
+            apply_baseline(&mut result, &loaded, &project_root);
         }
     }
 
@@ -369,6 +404,29 @@ fn merge_ai_findings(result: &mut ScanResult, ai_findings: Vec<Finding>) {
         warnings,
         total: errors + warnings,
         files_scanned: result.stats.files_scanned,
+        baseline_filtered: result.stats.baseline_filtered,
+    };
+}
+
+/// Filter `result.findings` against `baseline`, following the same
+/// fold-over-severity recount that [`merge_ai_findings`] uses.
+fn apply_baseline(result: &mut ScanResult, loaded: &baseline::Baseline, project_root: &Path) {
+    let findings = std::mem::take(&mut result.findings);
+    let (remaining, filtered_count) = baseline::filter_new(findings, loaded, project_root);
+    result.findings = remaining;
+    let (errors, warnings) = result
+        .findings
+        .iter()
+        .fold((0, 0), |(errors, warnings), f| match f.severity {
+            Severity::Error => (errors + 1, warnings),
+            Severity::Warning => (errors, warnings + 1),
+        });
+    result.stats = ScanStats {
+        errors,
+        warnings,
+        total: errors + warnings,
+        files_scanned: result.stats.files_scanned,
+        baseline_filtered: filtered_count,
     };
 }
 
@@ -408,6 +466,27 @@ fn run_ai_phase(
         config.ai.concurrency,
         cache.as_ref(),
     ))
+}
+
+/// Scan with only AST rules (no AI, no cache, no existing baseline applied)
+/// and write the resulting findings to `.slopguard-baseline.json`.
+fn run_baseline(paths: Vec<PathBuf>, config_path: Option<PathBuf>) -> Result<(), AppError> {
+    let config = resolve_config(config_path.as_deref())?;
+    let rules = load_effective_rules(&config)?;
+    let (_ai_rules, ast_rules): (Vec<Rule>, Vec<Rule>) =
+        rules.into_iter().partition(|r| r.ai_check.is_some());
+
+    let result = scan(&paths, &ast_rules, &config)?;
+
+    let project_root = env::current_dir()?;
+    let baseline = baseline::capture(&result.findings, &project_root);
+    baseline::save(&baseline, &project_root.join(".slopguard-baseline.json"))?;
+
+    println!(
+        "Wrote {} findings to .slopguard-baseline.json",
+        baseline.findings.len()
+    );
+    Ok(())
 }
 
 fn run_explain(
@@ -692,6 +771,8 @@ fn main() -> ExitCode {
             no_cache,
             cache_dir,
             no_ai,
+            no_baseline,
+            baseline,
         } => match run_scan(ScanOpts {
             paths,
             format,
@@ -704,9 +785,18 @@ fn main() -> ExitCode {
             no_cache,
             cache_dir,
             no_ai,
+            no_baseline,
+            baseline,
         }) {
             Ok(true) => ExitCode::from(1),
             Ok(false) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("error: {e}");
+                ExitCode::from(2)
+            }
+        },
+        Command::Baseline { paths, config } => match run_baseline(paths, config) {
+            Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
                 eprintln!("error: {e}");
                 ExitCode::from(2)

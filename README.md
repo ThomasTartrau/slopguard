@@ -137,11 +137,23 @@ slopguard scan src/ --format json    # JSON output for CI
 slopguard scan --format sarif        # SARIF for GitLab/GitHub integration
 slopguard scan --severity-threshold error  # exit 0 on warnings-only
 slopguard scan --no-ai               # AST-only, skip AI rules (no LLM calls)
+slopguard scan --no-baseline         # force a full scan, ignore .slopguard-baseline.json
+slopguard scan --baseline path.json  # use a specific baseline file
+slopguard baseline .                 # capture current findings into .slopguard-baseline.json
 slopguard list                       # show active rules (with ast/ai type)
 slopguard explain no-unwrap-in-prod  # rule details (prompt template for AI rules)
 slopguard test                       # validate all rule inline tests
 slopguard init                       # generate slopguard.toml
 ```
+
+### Baseline
+
+`slopguard baseline .` scans the project with the AST rules and writes a
+`.slopguard-baseline.json` file recording the findings that already exist.
+Commit this file: subsequent `slopguard scan` runs silently drop any finding
+matching an entry in the baseline, so CI only reports newly introduced
+issues. Use `--no-baseline` to force a full scan or `--baseline <path>` to
+point at a baseline file outside the project root.
 
 ---
 

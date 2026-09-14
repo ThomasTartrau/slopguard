@@ -253,6 +253,7 @@ pub fn scan(paths: &[PathBuf], rules: &[Rule], config: &Config) -> Result<ScanRe
             warnings,
             total: errors + warnings,
             files_scanned: files.len(),
+            baseline_filtered: 0,
         },
         cache_stats: None,
     })
@@ -365,6 +366,7 @@ pub fn scan_cached(
             warnings,
             total: errors + warnings,
             files_scanned,
+            baseline_filtered: 0,
         },
         cache_stats: Some(CacheStats {
             cached: cached_count,

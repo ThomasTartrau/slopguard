@@ -16,6 +16,7 @@ struct ScanSummary {
     errors: usize,
     warnings: usize,
     total: usize,
+    baseline_filtered: usize,
 }
 
 #[derive(Serialize)]
@@ -65,6 +66,7 @@ pub fn format_json(result: &ScanResult, w: &mut impl Write) -> io::Result<()> {
         errors: result.stats.errors,
         warnings: result.stats.warnings,
         total: result.stats.total,
+        baseline_filtered: result.stats.baseline_filtered,
     };
     let output = JsonOutput {
         findings: &result.findings,
