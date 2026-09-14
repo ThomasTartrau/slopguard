@@ -17,6 +17,8 @@ rule:
           regex: '^sqlx::(query|query_as|query_scalar)$'
 ignores:
   - "**/tests/**"
+  - "**/*_tests/**"
+  - "**/*_test/**"
   - "**/test_*"
   - "**/*_test.rs"
   - "**/fixtures/**"

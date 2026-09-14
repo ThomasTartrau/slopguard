@@ -8,6 +8,8 @@ rule:
   pattern: $X.to_rfc3339()
 ignores:
   - "**/tests/**"
+  - "**/*_tests/**"
+  - "**/*_test/**"
   - "**/test_*"
   - "**/*_test.rs"
   - "**/fixtures/**"

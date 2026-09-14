@@ -35,6 +35,8 @@ rule:
             stopBy: end
 ignores:
   - "**/tests/**"
+  - "**/*_tests/**"
+  - "**/*_test/**"
   - "**/test_*"
   - "**/*_test.rs"
   - "**/fixtures/**"

@@ -10,6 +10,8 @@ rule:
   regex: '//\s*(fn\s+\w+|let\s+(mut\s+)?\w+\s*=|pub\s+(fn|struct|enum|mod|use|type|trait|const|static)|use\s+\w+::|impl\s+|mod\s+\w+|struct\s+\w+|enum\s+\w+|return\s+\w+|match\s+\w+)'
 ignores:
   - "**/tests/**"
+  - "**/*_tests/**"
+  - "**/*_test/**"
   - "**/fixtures/**"
 skip_test_code: true
 tests:

@@ -17,6 +17,8 @@ rule:
           regex: '(/tmp/|/var/|/etc/|\.pdf|\.json|\.csv|\.txt|\.log|\.toml|\.yaml|\.yml)\{|\{[^}]*(path|file|dir|name|id)[^}]*\}\.(pdf|json|csv|txt|log)'
 ignores:
   - "**/tests/**"
+  - "**/*_tests/**"
+  - "**/*_test/**"
   - "**/test_*"
   - "**/*_test.rs"
   - "**/fixtures/**"

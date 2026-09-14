@@ -3,20 +3,24 @@ language: rust
 severity: warning
 category: correctness
 message: "Silent double fallback. One fallback layer max, propagate the rest."
-note: "Chaining .ok().unwrap_or() or .unwrap_or().unwrap_or() hides two error levels."
+note: "Chaining .unwrap_or().unwrap_or() hides two error levels. Use ok_or() + ? to propagate one layer."
 rule:
   kind: call_expression
-  regex: '\.(ok|unwrap_or|unwrap_or_default|unwrap_or_else)\(.*\)\.(unwrap_or|unwrap_or_default|unwrap_or_else|and_then|map)\('
+  regex: '\.(unwrap_or|unwrap_or_default|unwrap_or_else)\(.*\)\.(unwrap_or|unwrap_or_default|unwrap_or_else)\('
 ignores:
   - "**/tests/**"
+  - "**/*_tests/**"
+  - "**/*_test/**"
   - "**/test_*"
   - "**/*_test.rs"
   - "**/fixtures/**"
 skip_test_code: true
 tests:
   should_match:
-    - 'let val = result.ok().unwrap_or("default");'
     - 'let x = a.unwrap_or(0).unwrap_or_default();'
+    - 'let x = a.unwrap_or_else(|| x).unwrap_or_else(|| y);'
   should_not_match:
     - 'let val = result.unwrap_or("default");'
     - "let x = result?;"
+    - 'let x = result.unwrap_or_default().to_string();'
+    - 'let val = parse_int(s).ok().unwrap_or(0);'

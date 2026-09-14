@@ -3,12 +3,19 @@ language: rust
 severity: warning
 category: correctness
 message: "Source error discarded. Preserve context with .context() or map_err(|e| ...e...)."
-note: "map_err(|_| ...) throws away the original error, making debugging impossible."
+note: "map_err(|_| ...) throws away the original error, making debugging impossible. Propagating with ? after map_err is a valid conversion, not swallowing."
 rule:
-  kind: call_expression
-  regex: '\.map_err\(\|_\w*\|'
+  all:
+    - kind: call_expression
+    - regex: '\.map_err\(\|_\w*\|'
+    - not:
+        inside:
+          kind: try_expression
+          stopBy: end
 ignores:
   - "**/tests/**"
+  - "**/*_tests/**"
+  - "**/*_test/**"
   - "**/test_*"
   - "**/*_test.rs"
   - "**/fixtures/**"
@@ -20,3 +27,5 @@ tests:
   should_not_match:
     - 'file.read_to_string(&mut buf).map_err(|e| AppError::Io(e));'
     - 'conn.execute(sql).map_err(AppError::Database);'
+    - 'conn.execute(sql).map_err(|_| Error::Database)?;'
+    - 'decode_header(token).map_err(|_| AuthError::InvalidToken)?;'
