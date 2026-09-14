@@ -10,6 +10,8 @@ rule:
     regex: '\.(send|try_send)\('
 ignores:
   - "**/tests/**"
+  - "**/*_tests/**"
+  - "**/*_test/**"
   - "**/test_*"
   - "**/*_test.rs"
   - "**/examples/**"

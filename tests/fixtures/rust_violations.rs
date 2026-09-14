@@ -108,7 +108,7 @@ fn _double() {
 
 // --- correctness/no-ok-chain (warning) ---
 fn _ok_chain() {
-    let val = parse_int(s).ok().filter(|n| *n > 0);
+    let val = parse_int(s).ok().unwrap_or(0);
 }
 
 // --- correctness/pub-fn-needs-tracing (warning) ---

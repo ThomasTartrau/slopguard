@@ -9,6 +9,8 @@ rule:
   regex: '(reqwest::)?Client::new\(\)'
 ignores:
   - "**/tests/**"
+  - "**/*_tests/**"
+  - "**/*_test/**"
   - "**/test_*"
   - "**/*_test.rs"
   - "**/fixtures/**"

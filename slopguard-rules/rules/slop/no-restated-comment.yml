@@ -17,6 +17,8 @@ rule:
         - regex: '^//\s*(log|print|import|export)\s+(the\s+)?\w+'
 ignores:
   - "**/tests/**"
+  - "**/*_tests/**"
+  - "**/*_test/**"
   - "**/fixtures/**"
 skip_test_code: true
 tests:

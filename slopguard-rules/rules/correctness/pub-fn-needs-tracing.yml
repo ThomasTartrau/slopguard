@@ -23,6 +23,8 @@ files:
   - "**/src/**/*.rs"
 ignores:
   - "**/tests/**"
+  - "**/*_tests/**"
+  - "**/*_test/**"
   - "**/test_*"
   - "**/*_test.rs"
   - "**/main.rs"

@@ -17,6 +17,8 @@ rule:
           regex: '(https?://|\{[^}]*(url|host|base|endpoint)[^}]*\}/|/\{[^}]*(id|name|key|uid|slug)[^}]*\}|\{[^}]*(id|name|key|uid|slug)[^}]*\}/)'
 ignores:
   - "**/tests/**"
+  - "**/*_tests/**"
+  - "**/*_test/**"
   - "**/test_*"
   - "**/*_test.rs"
   - "**/fixtures/**"
