@@ -126,6 +126,25 @@ fn build_glob_set(patterns: &[String]) -> Result<GlobSet, GlobError> {
     builder.build()
 }
 
+/// Whether `path` lives in a conventional test, bench, or example tree.
+///
+/// Rust integration tests, benchmarks, and examples are not `#[cfg(test)]`
+/// modules, so `CfgTestRanges` cannot see them. Rules with `skip_test_code`
+/// should treat these whole files as test code.
+fn is_test_path(path: &Path) -> bool {
+    let in_test_dir = path.components().any(|c| {
+        matches!(
+            c.as_os_str().to_str(),
+            Some("tests") | Some("benches") | Some("examples")
+        )
+    });
+    let test_file_name = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .is_some_and(|s| s.ends_with("_test") || s.ends_with("_tests"));
+    in_test_dir || test_file_name
+}
+
 fn scan_file(path: &Path, lang: SupportLang, rules: &CompiledRules) -> Vec<Finding> {
     let applicable = rules.collection.get_rule_from_lang(path, lang);
     if applicable.is_empty() {
@@ -142,6 +161,7 @@ fn scan_file(path: &Path, lang: SupportLang, rules: &CompiledRules) -> Vec<Findi
     let cfg_test = (lang == SupportLang::Rust && !result.matches.is_empty())
         .then(|| CfgTestRanges::from_root(&root));
     let cfg_test = cfg_test.as_ref();
+    let is_test_file = is_test_path(path);
 
     let findings = result
         .matches
@@ -175,7 +195,12 @@ fn scan_file(path: &Path, lang: SupportLang, rules: &CompiledRules) -> Vec<Findi
                     }
                 })
                 .filter(move |f| {
-                    !(skip_test_code && cfg_test.is_some_and(|r| r.contains_line(f.line)))
+                    if !skip_test_code {
+                        return true;
+                    }
+                    let in_test_code =
+                        is_test_file || cfg_test.is_some_and(|r| r.contains_line(f.line));
+                    !in_test_code
                 })
         })
         .collect();
@@ -659,6 +684,42 @@ skip_test_code: true
             result.findings.len(),
             2,
             "rule without skip_test_code should find both"
+        );
+    }
+
+    #[test]
+    fn integration_test_file_excluded_by_skip_test_code() {
+        let dir = tempdir().unwrap();
+        let tests_dir = dir.path().join("tests");
+        std::fs::create_dir(&tests_dir).unwrap();
+        write(
+            tests_dir.join("it.rs"),
+            "fn check() {\n    foo().unwrap();\n}\n",
+        )
+        .unwrap();
+        let result = scan_dir(dir.path(), &[unwrap_rule_skipping_test_code()]);
+        assert_eq!(
+            result.findings.len(),
+            0,
+            "unwrap inside a tests/ integration file should be skipped"
+        );
+    }
+
+    #[test]
+    fn integration_test_file_kept_without_skip_test_code() {
+        let dir = tempdir().unwrap();
+        let tests_dir = dir.path().join("tests");
+        std::fs::create_dir(&tests_dir).unwrap();
+        write(
+            tests_dir.join("it.rs"),
+            "fn check() {\n    foo().unwrap();\n}\n",
+        )
+        .unwrap();
+        let result = scan_dir(dir.path(), &[unwrap_rule()]);
+        assert_eq!(
+            result.findings.len(),
+            1,
+            "rule without skip_test_code should still flag tests/ files"
         );
     }
 

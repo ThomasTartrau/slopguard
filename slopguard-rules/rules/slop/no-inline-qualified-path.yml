@@ -4,6 +4,8 @@ severity: warning
 category: slop
 message: "Inline qualified path. Use a `use` import at the top of the file."
 note: "AI generates code with fully qualified paths instead of adding imports."
+# Opt-in: fires on idiomatic one-off qualified paths. Enable per project.
+enabled: false
 rule:
   all:
     - any:

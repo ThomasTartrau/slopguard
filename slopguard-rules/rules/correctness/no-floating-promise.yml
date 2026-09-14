@@ -1,0 +1,32 @@
+id: no-floating-promise
+language: typescript
+severity: error
+category: correctness
+message: "Floating promise. Await it, return it, or handle it with .catch()."
+note: "AI TS often calls async methods as bare statements, dropping rejections."
+rule:
+  kind: call_expression
+  inside:
+    kind: expression_statement
+    stopBy: neighbor
+  has:
+    field: function
+    kind: member_expression
+    has:
+      field: property
+      kind: property_identifier
+      any:
+        - regex: '^(save|update|delete|remove|insert|create)$'
+        - regex: '^(find|findOne|findMany|query|execute|load)$'
+        - regex: '^(connect|disconnect|fetch|send|write|flush)$'
+        - regex: '^(commit|rollback|refetch|reload|sync|publish)$'
+ignores:
+  - "**/fixtures/**"
+tests:
+  should_match:
+    - "async function run() { db.save(user); }"
+    - "function handler() { repo.update({ id }); }"
+  should_not_match:
+    - "async function run() { await db.save(user); }"
+    - "const p = db.query(sql);"
+    - "user.save().then((r) => r).catch((e) => e);"

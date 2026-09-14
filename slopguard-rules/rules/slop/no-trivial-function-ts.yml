@@ -1,0 +1,61 @@
+id: no-trivial-function
+language: typescript
+severity: warning
+category: slop
+message: "Trivial wrapper function. Inline it or call the target directly."
+note: "AI adds pass-through functions that only forward a call or read a field."
+rule:
+  any:
+    - all:
+        - any:
+            - kind: function_declaration
+            - kind: method_definition
+            - kind: function_expression
+            - kind: arrow_function
+        - has:
+            field: body
+            kind: statement_block
+            all:
+              - not:
+                  has:
+                    kind: expression_statement
+                    stopBy: neighbor
+              - not:
+                  has:
+                    kind: lexical_declaration
+                    stopBy: neighbor
+              - has:
+                  kind: return_statement
+                  stopBy: neighbor
+                  has:
+                    stopBy: neighbor
+                    any:
+                      - kind: member_expression
+                      - all:
+                          - kind: call_expression
+                          - has:
+                              field: function
+                              kind: identifier
+                              stopBy: neighbor
+    - all:
+        - kind: arrow_function
+        - has:
+            field: body
+            stopBy: neighbor
+            any:
+              - kind: member_expression
+              - all:
+                  - kind: call_expression
+                  - has:
+                      field: function
+                      kind: identifier
+                      stopBy: neighbor
+ignores:
+  - "**/fixtures/**"
+tests:
+  should_match:
+    - "function getName(u) { return u.name; }"
+    - "const wrap = (x) => process(x);"
+  should_not_match:
+    - "function calc(a, b) { const s = a + b; return s * 2; }"
+    - "const id = (x) => x;"

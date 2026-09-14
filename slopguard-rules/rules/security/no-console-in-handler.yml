@@ -1,0 +1,32 @@
+id: no-console-in-handler
+language: typescript
+severity: warning
+category: security
+message: "console call in an HTTP handler. Use a structured logger."
+note: "console in handlers leaks internals and skips log levels in prod."
+rule:
+  kind: call_expression
+  regex: '^console\.(log|warn|error|info|debug)'
+  inside:
+    any:
+      - kind: arrow_function
+      - kind: function_declaration
+      - kind: function_expression
+    has:
+      kind: formal_parameters
+      any:
+        - regex: '\breq\b'
+        - regex: '\bres\b'
+        - regex: '\breply\b'
+        - regex: '\bctx\b'
+      stopBy: neighbor
+    stopBy: end
+ignores:
+  - "**/fixtures/**"
+tests:
+  should_match:
+    - "app.get('/u', (req, res) => { console.log(req.body); });"
+    - "function handler(req, res) { console.error('fail'); }"
+  should_not_match:
+    - "function calc(a, b) { console.log(a + b); return a + b; }"
+    - "app.get('/u', (req, res) => { res.send('ok'); });"

@@ -1,0 +1,21 @@
+id: no-em-dash
+language: typescript
+severity: warning
+category: slop
+message: "Em dash (U+2014) in source. Use a plain hyphen or rewrite."
+note: "The em dash is a classic AI writing marker. Keep source copy-paste safe."
+rule:
+  any:
+    - kind: comment
+    - kind: string
+    - kind: template_string
+  regex: '\x{2014}'
+ignores:
+  - "**/fixtures/**"
+tests:
+  should_match:
+    - "// this — that"
+    - "const s = \"a — b\";"
+  should_not_match:
+    - "// plain - hyphen"
+    - "const s = \"no dash here\";"
