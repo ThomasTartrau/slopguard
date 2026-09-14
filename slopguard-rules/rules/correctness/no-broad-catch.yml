@@ -1,0 +1,22 @@
+id: no-broad-catch
+language: typescript
+severity: warning
+category: correctness
+message: "Broad catch binding. Type the error as unknown and narrow it."
+note: "catch (e) or catch (e: any) skips type checking on the error value."
+rule:
+  kind: catch_clause
+  not:
+    has:
+      kind: type_annotation
+      regex: 'unknown'
+      stopBy: neighbor
+ignores:
+  - "**/fixtures/**"
+tests:
+  should_match:
+    - "try { run(); } catch (e) { report(e); }"
+    - "try { run(); } catch (err) { log(err); }"
+  should_not_match:
+    - "try { run(); } catch (e: unknown) { report(e); }"
+    - "const x = compute();"

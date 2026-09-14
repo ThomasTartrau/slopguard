@@ -1,0 +1,27 @@
+id: no-sql-string-concat
+language: typescript
+severity: error
+category: security
+message: "SQL built by concatenation. Use parameterized queries instead."
+note: "String-built SQL with user input is the classic injection vector."
+rule:
+  any:
+    - all:
+        - kind: template_string
+        - regex: '(SELECT|INSERT|UPDATE|DELETE)\b'
+        - has:
+            kind: template_substitution
+            stopBy: end
+    - all:
+        - kind: binary_expression
+        - regex: '(SELECT|INSERT|UPDATE|DELETE)\b'
+        - regex: '\+'
+ignores:
+  - "**/fixtures/**"
+tests:
+  should_match:
+    - "const q = `SELECT * FROM users WHERE id = ${id}`;"
+    - "const q = 'DELETE FROM t WHERE id = ' + userId;"
+  should_not_match:
+    - "const q = db.query('SELECT * FROM t WHERE id = ?', [id]);"
+    - "const label = `Hello ${name}`;"

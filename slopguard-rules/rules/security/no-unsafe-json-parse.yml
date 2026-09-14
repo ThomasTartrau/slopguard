@@ -1,0 +1,22 @@
+id: no-unsafe-json-parse
+language: typescript
+severity: error
+category: security
+message: "JSON.parse without try/catch. Wrap it or validate with a schema."
+note: "JSON.parse throws on malformed input; unhandled it crashes the request."
+rule:
+  kind: call_expression
+  regex: '^JSON\.parse\b'
+  not:
+    inside:
+      kind: try_statement
+      stopBy: end
+ignores:
+  - "**/fixtures/**"
+tests:
+  should_match:
+    - "const data = JSON.parse(reqBody);"
+    - "function f(s: string) { return JSON.parse(s); }"
+  should_not_match:
+    - "try { const d = JSON.parse(s); } catch (e) { handle(e); }"
+    - "const x = compute();"

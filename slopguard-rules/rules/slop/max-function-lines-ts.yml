@@ -1,0 +1,193 @@
+id: max-function-lines
+language: typescript
+severity: warning
+category: slop
+message: "Function exceeds 80 lines. Split it into smaller units."
+note: "Opt-in. Very long functions from AI mix many concerns. Extract helpers."
+enabled: false
+rule:
+  any:
+    - kind: function_declaration
+    - kind: arrow_function
+    - kind: method_definition
+    - kind: function_expression
+  regex: '(?s)\A(?:[^\n]*\n){80,}'
+ignores:
+  - "**/fixtures/**"
+tests:
+  should_match:
+    - |
+      function big1() {
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      }
+    - |
+      function big2() {
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      // filler
+      }
+  should_not_match:
+    - "function small() { return 1; }"
+    - "const f = () => 2;"

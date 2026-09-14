@@ -1,0 +1,21 @@
+id: no-dead-branch
+language: rust
+severity: warning
+category: correctness
+message: "Tautological branch condition. Remove the dead branch."
+note: "if true / if false / if x == x are debug residue that never varies."
+rule:
+  any:
+    - pattern: if true { $$$ }
+    - pattern: if false { $$$ }
+    - pattern: if $X == $X { $$$ }
+ignores:
+  - "**/fixtures/**"
+skip_test_code: true
+tests:
+  should_match:
+    - "fn f() { if true { run(); } }"
+    - "fn f() { if x == x { run(); } }"
+  should_not_match:
+    - "fn f() { if x > 0 { run(); } }"
+    - "fn f() { if ready { go(); } }"

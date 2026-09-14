@@ -1,0 +1,40 @@
+id: no-magic-number
+language: rust
+severity: warning
+category: correctness
+message: "Magic number in logic. Extract it to a named const with intent."
+note: "AI code embeds unexplained numeric literals. Name them for readability."
+# Opt-in: too noisy on real code (small ints, buffer sizes). Enable per project.
+enabled: false
+rule:
+  any:
+    - kind: integer_literal
+    - kind: float_literal
+  not:
+    any:
+      # Excluded even with a Rust type suffix (0usize, 1u32).
+      - regex: '^(0|1|2|10|24|60|100|200|204|400)([iuf](8|16|32|64|128|size))?$'
+      # HTTP status codes are not written with Rust type suffixes.
+      - regex: '^(401|403|404|409|429|500|502|503)$'
+      - regex: '^(1000|1024|3600|8080|65535)([iuf](8|16|32|64|128|size))?$'
+      # A const/static item is itself the named constant.
+      - inside:
+          kind: const_item
+          stopBy: end
+      - inside:
+          kind: static_item
+          stopBy: end
+ignores:
+  - "**/fixtures/**"
+skip_test_code: true
+tests:
+  should_match:
+    - "fn f() { let timeout = 3000; }"
+    - "fn f() { let factor = 42; }"
+  should_not_match:
+    - "fn f() { let status = 200; }"
+    - "fn f() { let i = 0; }"
+    - "fn f() { let n = 0usize; }"
+    - "fn f() { let n = 1u32; }"
+    - "const RADIUS: usize = 50;"
+    - "static LIMIT: i64 = 4096;"

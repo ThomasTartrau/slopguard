@@ -1,0 +1,22 @@
+id: no-throw-string
+language: typescript
+severity: warning
+category: correctness
+message: "Throwing a string. Throw new Error(...) to keep a stack trace."
+note: "String throws lose the stack trace and break instanceof Error checks."
+rule:
+  kind: throw_statement
+  has:
+    any:
+      - kind: string
+      - kind: template_string
+    stopBy: neighbor
+ignores:
+  - "**/fixtures/**"
+tests:
+  should_match:
+    - "function f() { throw 'boom'; }"
+    - "function f() { throw `failed ${x}`; }"
+  should_not_match:
+    - "function f() { throw new Error('boom'); }"
+    - "function f() { throw err; }"

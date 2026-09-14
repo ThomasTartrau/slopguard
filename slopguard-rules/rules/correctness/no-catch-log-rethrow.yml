@@ -1,0 +1,25 @@
+id: no-catch-log-rethrow
+language: typescript
+severity: warning
+category: correctness
+message: "Catch that only logs and rethrows. Remove it or add real handling."
+note: "Log-and-rethrow adds noise without changing control flow."
+rule:
+  kind: catch_clause
+  all:
+    - has:
+        kind: call_expression
+        regex: '^console\.(log|error|warn|info|debug)'
+        stopBy: end
+    - has:
+        kind: throw_statement
+        stopBy: end
+ignores:
+  - "**/fixtures/**"
+tests:
+  should_match:
+    - "try { x(); } catch (e) { console.log(e); throw e; }"
+    - "try { x(); } catch (err) { console.error(err); throw err; }"
+  should_not_match:
+    - "try { x(); } catch (e) { console.log(e); }"
+    - "try { x(); } catch (e) { throw new AppError(e); }"
