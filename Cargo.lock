@@ -1998,7 +1998,7 @@ checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 
 [[package]]
 name = "slopguard-ai"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "futures",
  "ironflow-core",
@@ -2013,7 +2013,7 @@ dependencies = [
 
 [[package]]
 name = "slopguard-cli"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "assert_cmd",
  "clap",
@@ -2029,7 +2029,7 @@ dependencies = [
 
 [[package]]
 name = "slopguard-core"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "ast-grep-config",
  "ast-grep-core",
@@ -2052,7 +2052,7 @@ dependencies = [
 
 [[package]]
 name = "slopguard-rules"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "rust-embed",
 ]
