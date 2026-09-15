@@ -1,0 +1,23 @@
+id: no-shell-format-arg
+language: rust
+severity: error
+category: security
+message: "Command argument built with format!(). Pass values as separate .arg() calls instead of interpolating into one string."
+note: "A single interpolated argument can smuggle extra flags or shell metacharacters if the interpolated value is not fully controlled."
+fix: "Split into multiple .arg() calls, one value per call, with no formatting."
+rule:
+  pattern: $CMD.arg(format!($$$ARGS))
+ignores:
+  - "**/tests/**"
+  - "**/*_tests/**"
+  - "**/*_test/**"
+  - "**/test_*"
+  - "**/*_test.rs"
+skip_test_code: true
+tests:
+  should_match:
+    - 'cmd.arg(format!("--user={}", user_id));'
+    - 'command.arg(format!("{flag}={value}"));'
+  should_not_match:
+    - 'cmd.arg("--verbose");'
+    - 'let msg = format!("hi {}", name);'

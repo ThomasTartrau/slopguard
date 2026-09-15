@@ -1,0 +1,31 @@
+id: no-exec-template-literal
+language: typescript
+severity: error
+category: security
+message: "exec()/execSync() called with a template literal that interpolates a value. Use execFile()/execFileSync() with an argument array."
+note: "exec() runs through a shell, so an interpolated value can inject extra commands via ;, &&, or backticks."
+fix: "Use execFile(cmd, [arg1, arg2]) so arguments never touch a shell."
+rule:
+  kind: call_expression
+  all:
+    - has:
+        field: function
+        regex: '(^|\.)exec(Sync)?$'
+    - has:
+        kind: template_string
+        has:
+          kind: template_substitution
+          stopBy: end
+        stopBy: end
+ignores:
+  - "**/fixtures/**"
+  - "**/*.test.*"
+  - "**/*.spec.*"
+  - "**/__tests__/**"
+tests:
+  should_match:
+    - "exec(`rm ${file}`);"
+    - "child_process.execSync(`ls ${dir}`);"
+  should_not_match:
+    - "execFile('ls', [dir]);"
+    - "exec(`ls -la`);"

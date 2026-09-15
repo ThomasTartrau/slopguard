@@ -1,0 +1,27 @@
+id: no-hardcoded-cloud-token
+language: rust
+severity: error
+category: security
+message: "Hardcoded token matching a known cloud/CI provider format. Load it from the environment or a vault."
+note: "These formats (GitHub, GitLab, AWS, Stripe/OpenAI-style) are the first thing an attacker greps for in a source dump or leaked build log."
+fix: "Read the token from std::env::var() or a secrets manager, never as a literal."
+rule:
+  kind: string_literal
+  regex: 'ghp_[A-Za-z0-9]{36}|ghs_[A-Za-z0-9]{36}|glpat-[A-Za-z0-9\-]{20}|AKIA[A-Z0-9]{16}|sk-[A-Za-z0-9]{20,}'
+ignores:
+  - "**/tests/**"
+  - "**/*_tests/**"
+  - "**/*_test/**"
+  - "**/test_*"
+  - "**/*_test.rs"
+  - "**/examples/**"
+  - "**/fixtures/**"
+skip_test_code: true
+tests:
+  should_match:
+    - 'let token = "ghp_1234567890abcdef1234567890abcdef1234";'
+    - 'let key = "AKIAABCDEFGHIJKLMNOP";'
+    - 'let key = "sk-abcdefghijklmnopqrstuvwx";'
+  should_not_match:
+    - 'let token = std::env::var("GITHUB_TOKEN")?;'
+    - 'let msg = "please set ghp_ token in env";'

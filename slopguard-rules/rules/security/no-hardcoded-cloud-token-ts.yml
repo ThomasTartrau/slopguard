@@ -1,0 +1,23 @@
+id: no-hardcoded-cloud-token
+language: typescript
+severity: error
+category: security
+message: "Hardcoded token matching a known cloud/CI provider format. Load it from the environment or a vault."
+note: "These formats (GitHub, GitLab, AWS, Stripe/OpenAI-style) are the first thing an attacker greps for in a source dump or leaked build log."
+fix: "Read the token from process.env or a secrets manager, never as a literal."
+rule:
+  kind: string
+  regex: 'ghp_[A-Za-z0-9]{36}|ghs_[A-Za-z0-9]{36}|glpat-[A-Za-z0-9\-]{20}|AKIA[A-Z0-9]{16}|sk-[A-Za-z0-9]{20,}'
+ignores:
+  - "**/fixtures/**"
+  - "**/*.test.*"
+  - "**/*.spec.*"
+  - "**/__tests__/**"
+tests:
+  should_match:
+    - 'const token = "ghp_1234567890abcdef1234567890abcdef1234";'
+    - 'const key = "AKIAABCDEFGHIJKLMNOP";'
+    - 'const key = "sk-abcdefghijklmnopqrstuvwx";'
+  should_not_match:
+    - 'const token = process.env.GITHUB_TOKEN;'
+    - 'const msg = "please set ghp_ token in env";'
