@@ -46,6 +46,7 @@ The library crate. Responsible for:
 - Inline disable comment parsing (// slopguard-disable-next-line)
 - Config parsing (slopguard.toml via serde + toml)
 - Finding representation (file, line, rule_id, severity, message, note)
+- Baseline hashing, persistence and filtering (baseline.rs)
 - Rule testing (should_match / should_not_match validation)
 - Ruleset management (slop, security, correctness)
 
@@ -193,9 +194,13 @@ error[no-unwrap-in-prod]: .unwrap() forbidden in production. Use ? or .expect('e
       "fix": "Use ? or .expect('explicit message')."
     }
   ],
-  "summary": { "errors": 1, "warnings": 0, "total": 1 }
+  "summary": { "errors": 1, "warnings": 0, "total": 1 },
+  "stats": { "errors": 1, "warnings": 0, "total": 1, "files_scanned": 12, "baseline_filtered": 0 }
 }
 ```
+
+`summary` is kept for backward compatibility; `stats` is the full set and the one
+to read in CI.
 
 ### SARIF
 Standard SARIF 2.1.0 for GitHub Code Scanning / GitLab SAST integration.

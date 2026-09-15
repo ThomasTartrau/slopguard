@@ -82,6 +82,7 @@
 
 - [x] `slopguard explain <rule-id>` + `--rule <id>` ([#16](https://gitlab.com/ThomasTartrau/slopguard/-/issues/16))
 - [x] Cache SHA256 des fichiers pour re-scans ([#17](https://gitlab.com/ThomasTartrau/slopguard/-/issues/17))
+- [x] `slopguard baseline` pour ignorer les findings pre-existants ([#24](https://gitlab.com/ThomasTartrau/slopguard/-/issues/24))
 
 ### CI integration ([#18](https://gitlab.com/ThomasTartrau/slopguard/-/issues/18))
 

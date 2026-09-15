@@ -234,6 +234,19 @@ pub fn format_text(result: &ScanResult, w: &mut impl Write, use_colors: bool) ->
         write_cache_line(w, result.stats.files_scanned, cs)?;
     }
 
+    if result.stats.baseline_filtered > 0 {
+        let label = if result.stats.baseline_filtered == 1 {
+            "finding"
+        } else {
+            "findings"
+        };
+        writeln!(
+            w,
+            "{n} {label} filtered by baseline",
+            n = result.stats.baseline_filtered
+        )?;
+    }
+
     if result.stats.total > 0 {
         writeln!(
             w,
