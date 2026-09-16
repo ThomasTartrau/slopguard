@@ -7,8 +7,8 @@ use std::path::PathBuf;
 use slopguard_core::baseline::{
     self, find_baseline_file, load, project_root, Baseline, BASELINE_FILE,
 };
-use slopguard_core::finding::{ScanResult, ScanStats};
-use slopguard_core::rule::Severity;
+use slopguard_core::finding::ScanResult;
+use slopguard_core::scanner::count_severities;
 
 use crate::{collect_findings, AppError, CollectOpts};
 
@@ -28,22 +28,11 @@ pub struct BaselineOpts {
 /// `files_scanned` is preserved: those files really were scanned, only their
 /// findings were suppressed.
 fn recompute_stats(result: &mut ScanResult, baseline_filtered: usize) {
-    let (errors, warnings) = result
-        .findings
-        .iter()
-        .fold((0, 0), |(errors, warnings), f| match f.severity {
-            Severity::Error => (errors + 1, warnings),
-            Severity::Warning => (errors, warnings + 1),
-        });
-    result.stats = ScanStats {
-        errors,
-        warnings,
-        total: errors + warnings,
-        files_scanned: result.stats.files_scanned,
-        baseline_filtered,
-        diff_base: result.stats.diff_base.clone(),
-        files_changed: result.stats.files_changed,
-    };
+    let (errors, warnings) = count_severities(&result.findings);
+    result.stats.errors = errors;
+    result.stats.warnings = warnings;
+    result.stats.total = errors + warnings;
+    result.stats.baseline_filtered = baseline_filtered;
 }
 
 /// Resolve which baseline to apply, and the root its paths are relative to.

@@ -17,13 +17,15 @@ use thiserror::Error;
 use slopguard_ai::{build_provider, run_ai_pass, AiCache, AiCandidate, DEFAULT_MODEL};
 use slopguard_core::baseline::BaselineError;
 use slopguard_core::config::{load_config, load_config_file, Config, ConfigError, OutputFormat};
-use slopguard_core::finding::{Finding, ScanResult, ScanStats};
+use slopguard_core::finding::{Finding, ScanResult};
 use slopguard_core::git::{changed_files, GitError};
 use slopguard_core::rule::{
     is_rule_active, load_all_rules, load_builtin_rules, load_effective_rules, Category, Language,
     Rule, RuleError, Severity,
 };
-use slopguard_core::scanner::{scan, scan_cached, scan_files, scan_files_cached, ScanError};
+use slopguard_core::scanner::{
+    count_severities, scan, scan_cached, scan_files, scan_files_cached, ScanError,
+};
 use slopguard_core::testing::{self, RuleTestStatus, TestError, TestFailureKind};
 
 use crate::baseline_cmd::{apply_baseline, run_baseline, BaselineOpts};
@@ -349,22 +351,10 @@ fn merge_ai_findings(result: &mut ScanResult, ai_findings: Vec<Finding>) {
     result.findings.dedup_by(|a, b| {
         a.rule_id == b.rule_id && a.file == b.file && a.line == b.line && a.column == b.column
     });
-    let (errors, warnings) = result
-        .findings
-        .iter()
-        .fold((0, 0), |(errors, warnings), f| match f.severity {
-            Severity::Error => (errors + 1, warnings),
-            Severity::Warning => (errors, warnings + 1),
-        });
-    result.stats = ScanStats {
-        errors,
-        warnings,
-        total: errors + warnings,
-        files_scanned: result.stats.files_scanned,
-        baseline_filtered: result.stats.baseline_filtered,
-        diff_base: result.stats.diff_base.clone(),
-        files_changed: result.stats.files_changed,
-    };
+    let (errors, warnings) = count_severities(&result.findings);
+    result.stats.errors = errors;
+    result.stats.warnings = warnings;
+    result.stats.total = errors + warnings;
 }
 
 /// Run the AI confirmation phase for `ai_rules`.

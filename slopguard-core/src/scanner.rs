@@ -242,7 +242,7 @@ fn explicit_files(files: &[PathBuf], ignores: &GlobSet) -> Vec<(PathBuf, Support
 }
 
 /// Count errors and warnings in one pass.
-fn count_severities(findings: &[Finding]) -> (usize, usize) {
+pub fn count_severities(findings: &[Finding]) -> (usize, usize) {
     let mut errors = 0;
     let mut warnings = 0;
     for finding in findings {

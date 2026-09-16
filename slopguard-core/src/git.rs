@@ -69,7 +69,12 @@ pub fn changed_files(dir: &Path, base: Option<&str>) -> Result<Vec<PathBuf>, Git
     if let Some(b) = base {
         let probe = run_git(
             dir,
-            &["rev-parse", "--verify", "--quiet", &format!("{b}^{{commit}}")],
+            &[
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                &format!("{b}^{{commit}}"),
+            ],
         )?;
         if !probe.status.success() {
             let stderr = stderr_of(&probe);
