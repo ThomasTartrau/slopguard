@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.1.12](https://gitlab.com/ThomasTartrau/slopguard/compare/slopguard-core-v0.1.11...slopguard-core-v0.1.12) - 2026-09-16
+
+### Added
+
+- #27 add config presets to slopguard init
+
+
+### Changed
+
+- #27 move preset parsing logic to core
+
 ## [0.1.11](https://gitlab.com/ThomasTartrau/slopguard/compare/slopguard-core-v0.1.10...slopguard-core-v0.1.11) - 2026-09-16
 
 ### Added
