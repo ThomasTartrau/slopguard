@@ -96,6 +96,56 @@ pub enum Command {
         #[arg(long = "baseline", value_name = "PATH")]
         baseline_path: Option<PathBuf>,
     },
+    /// Show a summary of findings instead of listing them
+    Stats {
+        /// Paths to scan (defaults to current directory)
+        #[arg(default_value = ".")]
+        paths: Vec<PathBuf>,
+
+        /// Output format (text or json; sarif is not supported)
+        #[arg(long)]
+        format: Option<Format>,
+
+        /// Path to a specific slopguard.toml config file
+        #[arg(long)]
+        config: Option<PathBuf>,
+
+        /// Disable colored output
+        #[arg(long)]
+        no_colors: bool,
+
+        /// Disable specific rules (overrides config, repeatable)
+        #[arg(long = "disable", value_name = "RULE_ID")]
+        cli_disable: Vec<String>,
+
+        /// Enable specific rules even if disabled by default or config (repeatable)
+        #[arg(long = "enable", value_name = "RULE_ID")]
+        cli_enable: Vec<String>,
+
+        /// Report stats for only this rule
+        #[arg(long = "rule", value_name = "RULE_ID")]
+        rule_filter: Option<String>,
+
+        /// Disable file caching and force a full rescan
+        #[arg(long)]
+        no_cache: bool,
+
+        /// Directory to store the scan cache (overrides SLOPGUARD_CACHE_DIR and config)
+        #[arg(long, value_name = "PATH")]
+        cache_dir: Option<PathBuf>,
+
+        /// Skip AI rules entirely (no LLM calls), even if a provider is configured
+        #[arg(long)]
+        no_ai: bool,
+
+        /// Ignore the baseline file and count every finding
+        #[arg(long, conflicts_with = "baseline_path")]
+        no_baseline: bool,
+
+        /// Path to a specific baseline file
+        #[arg(long = "baseline", value_name = "PATH")]
+        baseline_path: Option<PathBuf>,
+    },
     /// Capture current findings into a baseline file
     Baseline {
         /// Paths to scan (defaults to current directory)
@@ -272,6 +322,53 @@ mod tests {
             "--no-baseline",
             "--baseline",
             "custom.json",
+            ".",
+        ]);
+        assert!(
+            result.is_err(),
+            "--no-baseline and --baseline should conflict"
+        );
+    }
+
+    #[test]
+    fn cli_parses_stats_subcommand() {
+        Cli::command()
+            .try_get_matches_from(["slopguard", "stats", "."])
+            .expect("stats subcommand should parse");
+    }
+
+    #[test]
+    fn cli_parses_stats_default_path() {
+        Cli::command()
+            .try_get_matches_from(["slopguard", "stats"])
+            .expect("stats subcommand should parse without explicit path");
+    }
+
+    #[test]
+    fn cli_parses_stats_with_format() {
+        Cli::command()
+            .try_get_matches_from(["slopguard", "stats", "--format", "json", "."])
+            .expect("stats with --format json should parse");
+    }
+
+    #[test]
+    fn cli_parses_stats_with_baseline_flags() {
+        Cli::command()
+            .try_get_matches_from(["slopguard", "stats", "--no-baseline", "."])
+            .expect("stats with --no-baseline should parse");
+        Cli::command()
+            .try_get_matches_from(["slopguard", "stats", "--baseline", "b.json", "."])
+            .expect("stats with --baseline should parse");
+    }
+
+    #[test]
+    fn cli_rejects_stats_no_baseline_with_baseline_path() {
+        let result = Cli::command().try_get_matches_from([
+            "slopguard",
+            "stats",
+            "--no-baseline",
+            "--baseline",
+            "b.json",
             ".",
         ]);
         assert!(

@@ -137,6 +137,8 @@ slopguard scan src/ --format json    # JSON output for CI
 slopguard scan --format sarif        # SARIF for GitLab/GitHub integration
 slopguard scan --severity-threshold error  # exit 0 on warnings-only
 slopguard scan --no-ai               # AST-only, skip AI rules (no LLM calls)
+slopguard stats .                    # distribution of findings by severity/category/language
+slopguard stats . --format json      # same data as structured JSON
 slopguard baseline .                 # capture current findings into .slopguard-baseline.json
 slopguard scan --no-baseline         # ignore the baseline, report everything
 slopguard list                       # show active rules (with ast/ai type)
@@ -306,6 +308,77 @@ let value = safe_call().unwrap();
 ```
 
 The first form suppresses all rules for the next line. The second form suppresses only the named rule.
+
+---
+
+## 📊 Stats
+
+`scan` tells you what every finding is. `stats` answers where they are: it runs
+the exact same pipeline, then prints the distribution instead of the findings.
+
+```bash
+slopguard stats .
+```
+
+```text
+42 findings in 128 files
+3 findings filtered by baseline
+
+severity  count
+--------  -----
+error        18
+warning      24
+
+category     count
+-----------  -----
+slop            12
+security         5
+correctness     25
+
+language    count
+----------  -----
+rust           40
+typescript      2
+
+rule                count
+------------------  -----
+no-unwrap-in-prod      18
+no-magic-number         9
+no-obvious-comment      7
+
+file                count
+------------------  -----
+src/api/handler.rs      9
+src/db/pool.rs          6
+```
+
+The top rules table is capped at 10 entries and the top files table at 5, both
+sorted by count and then by name so the output is stable between runs.
+
+`--format json` prints the same data as one object. Every key is always present,
+even at zero, so CI can index into it without guarding:
+
+```json
+{
+  "total": 42,
+  "files_scanned": 128,
+  "baseline_filtered": 3,
+  "by_severity": { "error": 18, "warning": 24 },
+  "by_category": { "slop": 12, "security": 5, "correctness": 25 },
+  "by_language": { "rust": 40, "typescript": 2 },
+  "top_rules": [{ "rule_id": "no-unwrap-in-prod", "count": 18 }],
+  "top_files": [{ "file": "src/api/handler.rs", "count": 9 }]
+}
+```
+
+`stats` accepts the same `--baseline`, `--no-baseline`, `--no-ai`, `--rule`,
+`--disable`, `--enable` and `--config` flags as `scan`. Unlike `scan` it always
+exits 0 when it ran, findings or not, so it can be piped into `jq` under
+`set -o pipefail`:
+
+```bash
+slopguard stats . --format json | jq '.by_category'
+```
 
 ---
 

@@ -14,17 +14,17 @@ const CYAN_BOLD: &str = "\x1b[1;36m";
 const BOLD: &str = "\x1b[1m";
 const RESET: &str = "\x1b[0m";
 
-struct Colors {
-    red: &'static str,
-    yellow: &'static str,
-    cyan: &'static str,
-    cyan_bold: &'static str,
-    bold: &'static str,
-    reset: &'static str,
+pub(crate) struct Colors {
+    pub(crate) red: &'static str,
+    pub(crate) yellow: &'static str,
+    pub(crate) cyan: &'static str,
+    pub(crate) cyan_bold: &'static str,
+    pub(crate) bold: &'static str,
+    pub(crate) reset: &'static str,
 }
 
 impl Colors {
-    fn new(enabled: bool) -> Self {
+    pub(crate) fn new(enabled: bool) -> Self {
         if enabled {
             Self {
                 red: RED,
