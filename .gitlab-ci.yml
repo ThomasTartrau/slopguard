@@ -83,6 +83,7 @@ build-ci-image:
       --context "${CI_PROJECT_DIR}/ci/rust"
       --dockerfile "${CI_PROJECT_DIR}/ci/rust/Dockerfile"
       --destination "$CI_RUST_IMAGE"
+      --custom-platform=linux/amd64
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
       changes:
