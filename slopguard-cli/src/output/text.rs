@@ -7,6 +7,8 @@ use std::path::Path;
 use slopguard_core::finding::{CacheStats, Finding, ScanResult};
 use slopguard_core::rule::{Category, Rule, Severity};
 
+use crate::output::plural;
+
 const RED: &str = "\x1b[1;31m";
 const YELLOW: &str = "\x1b[1;33m";
 const CYAN: &str = "\x1b[36m";
@@ -214,32 +216,16 @@ pub fn format_text(result: &ScanResult, w: &mut impl Write, use_colors: bool) ->
         write_finding(w, finding, &source_lines, &c)?;
     }
 
-    let errors_label = if result.stats.errors == 1 {
-        "error"
-    } else {
-        "errors"
-    };
-    let warnings_label = if result.stats.warnings == 1 {
-        "warning"
-    } else {
-        "warnings"
-    };
-    let files_label = if result.stats.files_scanned == 1 {
-        "file"
-    } else {
-        "files"
-    };
+    let errors_label = plural(result.stats.errors, "error", "errors");
+    let warnings_label = plural(result.stats.warnings, "warning", "warnings");
+    let files_label = plural(result.stats.files_scanned, "file", "files");
 
     if let Some(ref cs) = result.cache_stats {
         write_cache_line(w, result.stats.files_scanned, cs)?;
     }
 
     if result.stats.baseline_filtered > 0 {
-        let label = if result.stats.baseline_filtered == 1 {
-            "finding"
-        } else {
-            "findings"
-        };
+        let label = plural(result.stats.baseline_filtered, "finding", "findings");
         writeln!(
             w,
             "{n} {label} filtered by baseline",

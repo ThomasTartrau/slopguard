@@ -3,6 +3,7 @@
 use std::io::{self, Write};
 
 use crate::output::text::Colors;
+use crate::output::{plural, write_json_pretty};
 use crate::stats_cmd::StatsReport;
 
 const COUNT_HEADER: &str = "count";
@@ -12,9 +13,7 @@ const COUNT_HEADER: &str = "count";
 /// Every axis is a struct rather than a map, so each key is present even at
 /// zero and CI can index into the output unconditionally.
 pub fn format_stats_json(report: &StatsReport, w: &mut impl Write) -> io::Result<()> {
-    serde_json::to_writer_pretty(&mut *w, report).map_err(io::Error::other)?;
-    writeln!(w)?;
-    Ok(())
+    write_json_pretty(w, report)
 }
 
 /// One table row: its label, its count, and the color the line is printed in.
@@ -47,13 +46,13 @@ fn write_section(w: &mut impl Write, header: &str, rows: &[Row], c: &Colors) -> 
         .iter()
         .map(|r| r.label.len())
         .max()
-        .unwrap_or(header_w)
+        .unwrap_or(0)
         .max(header_w);
     let count_w = rows
         .iter()
         .map(|r| digits(r.count))
         .max()
-        .unwrap_or(count_header_w)
+        .unwrap_or(0)
         .max(count_header_w);
 
     writeln!(
@@ -89,16 +88,8 @@ pub fn format_stats_text(
 ) -> io::Result<()> {
     let c = Colors::new(use_colors);
 
-    let findings_label = if report.total == 1 {
-        "finding"
-    } else {
-        "findings"
-    };
-    let files_label = if report.files_scanned == 1 {
-        "file"
-    } else {
-        "files"
-    };
+    let findings_label = plural(report.total, "finding", "findings");
+    let files_label = plural(report.files_scanned, "file", "files");
     writeln!(
         w,
         "{total} {findings_label} in {files} {files_label}",
@@ -107,11 +98,7 @@ pub fn format_stats_text(
     )?;
 
     if report.baseline_filtered > 0 {
-        let label = if report.baseline_filtered == 1 {
-            "finding"
-        } else {
-            "findings"
-        };
+        let label = plural(report.baseline_filtered, "finding", "findings");
         writeln!(
             w,
             "{n} {label} filtered by baseline",
