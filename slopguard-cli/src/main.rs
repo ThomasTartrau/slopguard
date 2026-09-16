@@ -1,6 +1,7 @@
 mod baseline_cmd;
 mod cli;
 mod output;
+mod stats_cmd;
 
 use std::cmp::Ordering;
 use std::collections::HashMap;
@@ -31,6 +32,7 @@ use slopguard_core::testing::{self, RuleTestStatus, TestError, TestFailureKind};
 use crate::baseline_cmd::{apply_baseline, run_baseline, BaselineOpts};
 use crate::cli::{CategoryFilter, Cli, Command, Format, LanguageFilter, SeverityThreshold};
 use crate::output::{json, sarif, text};
+use crate::stats_cmd::{run_stats, StatsOpts};
 
 fn has_findings_above_threshold(result: &ScanResult, threshold: &SeverityThreshold) -> bool {
     result.findings.iter().any(|f| match threshold {
@@ -282,7 +284,7 @@ fn run_scan(opts: ScanOpts) -> Result<bool, AppError> {
 }
 
 /// Map a file path to the rule language it is scanned as.
-fn language_for_path(path: &Path) -> Option<Language> {
+pub(crate) fn language_for_path(path: &Path) -> Option<Language> {
     match path.extension().and_then(|e| e.to_str()) {
         Some("rs") => Some(Language::Rust),
         Some("ts" | "tsx") => Some(Language::TypeScript),
@@ -700,6 +702,39 @@ fn main() -> ExitCode {
         }) {
             Ok(true) => ExitCode::from(1),
             Ok(false) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("error: {e}");
+                ExitCode::from(2)
+            }
+        },
+        Command::Stats {
+            paths,
+            format,
+            config,
+            no_colors,
+            cli_disable,
+            cli_enable,
+            rule_filter,
+            no_cache,
+            cache_dir,
+            no_ai,
+            no_baseline,
+            baseline_path,
+        } => match run_stats(StatsOpts {
+            paths,
+            format,
+            config_path: config,
+            no_colors,
+            cli_disable,
+            cli_enable,
+            rule_filter,
+            no_cache,
+            cache_dir,
+            no_ai,
+            no_baseline,
+            baseline_path,
+        }) {
+            Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
                 eprintln!("error: {e}");
                 ExitCode::from(2)
