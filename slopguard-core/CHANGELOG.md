@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.1.11](https://gitlab.com/ThomasTartrau/slopguard/compare/slopguard-core-v0.1.10...slopguard-core-v0.1.11) - 2026-09-16
+
+### Added
+
+- #25 add diff-aware scanning with --diff and --base
+
+
+### Changed
+
+- #25 extract count_severities for reuse across CLI
+
 ## [0.1.10](https://gitlab.com/ThomasTartrau/slopguard/compare/slopguard-core-v0.1.9...slopguard-core-v0.1.10) - 2026-09-16
 
 ### Fixed
