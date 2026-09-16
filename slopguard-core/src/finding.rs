@@ -38,6 +38,13 @@ pub struct ScanStats {
     /// Number of findings dropped because they were present in the baseline.
     #[serde(default)]
     pub baseline_filtered: usize,
+    /// The ref `--diff` scanned against ("HEAD" when `--base` was omitted).
+    /// `None` for a normal full scan.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diff_base: Option<String>,
+    /// Number of changed files handed to the scanner in diff mode.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub files_changed: Option<usize>,
 }
 
 /// Cache statistics for a scan run.

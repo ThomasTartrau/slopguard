@@ -202,6 +202,10 @@ pub fn format_text(result: &ScanResult, w: &mut impl Write, use_colors: bool) ->
     let c = Colors::new(use_colors);
     let mut files_cache: BTreeMap<&Path, Vec<String>> = BTreeMap::new();
 
+    if let (Some(base), Some(n)) = (&result.stats.diff_base, result.stats.files_changed) {
+        writeln!(w, "Scanning {n} changed files (base: {base})")?;
+    }
+
     for finding in &result.findings {
         let source = files_cache.entry(&finding.file).or_insert_with(|| {
             read_to_string(&finding.file)

@@ -139,6 +139,8 @@ slopguard scan --severity-threshold error  # exit 0 on warnings-only
 slopguard scan --no-ai               # AST-only, skip AI rules (no LLM calls)
 slopguard baseline .                 # capture current findings into .slopguard-baseline.json
 slopguard scan --no-baseline         # ignore the baseline, report everything
+slopguard scan --diff                # scan only the files changed against HEAD
+slopguard scan --diff --base origin/main  # scan only what this branch changed
 slopguard list                       # show active rules (with ast/ai type)
 slopguard explain no-unwrap-in-prod  # rule details (prompt template for AI rules)
 slopguard test                       # validate all rule inline tests
@@ -386,6 +388,29 @@ repos:
     hooks:
       - id: slopguard
 ```
+
+### Diff mode
+
+`slopguard scan --diff` scans only the files git reports as changed, which keeps
+merge request pipelines proportional to the size of the change:
+
+```bash
+slopguard scan --diff                    # staged plus unstaged changes against HEAD
+slopguard scan --diff --base origin/main # everything this branch changed
+```
+
+- `--base <ref>` diffs against the merge base (`<ref>...HEAD`), so commits that
+  landed on the base branch after the branch point do not resurface other
+  people's findings as if they were yours.
+- Added, modified and renamed files are scanned; deleted files are not. A rename
+  is scanned under its new name only.
+- Untracked files are not included: they have no diff entry until they are staged.
+- `files_changed` counts every changed file, while `files_scanned` counts only
+  the ones the scanner parses. A change to `README.md` or `Cargo.toml` raises the
+  first and not the second, so `files_scanned` <= `files_changed` is expected.
+- JSON output gains two stats keys in diff mode, `stats.diff_base` and
+  `stats.files_changed`. Both are absent on a normal full scan.
+- `--diff` requires a git working tree; outside one the scan exits with code 2.
 
 ### Cache in CI
 

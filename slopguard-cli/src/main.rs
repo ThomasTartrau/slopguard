@@ -1,5 +1,6 @@
 mod baseline_cmd;
 mod cli;
+mod diff;
 mod output;
 
 use std::cmp::Ordering;
@@ -18,6 +19,7 @@ use slopguard_ai::{build_provider, run_ai_pass, AiCache, AiCandidate, DEFAULT_MO
 use slopguard_core::baseline::BaselineError;
 use slopguard_core::config::{load_config, load_config_file, Config, ConfigError, OutputFormat};
 use slopguard_core::finding::{Finding, ScanResult, ScanStats};
+use slopguard_core::git::GitError;
 use slopguard_core::rule::{
     is_rule_active, load_all_rules, load_builtin_rules, load_effective_rules, Category, Language,
     Rule, RuleError, Severity,
@@ -27,6 +29,7 @@ use slopguard_core::testing::{self, RuleTestStatus, TestError, TestFailureKind};
 
 use crate::baseline_cmd::{apply_baseline, run_baseline, BaselineOpts};
 use crate::cli::{CategoryFilter, Cli, Command, Format, LanguageFilter, SeverityThreshold};
+use crate::diff::resolve_diff_scope;
 use crate::output::{json, sarif, text};
 
 fn has_findings_above_threshold(result: &ScanResult, threshold: &SeverityThreshold) -> bool {
@@ -63,6 +66,8 @@ pub enum AppError {
     Io(#[from] io::Error),
     #[error("{0}")]
     Baseline(#[from] BaselineError),
+    #[error("{0}")]
+    Git(#[from] GitError),
 }
 
 fn suggest_similar<'a>(id: &str, rules: &'a [Rule]) -> Option<&'a str> {
@@ -88,6 +93,8 @@ struct ScanOpts {
     no_ai: bool,
     no_baseline: bool,
     baseline_path: Option<PathBuf>,
+    diff: bool,
+    base: Option<String>,
 }
 
 /// Options shared by `scan` and `baseline`, which collect findings the same
@@ -182,8 +189,23 @@ fn run_scan(opts: ScanOpts) -> Result<bool, AppError> {
         no_ai,
         no_baseline,
         baseline_path,
+        diff,
+        base,
     } = opts;
     let use_colors = !no_colors && env::var_os("NO_COLOR").is_none();
+
+    // Diff mode narrows the scanned paths up front, so the AST pass, the
+    // cached pass and the AI pre-filter all see the same reduced file list.
+    let diff_scope = if diff {
+        let cwd = env::current_dir()?;
+        Some(resolve_diff_scope(&cwd, base.as_deref(), &paths)?)
+    } else {
+        None
+    };
+    let paths = match &diff_scope {
+        Some(scope) => scope.paths.clone(),
+        None => paths,
+    };
 
     let (mut result, config) = collect_findings(CollectOpts {
         paths,
@@ -197,6 +219,11 @@ fn run_scan(opts: ScanOpts) -> Result<bool, AppError> {
     })?;
 
     apply_baseline(&mut result, no_baseline, baseline_path)?;
+
+    if let Some(scope) = &diff_scope {
+        result.stats.diff_base = Some(scope.base.clone());
+        result.stats.files_changed = Some(scope.files_changed);
+    }
 
     let format = format.unwrap_or(match config.output.format {
         OutputFormat::Text => Format::Text,
@@ -290,12 +317,16 @@ fn merge_ai_findings(result: &mut ScanResult, ai_findings: Vec<Finding>) {
             Severity::Error => (errors + 1, warnings),
             Severity::Warning => (errors, warnings + 1),
         });
+    let diff_base = result.stats.diff_base.clone();
+    let files_changed = result.stats.files_changed;
     result.stats = ScanStats {
         errors,
         warnings,
         total: errors + warnings,
         files_scanned: result.stats.files_scanned,
         baseline_filtered: result.stats.baseline_filtered,
+        diff_base,
+        files_changed,
     };
 }
 
@@ -621,6 +652,8 @@ fn main() -> ExitCode {
             no_ai,
             no_baseline,
             baseline_path,
+            diff,
+            base,
         } => match run_scan(ScanOpts {
             paths,
             format,
@@ -635,6 +668,8 @@ fn main() -> ExitCode {
             no_ai,
             no_baseline,
             baseline_path,
+            diff,
+            base,
         }) {
             Ok(true) => ExitCode::from(1),
             Ok(false) => ExitCode::SUCCESS,

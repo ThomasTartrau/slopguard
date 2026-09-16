@@ -21,6 +21,12 @@ struct JsonStats {
     files_scanned: usize,
     /// Always emitted, `0` when no baseline applies, so CI can rely on it.
     baseline_filtered: usize,
+    /// Diff-mode only: the ref the changed files were computed against.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    diff_base: Option<String>,
+    /// Diff-mode only: how many changed files were handed to the scanner.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    files_changed: Option<usize>,
 }
 
 #[derive(Serialize)]
@@ -84,6 +90,8 @@ pub fn format_json(result: &ScanResult, w: &mut impl Write) -> io::Result<()> {
         total: result.stats.total,
         files_scanned: result.stats.files_scanned,
         baseline_filtered: result.stats.baseline_filtered,
+        diff_base: result.stats.diff_base.clone(),
+        files_changed: result.stats.files_changed,
     };
     let output = JsonOutput {
         findings: &result.findings,
