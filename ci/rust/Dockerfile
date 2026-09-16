@@ -1,3 +1,4 @@
+# platform: linux/amd64
 FROM rust:1.94.1-bookworm AS builder
 
 ARG BINSTALL_VERSION=1.14.0
