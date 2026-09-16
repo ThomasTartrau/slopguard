@@ -147,6 +147,8 @@ slopguard list                       # show active rules (with ast/ai type)
 slopguard explain no-unwrap-in-prod  # rule details (prompt template for AI rules)
 slopguard test                       # validate all rule inline tests
 slopguard init                       # generate slopguard.toml
+slopguard init --preset strict       # generate a preset config
+slopguard init --preset              # list the available presets
 ```
 
 ---
@@ -183,6 +185,19 @@ ignores = ["target/", "generated/", "vendor/"]
 ```
 
 Hierarchical config: `~/.config/slopguard/config.toml` (global defaults) is overridden by project-level `slopguard.toml`, which is overridden by CLI flags.
+
+### Presets
+
+`slopguard init --preset <name>` writes a ready-made config. Run `slopguard init --preset` with no name to list them.
+
+| Preset | What it generates |
+| -------- | ------------------- |
+| `default` | All rulesets on, opt-in rules off. Same as running `init` with no preset. |
+| `strict` | Everything on, including every opt-in rule. Warnings fail the scan. |
+| `relaxed` | Security plus correctness errors only. Slop and correctness warnings off. |
+| `ai` | Default rules plus the AI confirmation pass (`api` provider, haiku model). |
+
+The rule id lists in `strict` and `relaxed` are generated from the builtin ruleset, so they never name a rule that no longer ships.
 
 ---
 
