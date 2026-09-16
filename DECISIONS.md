@@ -97,3 +97,8 @@ The following patterns are deferred to v0.2.0 (AI rules):
 ## D23: Inline test code is filtered by an explicit rule flag
 **Decision**: Rules opt into skipping `#[cfg(test)]` blocks with `skip_test_code: true`. The scanner locates those blocks on the tree-sitter AST (an `attribute_item` and the item it annotates) and drops the findings of opted-in rules inside them, after ast-grep matching. A textual brace scan was rejected: braces inside string literals or comments silently break it.
 **Why**: `ignores` globs only filter whole files, but Rust convention puts unit tests inline in `src/`. Inferring the intent from the glob list (e.g. "contains `tests`") is fragile and invisible to rule authors. An explicit field keeps the YAML self-describing and lets a rule that must fire in tests (e.g. no-safety-hallucination) leave it off.
+
+## D24: Baseline hash sans numero de ligne
+**Decision**: un finding baseline est identifie par un SHA256 de `rule_id + chemin relatif au fichier baseline + matched_text + 2 lignes de contexte avant/apres, trimees`. Ni la ligne ni la colonne n'entrent dans le hash. Les doublons ne sont pas dedupliques : N occurrences identiques produisent N entrees, et le filtrage decompte (N baselinees, N+1 au scan -> 1 reporte).
+**Why**: un hash incluant le numero de ligne invalide la baseline des la premiere insertion de code au-dessus, ce qui fait reapparaitre en masse des findings deja acceptes. Le contexte suffit a distinguer deux occurrences distinctes du meme pattern dans un meme fichier. La semantique de comptage evite qu'une occurrence baselinee masque une nouvelle occurrence identique.
+**Cost**: modifier le code autour d'un finding baseline le fait reapparaitre. C'est assume : le code a change, la revue de ce finding aussi.

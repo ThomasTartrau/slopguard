@@ -8,7 +8,19 @@ use slopguard_core::rule::{Category, Language, Rule, Severity};
 #[derive(Serialize)]
 struct JsonOutput<'a> {
     findings: &'a [Finding],
+    /// Kept for backward compatibility with consumers written before `stats`.
     summary: &'a ScanSummary,
+    stats: &'a JsonStats,
+}
+
+#[derive(Serialize)]
+struct JsonStats {
+    errors: usize,
+    warnings: usize,
+    total: usize,
+    files_scanned: usize,
+    /// Always emitted, `0` when no baseline applies, so CI can rely on it.
+    baseline_filtered: usize,
 }
 
 #[derive(Serialize)]
@@ -66,9 +78,17 @@ pub fn format_json(result: &ScanResult, w: &mut impl Write) -> io::Result<()> {
         warnings: result.stats.warnings,
         total: result.stats.total,
     };
+    let stats = JsonStats {
+        errors: result.stats.errors,
+        warnings: result.stats.warnings,
+        total: result.stats.total,
+        files_scanned: result.stats.files_scanned,
+        baseline_filtered: result.stats.baseline_filtered,
+    };
     let output = JsonOutput {
         findings: &result.findings,
         summary: &summary,
+        stats: &stats,
     };
     serde_json::to_writer_pretty(&mut *w, &output).map_err(io::Error::other)?;
     writeln!(w)?;

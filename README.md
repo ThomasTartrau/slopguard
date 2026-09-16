@@ -137,6 +137,8 @@ slopguard scan src/ --format json    # JSON output for CI
 slopguard scan --format sarif        # SARIF for GitLab/GitHub integration
 slopguard scan --severity-threshold error  # exit 0 on warnings-only
 slopguard scan --no-ai               # AST-only, skip AI rules (no LLM calls)
+slopguard baseline .                 # capture current findings into .slopguard-baseline.json
+slopguard scan --no-baseline         # ignore the baseline, report everything
 slopguard list                       # show active rules (with ast/ai type)
 slopguard explain no-unwrap-in-prod  # rule details (prompt template for AI rules)
 slopguard test                       # validate all rule inline tests
@@ -304,6 +306,50 @@ let value = safe_call().unwrap();
 ```
 
 The first form suppresses all rules for the next line. The second form suppresses only the named rule.
+
+---
+
+## 📊 Baseline
+
+Adopting slopguard on an existing codebase usually means hundreds of pre-existing
+findings. A baseline records them once so CI only fails on newly introduced ones.
+
+```bash
+slopguard baseline .     # writes .slopguard-baseline.json at the project root
+git add .slopguard-baseline.json
+```
+
+From then on, `slopguard scan` silently drops every finding already recorded and
+reports only the new ones. The summary line tells you how many were suppressed:
+
+```
+3 findings filtered by baseline
+0 errors, 0 warnings in 12 files
+```
+
+**Commit the baseline file.** Unlike `.slopguard-cache/`, it is shared state: it
+must be in git so every developer and every CI job filters the same findings. Do
+not add it to `.gitignore`.
+
+| Flag | Effect |
+|------|--------|
+| `slopguard baseline .` | Capture current findings (exit 0 even when findings exist) |
+| `slopguard baseline -o <path>` | Write the baseline somewhere else |
+| `slopguard scan --baseline <path>` | Use a specific baseline file (error if missing) |
+| `slopguard scan --no-baseline` | Ignore the baseline entirely and report everything |
+
+Without `--baseline`, the file is looked up in the working directory and its
+parents, so scanning from a subdirectory still applies the project baseline.
+
+A finding is identified by its rule id, its path relative to the baseline file,
+its matched text, and the lines surrounding it. Line numbers are not part of that
+identity: inserting code above a baselined finding keeps it suppressed. Rewriting
+the code around it makes it resurface, which is deliberate. Baseline entries that
+no longer match anything (the code was fixed) are ignored silently.
+
+Re-run `slopguard baseline .` to recapture, for instance after adding rules. The
+entries are sorted, so the git diff stays readable. Note that `baseline` runs the
+AI rules like `scan` does; use `--no-ai` to skip the LLM calls.
 
 ---
 
