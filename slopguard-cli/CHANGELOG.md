@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.1.12](https://gitlab.com/ThomasTartrau/slopguard/compare/slopguard-cli-v0.1.11...slopguard-cli-v0.1.12) - 2026-09-16
+
+### Added
+
+- #25 add diff-aware scanning with --diff and --base
+
+
+### Changed
+
+- #25 extract count_severities for reuse across CLI
+
 ## [0.1.11](https://gitlab.com/ThomasTartrau/slopguard/compare/slopguard-cli-v0.1.10...slopguard-cli-v0.1.11) - 2026-09-16
 ## [0.1.8](https://gitlab.com/ThomasTartrau/slopguard/compare/slopguard-cli-v0.1.7...slopguard-cli-v0.1.8) - 2026-09-14
 
