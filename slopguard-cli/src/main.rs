@@ -18,6 +18,7 @@ use slopguard_ai::{build_provider, run_ai_pass, AiCache, AiCandidate, DEFAULT_MO
 use slopguard_core::baseline::BaselineError;
 use slopguard_core::config::{load_config, load_config_file, Config, ConfigError, OutputFormat};
 use slopguard_core::finding::{Finding, ScanResult, ScanStats};
+use slopguard_core::preset::{presets_help, Preset};
 use slopguard_core::rule::{
     is_rule_active, load_all_rules, load_builtin_rules, load_effective_rules, Category, Language,
     Rule, RuleError, Severity,
@@ -26,7 +27,9 @@ use slopguard_core::scanner::{scan, scan_cached, ScanError};
 use slopguard_core::testing::{self, RuleTestStatus, TestError, TestFailureKind};
 
 use crate::baseline_cmd::{apply_baseline, run_baseline, BaselineOpts};
-use crate::cli::{CategoryFilter, Cli, Command, Format, LanguageFilter, SeverityThreshold};
+use crate::cli::{
+    CategoryFilter, Cli, Command, Format, LanguageFilter, PresetArg, SeverityThreshold,
+};
 use crate::output::{json, sarif, text};
 
 fn has_findings_above_threshold(result: &ScanResult, threshold: &SeverityThreshold) -> bool {
@@ -379,34 +382,6 @@ fn run_explain(
     }
 }
 
-const DEFAULT_CONFIG: &str = r#"[rulesets]
-slop = true
-security = true
-correctness = true
-
-[rules]
-disable = []
-# Opt-in rules (disabled by default): pub-fn-needs-tracing, test-needs-timeout
-enable = []
-# custom_dirs = ["./my-rules"]
-
-[scan]
-ignores = []
-# cache_dir = ".slopguard-cache"
-
-[output]
-format = "text"
-colors = true
-
-# [ai]
-# enabled = false
-# provider = "api"        # "api" (HTTP) | "cli" (local claude)
-# vendor = "anthropic"    # "anthropic" | "openai" (for provider = "api")
-# model = "claude-haiku-4-5"
-# concurrency = 4
-# api_key via ANTHROPIC_API_KEY / OPENAI_API_KEY env, or ai.api_key
-"#;
-
 fn resolve_cache_dir(cli_flag: Option<PathBuf>, config: &Config) -> PathBuf {
     cli_flag
         .or_else(|| {
@@ -589,7 +564,25 @@ fn run_list(
     Ok(())
 }
 
-fn run_init(force: bool) -> Result<(), AppError> {
+/// Map the CLI value enum onto the core preset. The two are kept separate so
+/// `slopguard-core` stays free of clap.
+fn core_preset(arg: PresetArg) -> Preset {
+    match arg {
+        PresetArg::Default => Preset::Default,
+        PresetArg::Strict => Preset::Strict,
+        PresetArg::Relaxed => Preset::Relaxed,
+        PresetArg::Ai => Preset::Ai,
+    }
+}
+
+fn run_init(force: bool, preset: Option<Option<PresetArg>>) -> Result<(), AppError> {
+    // `--preset` with no value lists the presets and writes nothing.
+    if matches!(preset, Some(None)) {
+        print!("{}", presets_help());
+        return Ok(());
+    }
+    let preset = preset.flatten().map(core_preset).unwrap_or_default();
+
     let config_path = Path::new("slopguard.toml");
     if config_path.exists() && !force {
         eprintln!("error: slopguard.toml already exists (use --force to overwrite)");
@@ -598,8 +591,8 @@ fn run_init(force: bool) -> Result<(), AppError> {
             "slopguard.toml already exists",
         )));
     }
-    fs::write(config_path, DEFAULT_CONFIG)?;
-    println!("Created slopguard.toml");
+    fs::write(config_path, preset.render()?)?;
+    println!("Created slopguard.toml (preset: {preset})");
     Ok(())
 }
 
@@ -679,7 +672,7 @@ fn main() -> ExitCode {
                 ExitCode::from(2)
             }
         },
-        Command::Init { force } => match run_init(force) {
+        Command::Init { force, preset } => match run_init(force, preset) {
             Ok(()) => ExitCode::SUCCESS,
             Err(_) => ExitCode::from(1),
         },

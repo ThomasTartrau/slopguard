@@ -15,7 +15,7 @@
 ### CLI (clap)
 
 - [x] `slopguard scan [paths]` with `--format text|json|sarif`, `--severity-threshold`, `--config`
-- [x] `slopguard init` generates slopguard.toml with defaults
+- [x] `slopguard init` generates slopguard.toml with defaults, or from `--preset default|strict|relaxed|ai`
 - [x] `slopguard test` validates should_match/should_not_match for all rules
 - [x] `slopguard list` shows active rules with severity/category/language
 - [x] Exit codes: 0 clean, 1 findings, 2 config error
