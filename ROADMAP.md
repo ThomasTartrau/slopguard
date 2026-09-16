@@ -133,6 +133,7 @@
 
 ### CI integration
 
+- [x] `scan --diff` for MR-scoped scans ([#25](https://gitlab.com/ThomasTartrau/slopguard/-/issues/25))
 - [ ] GitHub Action (`slopguard/action`)
 - [ ] GitLab CI template
 - [ ] Pre-commit hook support

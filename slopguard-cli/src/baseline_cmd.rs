@@ -27,7 +27,11 @@ pub struct BaselineOpts {
 ///
 /// `files_scanned` is preserved: those files really were scanned, only their
 /// findings were suppressed.
+/// `diff_base` and `files_changed` are preserved too: the scan scope does not
+/// change because findings were suppressed.
 fn recompute_stats(result: &mut ScanResult, baseline_filtered: usize) {
+    let diff_base = result.stats.diff_base.clone();
+    let files_changed = result.stats.files_changed;
     let (errors, warnings) = result
         .findings
         .iter()
@@ -41,6 +45,8 @@ fn recompute_stats(result: &mut ScanResult, baseline_filtered: usize) {
         total: errors + warnings,
         files_scanned: result.stats.files_scanned,
         baseline_filtered,
+        diff_base,
+        files_changed,
     };
 }
 
