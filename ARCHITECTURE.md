@@ -31,7 +31,7 @@ slopguard/
 
 The binary crate. Responsible for:
 - CLI argument parsing via clap (derive API)
-- Subcommands: scan, init, test, list
+- Subcommands: scan, stats, baseline, explain, init, test, list
 - Output formatting (text with colors, JSON, SARIF)
 - Exit code logic (0 = clean, 1 = findings, 2 = config error)
 - Reading config from slopguard.toml (hierarchical: global + project)

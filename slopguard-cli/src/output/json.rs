@@ -5,6 +5,8 @@ use serde::Serialize;
 use slopguard_core::finding::{Finding, ScanResult};
 use slopguard_core::rule::{Category, Language, Rule, Severity};
 
+use crate::output::write_json_pretty;
+
 #[derive(Serialize)]
 struct JsonOutput<'a> {
     findings: &'a [Finding],
@@ -73,9 +75,7 @@ pub fn format_explain_json(rule: &Rule, w: &mut impl Write) -> io::Result<()> {
         should_match: rule.tests.as_ref().map(|t| t.should_match.as_slice()),
         should_not_match: rule.tests.as_ref().map(|t| t.should_not_match.as_slice()),
     };
-    serde_json::to_writer_pretty(&mut *w, &output).map_err(io::Error::other)?;
-    writeln!(w)?;
-    Ok(())
+    write_json_pretty(w, &output)
 }
 
 pub fn format_json(result: &ScanResult, w: &mut impl Write) -> io::Result<()> {
@@ -98,7 +98,5 @@ pub fn format_json(result: &ScanResult, w: &mut impl Write) -> io::Result<()> {
         summary: &summary,
         stats: &stats,
     };
-    serde_json::to_writer_pretty(&mut *w, &output).map_err(io::Error::other)?;
-    writeln!(w)?;
-    Ok(())
+    write_json_pretty(w, &output)
 }
