@@ -7,6 +7,8 @@ use std::path::Path;
 use slopguard_core::finding::{CacheStats, Finding, ScanResult};
 use slopguard_core::rule::{Category, Rule, Severity};
 
+use crate::output::plural;
+
 const RED: &str = "\x1b[1;31m";
 const YELLOW: &str = "\x1b[1;33m";
 const CYAN: &str = "\x1b[36m";
@@ -14,17 +16,17 @@ const CYAN_BOLD: &str = "\x1b[1;36m";
 const BOLD: &str = "\x1b[1m";
 const RESET: &str = "\x1b[0m";
 
-struct Colors {
-    red: &'static str,
-    yellow: &'static str,
-    cyan: &'static str,
-    cyan_bold: &'static str,
-    bold: &'static str,
-    reset: &'static str,
+pub(crate) struct Colors {
+    pub(crate) red: &'static str,
+    pub(crate) yellow: &'static str,
+    pub(crate) cyan: &'static str,
+    pub(crate) cyan_bold: &'static str,
+    pub(crate) bold: &'static str,
+    pub(crate) reset: &'static str,
 }
 
 impl Colors {
-    fn new(enabled: bool) -> Self {
+    pub(crate) fn new(enabled: bool) -> Self {
         if enabled {
             Self {
                 red: RED,
@@ -200,6 +202,12 @@ fn write_cache_line(w: &mut impl Write, files_scanned: usize, cs: &CacheStats) -
 
 pub fn format_text(result: &ScanResult, w: &mut impl Write, use_colors: bool) -> io::Result<()> {
     let c = Colors::new(use_colors);
+
+    if let (Some(base), Some(changed)) = (&result.stats.diff_base, result.stats.files_changed) {
+        writeln!(w, "Scanning {changed} changed files (base: {base})")?;
+        writeln!(w)?;
+    }
+
     let mut files_cache: BTreeMap<&Path, Vec<String>> = BTreeMap::new();
 
     for finding in &result.findings {
@@ -214,32 +222,16 @@ pub fn format_text(result: &ScanResult, w: &mut impl Write, use_colors: bool) ->
         write_finding(w, finding, &source_lines, &c)?;
     }
 
-    let errors_label = if result.stats.errors == 1 {
-        "error"
-    } else {
-        "errors"
-    };
-    let warnings_label = if result.stats.warnings == 1 {
-        "warning"
-    } else {
-        "warnings"
-    };
-    let files_label = if result.stats.files_scanned == 1 {
-        "file"
-    } else {
-        "files"
-    };
+    let errors_label = plural(result.stats.errors, "error", "errors");
+    let warnings_label = plural(result.stats.warnings, "warning", "warnings");
+    let files_label = plural(result.stats.files_scanned, "file", "files");
 
     if let Some(ref cs) = result.cache_stats {
         write_cache_line(w, result.stats.files_scanned, cs)?;
     }
 
     if result.stats.baseline_filtered > 0 {
-        let label = if result.stats.baseline_filtered == 1 {
-            "finding"
-        } else {
-            "findings"
-        };
+        let label = plural(result.stats.baseline_filtered, "finding", "findings");
         writeln!(
             w,
             "{n} {label} filtered by baseline",

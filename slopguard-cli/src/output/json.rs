@@ -5,22 +5,30 @@ use serde::Serialize;
 use slopguard_core::finding::{Finding, ScanResult};
 use slopguard_core::rule::{Category, Language, Rule, Severity};
 
+use crate::output::write_json_pretty;
+
 #[derive(Serialize)]
 struct JsonOutput<'a> {
     findings: &'a [Finding],
     /// Kept for backward compatibility with consumers written before `stats`.
     summary: &'a ScanSummary,
-    stats: &'a JsonStats,
+    stats: &'a JsonStats<'a>,
 }
 
 #[derive(Serialize)]
-struct JsonStats {
+struct JsonStats<'a> {
     errors: usize,
     warnings: usize,
     total: usize,
     files_scanned: usize,
     /// Always emitted, `0` when no baseline applies, so CI can rely on it.
     baseline_filtered: usize,
+    /// Present only in `--diff` mode: the ref the scan was diffed against.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    diff_base: Option<&'a str>,
+    /// Present only in `--diff` mode: how many changed files were selected.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    files_changed: Option<usize>,
 }
 
 #[derive(Serialize)]
@@ -67,9 +75,7 @@ pub fn format_explain_json(rule: &Rule, w: &mut impl Write) -> io::Result<()> {
         should_match: rule.tests.as_ref().map(|t| t.should_match.as_slice()),
         should_not_match: rule.tests.as_ref().map(|t| t.should_not_match.as_slice()),
     };
-    serde_json::to_writer_pretty(&mut *w, &output).map_err(io::Error::other)?;
-    writeln!(w)?;
-    Ok(())
+    write_json_pretty(w, &output)
 }
 
 pub fn format_json(result: &ScanResult, w: &mut impl Write) -> io::Result<()> {
@@ -84,13 +90,13 @@ pub fn format_json(result: &ScanResult, w: &mut impl Write) -> io::Result<()> {
         total: result.stats.total,
         files_scanned: result.stats.files_scanned,
         baseline_filtered: result.stats.baseline_filtered,
+        diff_base: result.stats.diff_base.as_deref(),
+        files_changed: result.stats.files_changed,
     };
     let output = JsonOutput {
         findings: &result.findings,
         summary: &summary,
         stats: &stats,
     };
-    serde_json::to_writer_pretty(&mut *w, &output).map_err(io::Error::other)?;
-    writeln!(w)?;
-    Ok(())
+    write_json_pretty(w, &output)
 }

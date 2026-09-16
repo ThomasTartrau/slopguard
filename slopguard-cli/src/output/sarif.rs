@@ -5,6 +5,8 @@ use serde::Serialize;
 use slopguard_core::finding::ScanResult;
 use slopguard_core::rule::Severity;
 
+use crate::output::write_json_pretty;
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SarifLog<'a> {
@@ -198,7 +200,5 @@ pub fn format_sarif(result: &ScanResult, w: &mut impl Write) -> io::Result<()> {
         }],
     };
 
-    serde_json::to_writer_pretty(&mut *w, &sarif).map_err(io::Error::other)?;
-    writeln!(w)?;
-    Ok(())
+    write_json_pretty(w, &sarif)
 }

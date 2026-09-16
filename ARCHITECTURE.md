@@ -31,7 +31,7 @@ slopguard/
 
 The binary crate. Responsible for:
 - CLI argument parsing via clap (derive API)
-- Subcommands: scan, init, test, list
+- Subcommands: scan, stats, baseline, explain, init, test, list
 - Output formatting (text with colors, JSON, SARIF)
 - Exit code logic (0 = clean, 1 = findings, 2 = config error)
 - Reading config from slopguard.toml (hierarchical: global + project)
@@ -47,6 +47,7 @@ The library crate. Responsible for:
 - Config parsing (slopguard.toml via serde + toml)
 - Finding representation (file, line, rule_id, severity, message, note)
 - Baseline hashing, persistence and filtering (baseline.rs)
+- Git diff resolution for `--diff` (git.rs)
 - Rule testing (should_match / should_not_match validation)
 - Ruleset management (slop, security, correctness)
 
@@ -195,12 +196,21 @@ error[no-unwrap-in-prod]: .unwrap() forbidden in production. Use ? or .expect('e
     }
   ],
   "summary": { "errors": 1, "warnings": 0, "total": 1 },
-  "stats": { "errors": 1, "warnings": 0, "total": 1, "files_scanned": 12, "baseline_filtered": 0 }
+  "stats": {
+    "errors": 1,
+    "warnings": 0,
+    "total": 1,
+    "files_scanned": 12,
+    "baseline_filtered": 0,
+    "diff_base": "main",
+    "files_changed": 3
+  }
 }
 ```
 
 `summary` is kept for backward compatibility; `stats` is the full set and the one
-to read in CI.
+to read in CI. `diff_base` and `files_changed` appear only in `--diff` mode; a
+normal scan omits them entirely.
 
 ### SARIF
 Standard SARIF 2.1.0 for GitHub Code Scanning / GitLab SAST integration.

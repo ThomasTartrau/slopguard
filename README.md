@@ -137,8 +137,12 @@ slopguard scan src/ --format json    # JSON output for CI
 slopguard scan --format sarif        # SARIF for GitLab/GitHub integration
 slopguard scan --severity-threshold error  # exit 0 on warnings-only
 slopguard scan --no-ai               # AST-only, skip AI rules (no LLM calls)
+slopguard stats .                    # distribution of findings by severity/category/language
+slopguard stats . --format json      # same data as structured JSON
 slopguard baseline .                 # capture current findings into .slopguard-baseline.json
 slopguard scan --no-baseline         # ignore the baseline, report everything
+slopguard scan --diff                 # only files changed vs HEAD (staged + unstaged)
+slopguard scan --diff --base main     # only files changed vs main (three-dot diff)
 slopguard list                       # show active rules (with ast/ai type)
 slopguard explain no-unwrap-in-prod  # rule details (prompt template for AI rules)
 slopguard test                       # validate all rule inline tests
@@ -324,6 +328,77 @@ The first form suppresses all rules for the next line. The second form suppresse
 
 ---
 
+## 📊 Stats
+
+`scan` tells you what every finding is. `stats` answers where they are: it runs
+the exact same pipeline, then prints the distribution instead of the findings.
+
+```bash
+slopguard stats .
+```
+
+```text
+42 findings in 128 files
+3 findings filtered by baseline
+
+severity  count
+--------  -----
+error        18
+warning      24
+
+category     count
+-----------  -----
+slop            12
+security         5
+correctness     25
+
+language    count
+----------  -----
+rust           40
+typescript      2
+
+rule                count
+------------------  -----
+no-unwrap-in-prod      18
+no-magic-number         9
+no-obvious-comment      7
+
+file                count
+------------------  -----
+src/api/handler.rs      9
+src/db/pool.rs          6
+```
+
+The top rules table is capped at 10 entries and the top files table at 5, both
+sorted by count and then by name so the output is stable between runs.
+
+`--format json` prints the same data as one object. Every key is always present,
+even at zero, so CI can index into it without guarding:
+
+```json
+{
+  "total": 42,
+  "files_scanned": 128,
+  "baseline_filtered": 3,
+  "by_severity": { "error": 18, "warning": 24 },
+  "by_category": { "slop": 12, "security": 5, "correctness": 25 },
+  "by_language": { "rust": 40, "typescript": 2 },
+  "top_rules": [{ "rule_id": "no-unwrap-in-prod", "count": 18 }],
+  "top_files": [{ "file": "src/api/handler.rs", "count": 9 }]
+}
+```
+
+`stats` accepts the same `--baseline`, `--no-baseline`, `--no-ai`, `--rule`,
+`--disable`, `--enable` and `--config` flags as `scan`. Unlike `scan` it always
+exits 0 when it ran, findings or not, so it can be piped into `jq` under
+`set -o pipefail`:
+
+```bash
+slopguard stats . --format json | jq '.by_category'
+```
+
+---
+
 ## 📊 Baseline
 
 Adopting slopguard on an existing codebase usually means hundreds of pre-existing
@@ -365,6 +440,70 @@ no longer match anything (the code was fixed) are ignored silently.
 Re-run `slopguard baseline .` to recapture, for instance after adding rules. The
 entries are sorted, so the git diff stays readable. Note that `baseline` runs the
 AI rules like `scan` does; use `--no-ai` to skip the LLM calls.
+
+---
+
+## 🔀 Diff Mode
+
+`slopguard scan --diff` narrows the scan to the files git reports as changed, so
+a merge request pipeline only pays for the code it touched.
+
+```bash
+slopguard scan --diff                  # staged + unstaged changes vs HEAD
+slopguard scan --diff --base main      # everything this branch adds on top of main
+slopguard scan src/ --diff             # changed files under src/ only
+```
+
+With `--base <ref>`, the comparison is a three-dot diff (`<ref>...HEAD`): only the
+commits the branch adds are considered, so a target branch that moved ahead does
+not resurface unrelated findings.
+
+What the file set contains:
+
+- Deleted files are skipped: there is nothing left to scan.
+- Renamed files are scanned under their new name.
+- Untracked files are not included. `git diff` does not see them, so `git add`
+  the new file to have it scanned.
+- Changed files are scanned even when hidden or gitignored, since git already
+  decided they matter. The `scan.ignores` globs from the config still apply.
+
+`--diff` requires a git repository: outside one, the scan exits with code 2 and an
+explicit error. The same happens for an unknown `--base` ref. A clean working tree
+is not an error: the scan reports zero changed files and exits 0.
+
+In diff mode the JSON output carries two extra fields in `stats`, absent from a
+normal scan:
+
+```json
+{
+  "stats": {
+    "errors": 1,
+    "warnings": 0,
+    "total": 1,
+    "files_scanned": 2,
+    "baseline_filtered": 0,
+    "diff_base": "main",
+    "files_changed": 3
+  }
+}
+```
+
+`files_changed` counts the files git reported; `files_scanned` counts the ones
+slopguard actually parsed (a changed `README.md` is in the first, not the second).
+
+Diff mode composes with every other flag: baseline filtering, `--format`,
+`--severity-threshold`, `--rule`, `--no-ai` and the cache all behave as usual. A
+partial scan never prunes cache entries for files it did not look at.
+
+GitLab CI, on merge requests only:
+
+```yaml
+slopguard:mr:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+  script:
+    - slopguard scan --diff --base "$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
+```
 
 ---
 
