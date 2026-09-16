@@ -1,0 +1,24 @@
+id: no-jwt-validation-disabled
+language: rust
+severity: error
+category: security
+message: "JWT validate_exp or validate_aud disabled. Tokens can be replayed after expiry or accepted for the wrong audience."
+note: "jsonwebtoken::Validation defaults both fields to true. Turning them off is the alg-confusion / missing-claims-validation pattern behind most JWT auth bypasses."
+fix: "Leave validate_exp and validate_aud at their default (true) unless you have a documented reason."
+rule:
+  kind: assignment_expression
+  regex: '\.(validate_exp|validate_aud)\s*=\s*false'
+ignores:
+  - "**/tests/**"
+  - "**/*_tests/**"
+  - "**/*_test/**"
+  - "**/test_*"
+  - "**/*_test.rs"
+skip_test_code: true
+tests:
+  should_match:
+    - 'validation.validate_exp = false;'
+    - 'jwt_validation.validate_aud = false;'
+  should_not_match:
+    - 'validation.validate_exp = true;'
+    - 'let validate_exp = false;'
