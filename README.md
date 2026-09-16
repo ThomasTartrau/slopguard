@@ -141,6 +141,8 @@ slopguard stats .                    # distribution of findings by severity/cate
 slopguard stats . --format json      # same data as structured JSON
 slopguard baseline .                 # capture current findings into .slopguard-baseline.json
 slopguard scan --no-baseline         # ignore the baseline, report everything
+slopguard scan --diff                 # only files changed vs HEAD (staged + unstaged)
+slopguard scan --diff --base main     # only files changed vs main (three-dot diff)
 slopguard list                       # show active rules (with ast/ai type)
 slopguard explain no-unwrap-in-prod  # rule details (prompt template for AI rules)
 slopguard test                       # validate all rule inline tests
@@ -423,6 +425,70 @@ no longer match anything (the code was fixed) are ignored silently.
 Re-run `slopguard baseline .` to recapture, for instance after adding rules. The
 entries are sorted, so the git diff stays readable. Note that `baseline` runs the
 AI rules like `scan` does; use `--no-ai` to skip the LLM calls.
+
+---
+
+## 🔀 Diff Mode
+
+`slopguard scan --diff` narrows the scan to the files git reports as changed, so
+a merge request pipeline only pays for the code it touched.
+
+```bash
+slopguard scan --diff                  # staged + unstaged changes vs HEAD
+slopguard scan --diff --base main      # everything this branch adds on top of main
+slopguard scan src/ --diff             # changed files under src/ only
+```
+
+With `--base <ref>`, the comparison is a three-dot diff (`<ref>...HEAD`): only the
+commits the branch adds are considered, so a target branch that moved ahead does
+not resurface unrelated findings.
+
+What the file set contains:
+
+- Deleted files are skipped: there is nothing left to scan.
+- Renamed files are scanned under their new name.
+- Untracked files are not included. `git diff` does not see them, so `git add`
+  the new file to have it scanned.
+- Changed files are scanned even when hidden or gitignored, since git already
+  decided they matter. The `scan.ignores` globs from the config still apply.
+
+`--diff` requires a git repository: outside one, the scan exits with code 2 and an
+explicit error. The same happens for an unknown `--base` ref. A clean working tree
+is not an error: the scan reports zero changed files and exits 0.
+
+In diff mode the JSON output carries two extra fields in `stats`, absent from a
+normal scan:
+
+```json
+{
+  "stats": {
+    "errors": 1,
+    "warnings": 0,
+    "total": 1,
+    "files_scanned": 2,
+    "baseline_filtered": 0,
+    "diff_base": "main",
+    "files_changed": 3
+  }
+}
+```
+
+`files_changed` counts the files git reported; `files_scanned` counts the ones
+slopguard actually parsed (a changed `README.md` is in the first, not the second).
+
+Diff mode composes with every other flag: baseline filtering, `--format`,
+`--severity-threshold`, `--rule`, `--no-ai` and the cache all behave as usual. A
+partial scan never prunes cache entries for files it did not look at.
+
+GitLab CI, on merge requests only:
+
+```yaml
+slopguard:mr:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+  script:
+    - slopguard scan --diff --base "$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
+```
 
 ---
 

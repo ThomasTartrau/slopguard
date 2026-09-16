@@ -190,6 +190,8 @@ pub fn run_stats(opts: StatsOpts) -> Result<(), AppError> {
         no_cache,
         cache_dir,
         no_ai,
+        diff: false,
+        diff_base: None,
     })?;
 
     apply_baseline(&mut result, no_baseline, baseline_path)?;
@@ -258,6 +260,8 @@ mod tests {
                 total: errors + warnings,
                 files_scanned: 3,
                 baseline_filtered: 0,
+                diff_base: None,
+                files_changed: None,
             },
             cache_stats: None,
         }

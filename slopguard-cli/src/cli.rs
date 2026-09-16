@@ -95,6 +95,14 @@ pub enum Command {
         /// Path to a specific baseline file
         #[arg(long = "baseline", value_name = "PATH")]
         baseline_path: Option<PathBuf>,
+
+        /// Only scan files changed in git (staged and unstaged, or against --base)
+        #[arg(long)]
+        diff: bool,
+
+        /// Git ref to diff against (implies a three-dot diff: <ref>...HEAD)
+        #[arg(long, value_name = "REF", requires = "diff")]
+        base: Option<String>,
     },
     /// Show a summary of findings instead of listing them
     Stats {
@@ -375,6 +383,27 @@ mod tests {
             result.is_err(),
             "--no-baseline and --baseline should conflict"
         );
+    }
+
+    #[test]
+    fn cli_parses_scan_with_diff() {
+        Cli::command()
+            .try_get_matches_from(["slopguard", "scan", "--diff", "."])
+            .expect("scan with --diff should parse");
+    }
+
+    #[test]
+    fn cli_parses_scan_with_diff_and_base() {
+        Cli::command()
+            .try_get_matches_from(["slopguard", "scan", "--diff", "--base", "main", "."])
+            .expect("scan with --diff --base should parse");
+    }
+
+    #[test]
+    fn cli_rejects_base_without_diff() {
+        let result =
+            Cli::command().try_get_matches_from(["slopguard", "scan", "--base", "main", "."]);
+        assert!(result.is_err(), "--base should require --diff");
     }
 
     #[test]
