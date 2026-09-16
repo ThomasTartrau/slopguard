@@ -3,6 +3,7 @@
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand, ValueEnum};
+use slopguard_core::preset::{parse_preset, Preset};
 
 #[derive(Parser)]
 #[command(
@@ -193,6 +194,10 @@ pub enum Command {
         /// Overwrite existing slopguard.toml
         #[arg(long)]
         force: bool,
+
+        /// Config preset to generate. Pass --preset with no value to list the presets.
+        #[arg(long, value_name = "NAME", num_args = 0..=1, value_parser = parse_preset)]
+        preset: Option<Option<Preset>>,
     },
     /// Validate inline tests for all rules
     Test {
@@ -285,6 +290,34 @@ mod tests {
         Cli::command()
             .try_get_matches_from(["slopguard", "init"])
             .expect("init subcommand should parse");
+    }
+
+    #[test]
+    fn cli_parses_init_with_preset() {
+        Cli::command()
+            .try_get_matches_from(["slopguard", "init", "--preset", "strict"])
+            .expect("init with --preset strict should parse");
+    }
+
+    #[test]
+    fn cli_parses_init_with_bare_preset() {
+        Cli::command()
+            .try_get_matches_from(["slopguard", "init", "--preset"])
+            .expect("init with a valueless --preset should parse");
+    }
+
+    #[test]
+    fn cli_parses_init_with_preset_and_force() {
+        Cli::command()
+            .try_get_matches_from(["slopguard", "init", "--preset", "relaxed", "--force"])
+            .expect("init with --preset and --force should parse");
+    }
+
+    #[test]
+    fn cli_rejects_unknown_preset() {
+        let result =
+            Cli::command().try_get_matches_from(["slopguard", "init", "--preset", "bogus"]);
+        assert!(result.is_err(), "unknown preset should be rejected");
     }
 
     #[test]

@@ -146,6 +146,14 @@ pub struct Rule {
     pub ai_check: Option<AiCheck>,
 }
 
+impl Rule {
+    /// The rule's category, resolving an unset category to the default
+    /// (`Correctness`), the way the scanner treats it.
+    pub fn effective_category(&self) -> Category {
+        self.category.clone().unwrap_or_default()
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum RuleError {
     #[error("failed to parse rule YAML: {0}")]
@@ -254,7 +262,7 @@ pub fn is_rule_active(rule: &Rule, config: &crate::config::Config) -> bool {
     if listed(&config.rules.enable) {
         return true;
     }
-    let ruleset_on = match rule.category.as_ref().unwrap_or(&Category::Correctness) {
+    let ruleset_on = match rule.effective_category() {
         Category::Slop => config.rulesets.slop,
         Category::Security => config.rulesets.security,
         Category::Correctness => config.rulesets.correctness,

@@ -4,6 +4,7 @@ pub mod config;
 pub mod disable;
 pub mod finding;
 pub mod git;
+pub mod preset;
 pub mod rule;
 pub mod scanner;
 pub mod test_filter;

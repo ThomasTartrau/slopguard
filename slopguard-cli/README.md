@@ -28,6 +28,13 @@ cargo install slopguard-cli
 | `--config <path>` | Path to a slopguard.toml config file |
 | `--no-colors` | Disable colored output |
 
+## Init Options
+
+| Flag | Description |
+|------|-------------|
+| `--force` | Overwrite an existing `slopguard.toml` |
+| `--preset <default\|strict\|relaxed\|ai>` | Config preset to generate. Pass `--preset` with no value to list the presets |
+
 ## Exit Codes
 
 | Code | Meaning |
@@ -53,6 +60,9 @@ slopguard scan --format sarif
 
 # Only fail on errors, not warnings
 slopguard scan --severity-threshold error
+
+# Generate a config that only reports security and correctness errors
+slopguard init --preset relaxed
 ```
 
 ## License
