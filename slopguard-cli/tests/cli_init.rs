@@ -250,14 +250,24 @@ fn relaxed_config_silences_slop_findings() {
     write(dir.path().join("bad.rs"), source).unwrap();
 
     let output = slopguard()
-        .args(["scan", ".", "--config", "slopguard.toml", "--format", "json", "--no-cache"])
+        .args([
+            "scan",
+            ".",
+            "--config",
+            "slopguard.toml",
+            "--format",
+            "json",
+            "--no-cache",
+        ])
         .current_dir(dir.path())
         .output()
         .unwrap();
 
     let json: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("output should be valid JSON");
-    let findings = json["findings"].as_array().expect("findings should be an array");
+    let findings = json["findings"]
+        .as_array()
+        .expect("findings should be an array");
 
     assert!(
         findings.iter().any(|f| f["rule_id"] == "no-unwrap-in-prod"),

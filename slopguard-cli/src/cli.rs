@@ -3,6 +3,7 @@
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand, ValueEnum};
+use slopguard_core::preset::{parse_preset, Preset};
 
 #[derive(Parser)]
 #[command(
@@ -38,15 +39,6 @@ pub enum CategoryFilter {
 pub enum LanguageFilter {
     Rust,
     Typescript,
-}
-
-/// Config preset selected by `slopguard init --preset <name>`.
-#[derive(Clone, Copy, ValueEnum)]
-pub enum PresetArg {
-    Default,
-    Strict,
-    Relaxed,
-    Ai,
 }
 
 #[derive(Subcommand)]
@@ -204,8 +196,8 @@ pub enum Command {
         force: bool,
 
         /// Config preset to generate. Pass --preset with no value to list the presets.
-        #[arg(long, value_name = "NAME", num_args = 0..=1)]
-        preset: Option<Option<PresetArg>>,
+        #[arg(long, value_name = "NAME", num_args = 0..=1, value_parser = parse_preset)]
+        preset: Option<Option<Preset>>,
     },
     /// Validate inline tests for all rules
     Test {

@@ -31,9 +31,7 @@ use slopguard_core::scanner::{
 use slopguard_core::testing::{self, RuleTestStatus, TestError, TestFailureKind};
 
 use crate::baseline_cmd::{apply_baseline, run_baseline, BaselineOpts};
-use crate::cli::{
-    CategoryFilter, Cli, Command, Format, LanguageFilter, PresetArg, SeverityThreshold,
-};
+use crate::cli::{CategoryFilter, Cli, Command, Format, LanguageFilter, SeverityThreshold};
 use crate::output::{json, sarif, text};
 use crate::stats_cmd::{run_stats, StatsOpts};
 
@@ -624,24 +622,13 @@ fn run_list(
     Ok(())
 }
 
-/// Map the CLI value enum onto the core preset. The two are kept separate so
-/// `slopguard-core` stays free of clap.
-fn core_preset(arg: PresetArg) -> Preset {
-    match arg {
-        PresetArg::Default => Preset::Default,
-        PresetArg::Strict => Preset::Strict,
-        PresetArg::Relaxed => Preset::Relaxed,
-        PresetArg::Ai => Preset::Ai,
-    }
-}
-
-fn run_init(force: bool, preset: Option<Option<PresetArg>>) -> Result<(), AppError> {
+fn run_init(force: bool, preset: Option<Option<Preset>>) -> Result<(), AppError> {
     // `--preset` with no value lists the presets and writes nothing.
     if matches!(preset, Some(None)) {
         print!("{}", presets_help());
         return Ok(());
     }
-    let preset = preset.flatten().map(core_preset).unwrap_or_default();
+    let preset = preset.flatten().unwrap_or_default();
 
     let config_path = Path::new("slopguard.toml");
     if config_path.exists() && !force {

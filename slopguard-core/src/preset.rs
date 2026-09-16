@@ -4,9 +4,11 @@
 //! from the builtin ruleset at render time, so a preset can never name a rule
 //! that no longer ships.
 
+use std::collections::HashSet;
+
 use strum::{Display, EnumIter, EnumString, IntoEnumIterator};
 
-use crate::rule::{load_builtin_rules, Category, Rule, RuleError, Severity};
+use crate::rule::{load_builtin_rules, Category, RuleError, Severity};
 
 /// A named starting configuration for a project.
 #[derive(Debug, Display, EnumString, EnumIter, Default, Clone, Copy, PartialEq, Eq)]
@@ -23,14 +25,16 @@ pub enum Preset {
     Ai,
 }
 
-/// The `[rulesets]`, `[rules]`, `[scan]` and `[output]` sections shared by the
-/// `default` and `ai` presets.
-const COMMON_BODY: &str = r#"[rulesets]
-slop = true
-security = true
-correctness = true
+/// `[rulesets]` with every ruleset on. Shared by the `default`, `ai` and
+/// `strict` presets.
+const RULESETS_ALL_ON: &str = "[rulesets]\nslop = true\nsecurity = true\ncorrectness = true\n";
 
-[rules]
+/// The `[output]` block. Identical in every preset.
+const OUTPUT_BLOCK: &str = "[output]\nformat = \"text\"\ncolors = true\n";
+
+/// The `[rules]` and `[scan]` sections of the `default` and `ai` presets:
+/// opt-in rules off, nothing disabled, the standard scan comments.
+const DEFAULT_RULES_AND_SCAN: &str = r#"[rules]
 disable = []
 # Opt-in rules (disabled by default): pub-fn-needs-tracing, test-needs-timeout
 enable = []
@@ -39,11 +43,13 @@ enable = []
 [scan]
 ignores = []
 # cache_dir = ".slopguard-cache"
-
-[output]
-format = "text"
-colors = true
 "#;
+
+/// The `[rulesets]`, `[rules]`, `[scan]` and `[output]` sections shared by the
+/// `default` and `ai` presets.
+fn common_body() -> String {
+    format!("{RULESETS_ALL_ON}\n{DEFAULT_RULES_AND_SCAN}\n{OUTPUT_BLOCK}")
+}
 
 /// The commented-out `[ai]` block shipped by every preset that leaves AI off.
 const COMMENTED_AI_BODY: &str = r#"
@@ -118,12 +124,6 @@ fn toml_array(name: &str, ids: &[String]) -> String {
     out
 }
 
-/// A rule with no explicit category is treated as correctness, the same way
-/// the scanner resolves it.
-fn is_correctness(rule: &Rule) -> bool {
-    matches!(rule.category, None | Some(Category::Correctness))
-}
-
 /// Ids of builtin rules that are opt-in (`enabled: false` in their YAML).
 /// Sorted and deduped: the same id can exist for both Rust and TypeScript.
 fn opt_in_rule_ids() -> Result<Vec<String>, RuleError> {
@@ -142,13 +142,18 @@ fn opt_in_rule_ids() -> Result<Vec<String>, RuleError> {
 /// relaxed preset never silences a correctness error.
 fn correctness_warning_rule_ids() -> Result<Vec<String>, RuleError> {
     let rules = load_builtin_rules()?;
+    let error_ids: HashSet<&str> = rules
+        .iter()
+        .filter(|r| r.severity == Severity::Error)
+        .map(|r| r.id.as_str())
+        .collect();
     let mut ids: Vec<String> = rules
         .iter()
-        .filter(|r| r.enabled && is_correctness(r) && r.severity == Severity::Warning)
         .filter(|r| {
-            !rules
-                .iter()
-                .any(|other| other.id == r.id && other.severity == Severity::Error)
+            r.enabled
+                && r.effective_category() == Category::Correctness
+                && r.severity == Severity::Warning
+                && !error_ids.contains(r.id.as_str())
         })
         .map(|r| r.id.to_string())
         .collect();
@@ -158,25 +163,28 @@ fn correctness_warning_rule_ids() -> Result<Vec<String>, RuleError> {
 }
 
 fn render_default() -> String {
-    format!("{}{COMMON_BODY}{COMMENTED_AI_BODY}", header(Preset::Default))
+    format!(
+        "{}{}{COMMENTED_AI_BODY}",
+        header(Preset::Default),
+        common_body()
+    )
 }
 
 fn render_ai() -> String {
-    format!("{}{COMMON_BODY}{LIVE_AI_BODY}", header(Preset::Ai))
+    format!("{}{}{LIVE_AI_BODY}", header(Preset::Ai), common_body())
 }
 
 fn render_strict() -> Result<String, RuleError> {
     let mut out = header(Preset::Strict);
+    out.push_str(RULESETS_ALL_ON);
     out.push_str(
-        "[rulesets]\nslop = true\nsecurity = true\ncorrectness = true\n\n\
-         [rules]\ndisable = []\n# Opt-in rules, all switched on by the strict preset.\n",
+        "\n[rules]\ndisable = []\n# Opt-in rules, all switched on by the strict preset.\n",
     );
     out.push_str(&toml_array("enable", &opt_in_rule_ids()?));
+    out.push_str("# custom_dirs = [\"./my-rules\"]\n\n[scan]\nignores = []\n\n");
+    out.push_str(OUTPUT_BLOCK);
     out.push_str(
-        "# custom_dirs = [\"./my-rules\"]\n\n\
-         [scan]\nignores = []\n\n\
-         [output]\nformat = \"text\"\ncolors = true\n\n\
-         # Severity threshold is a scan flag, not a config key. Strict keeps the\n\
+        "\n# Severity threshold is a scan flag, not a config key. Strict keeps the\n\
          # default (warning), so any finding fails the run:\n\
          #   slopguard scan --severity-threshold warning\n",
     );
@@ -192,17 +200,30 @@ fn render_relaxed() -> Result<String, RuleError> {
          security rules fire.\n",
     );
     out.push_str(&toml_array("disable", &correctness_warning_rule_ids()?));
-    out.push_str(
-        "enable = []\n# custom_dirs = [\"./my-rules\"]\n\n\
-         [scan]\nignores = []\n\n\
-         [output]\nformat = \"text\"\ncolors = true\n",
-    );
+    out.push_str("enable = []\n# custom_dirs = [\"./my-rules\"]\n\n[scan]\nignores = []\n\n");
+    out.push_str(OUTPUT_BLOCK);
     Ok(out)
+}
+
+/// Parse a preset name (the `--preset <name>` value), returning an error
+/// message that lists the valid names. Keeps the name list on the core enum
+/// so the CLI never maintains its own copy.
+pub fn parse_preset(value: &str) -> Result<Preset, String> {
+    value.parse().map_err(|_| {
+        let names: Vec<String> = Preset::iter().map(|p| p.to_string()).collect();
+        format!(
+            "unknown preset '{value}' (expected one of: {})",
+            names.join(", ")
+        )
+    })
 }
 
 /// The preset listing printed by `slopguard init --preset` with no value.
 pub fn presets_help() -> String {
-    let name_w = Preset::iter().map(|p| p.to_string().len()).max().unwrap_or(7);
+    let name_w = Preset::iter()
+        .map(|p| p.to_string().len())
+        .max()
+        .unwrap_or(7);
     let mut out = String::from("Available presets:\n\n");
     for preset in Preset::iter() {
         let name = preset.to_string();
@@ -217,7 +238,7 @@ mod tests {
     use super::*;
 
     use crate::config::{AiTransport, AiVendor, Config};
-    use crate::rule::is_rule_active;
+    use crate::rule::{is_rule_active, Rule};
 
     fn parse(preset: Preset) -> Config {
         let rendered = preset.render().unwrap();
@@ -290,7 +311,10 @@ mod tests {
     #[test]
     fn relaxed_keeps_correctness_errors_active() {
         let config = parse(Preset::Relaxed);
-        assert!(!is_rule_active(&rule_with_id("no-swallowed-error"), &config));
+        assert!(!is_rule_active(
+            &rule_with_id("no-swallowed-error"),
+            &config
+        ));
         assert!(is_rule_active(&rule_with_id("no-unwrap-in-prod"), &config));
     }
 
