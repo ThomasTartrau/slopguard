@@ -215,38 +215,64 @@ fn scan_file(path: &Path, lang: SupportLang, rules: &CompiledRules) -> Vec<Findi
     filter_disabled(findings, &source)
 }
 
-/// Scan the given paths for rule violations.
-pub fn scan(paths: &[PathBuf], rules: &[Rule], config: &Config) -> Result<ScanResult, ScanError> {
-    let compiled = compile_rules(rules)?;
-    let ignores = build_glob_set(&config.scan.ignores)?;
-
-    let files: Vec<(PathBuf, SupportLang)> = paths
+/// Walk `paths` (gitignore-aware) and keep the source files slopguard can parse.
+fn walk_files(paths: &[PathBuf], ignores: &GlobSet) -> Vec<(PathBuf, SupportLang)> {
+    paths
         .iter()
         .flat_map(|path| WalkBuilder::new(path).build().flatten())
         .filter(|entry| entry.file_type().is_some_and(|t| t.is_file()))
         .map(|entry| entry.into_path())
         .filter(|path| !ignores.is_match(path))
         .filter_map(|path| extension_to_lang(&path).map(|lang| (path, lang)))
-        .collect();
+        .collect()
+}
 
-    let mut findings: Vec<Finding> = files
-        .par_iter()
-        .flat_map_iter(|(path, lang)| scan_file(path, *lang, &compiled))
-        .collect();
+/// Keep the given files as-is (no directory walk), dropping the ones that are
+/// ignored by config or written in an unsupported language.
+///
+/// Deliberately not gitignore-aware: a file git reports as changed must be
+/// scanned even when it lives under a hidden or ignored directory.
+fn explicit_files(files: &[PathBuf], ignores: &GlobSet) -> Vec<(PathBuf, SupportLang)> {
+    files
+        .iter()
+        .filter(|path| path.is_file())
+        .filter(|path| !ignores.is_match(path))
+        .filter_map(|path| extension_to_lang(path).map(|lang| (path.clone(), lang)))
+        .collect()
+}
+
+/// Count errors and warnings in one pass.
+pub fn count_severities(findings: &[Finding]) -> (usize, usize) {
+    let mut errors = 0;
+    let mut warnings = 0;
+    for finding in findings {
+        match finding.severity {
+            Severity::Error => errors += 1,
+            Severity::Warning => warnings += 1,
+        }
+    }
+    (errors, warnings)
+}
+
+/// Sort findings by location and drop duplicates from overlapping rules.
+fn normalize_findings(findings: &mut Vec<Finding>) {
     findings.sort_by(|a, b| (&a.file, a.line, a.column).cmp(&(&b.file, b.line, b.column)));
     findings.dedup_by(|a, b| {
         a.rule_id == b.rule_id && a.file == b.file && a.line == b.line && a.column == b.column
     });
+}
 
-    let (errors, warnings) =
-        findings
-            .iter()
-            .fold((0, 0), |(errors, warnings), f| match f.severity {
-                Severity::Error => (errors + 1, warnings),
-                Severity::Warning => (errors, warnings + 1),
-            });
+/// Scan an already-collected file list without touching the cache.
+fn scan_collected(files: Vec<(PathBuf, SupportLang)>, compiled: &CompiledRules) -> ScanResult {
+    let mut findings: Vec<Finding> = files
+        .par_iter()
+        .flat_map_iter(|(path, lang)| scan_file(path, *lang, compiled))
+        .collect();
+    normalize_findings(&mut findings);
 
-    Ok(ScanResult {
+    let (errors, warnings) = count_severities(&findings);
+
+    ScanResult {
         findings,
         stats: ScanStats {
             errors,
@@ -254,37 +280,26 @@ pub fn scan(paths: &[PathBuf], rules: &[Rule], config: &Config) -> Result<ScanRe
             total: errors + warnings,
             files_scanned: files.len(),
             baseline_filtered: 0,
+            diff_base: None,
+            files_changed: None,
         },
         cache_stats: None,
-    })
+    }
 }
 
-/// Scan with file-level caching. Files whose content hash matches a cached
-/// entry (and whose rules have not changed) return cached findings without
-/// reparsing.
+/// Scan an already-collected file list, reusing cached findings for files
+/// whose content hash is unchanged.
 ///
-/// `cache_dir` is the directory where cache files are stored. When a custom
-/// cache directory is specified (via `--cache-dir`, `SLOPGUARD_CACHE_DIR`,
-/// or `scan.cache_dir` in config), pass it directly. Otherwise pass the
-/// project root and use `CacheStore::new` which appends `.slopguard-cache`.
-pub fn scan_cached(
-    paths: &[PathBuf],
+/// `prune` drops cache entries that no longer correspond to a scanned file. A
+/// partial scan must pass `false`: it never saw the other files, so their
+/// entries are still valid.
+fn scan_collected_cached(
+    files: Vec<(PathBuf, SupportLang)>,
+    compiled: &CompiledRules,
     rules: &[Rule],
-    config: &Config,
     cache_dir: &Path,
-) -> Result<ScanResult, ScanError> {
-    let compiled = compile_rules(rules)?;
-    let ignores = build_glob_set(&config.scan.ignores)?;
-
-    let files: Vec<(PathBuf, SupportLang)> = paths
-        .iter()
-        .flat_map(|path| WalkBuilder::new(path).build().flatten())
-        .filter(|entry| entry.file_type().is_some_and(|t| t.is_file()))
-        .map(|entry| entry.into_path())
-        .filter(|path| !ignores.is_match(path))
-        .filter_map(|path| extension_to_lang(&path).map(|lang| (path, lang)))
-        .collect();
-
+    prune: bool,
+) -> ScanResult {
     let store = CacheStore::with_dir(cache_dir.to_path_buf());
     let current_rules_hash = rules_hash(rules);
     let rules_changed = store
@@ -331,7 +346,7 @@ pub fn scan_cached(
     let scanned_findings: Vec<(String, Vec<Finding>)> = to_scan
         .par_iter()
         .map(|work| {
-            let findings = scan_file(&work.path, work.lang, &compiled);
+            let findings = scan_file(&work.path, work.lang, compiled);
             (work.hash.clone(), findings)
         })
         .collect();
@@ -341,25 +356,19 @@ pub fn scan_cached(
         all_findings.extend(findings);
     }
 
-    let current_hashes: Vec<String> = file_contents.iter().map(|(_, _, _, h)| h.clone()).collect();
-    store.cleanup(&current_hashes).ok();
+    if prune {
+        let current_hashes: Vec<String> =
+            file_contents.iter().map(|(_, _, _, h)| h.clone()).collect();
+        store.cleanup(&current_hashes).ok();
+    }
 
-    all_findings.sort_by(|a, b| (&a.file, a.line, a.column).cmp(&(&b.file, b.line, b.column)));
-    all_findings.dedup_by(|a, b| {
-        a.rule_id == b.rule_id && a.file == b.file && a.line == b.line && a.column == b.column
-    });
+    normalize_findings(&mut all_findings);
 
-    let (errors, warnings) =
-        all_findings
-            .iter()
-            .fold((0, 0), |(errors, warnings), f| match f.severity {
-                Severity::Error => (errors + 1, warnings),
-                Severity::Warning => (errors, warnings + 1),
-            });
+    let (errors, warnings) = count_severities(&all_findings);
 
     let files_scanned = cached_count + changed_count;
 
-    Ok(ScanResult {
+    ScanResult {
         findings: all_findings,
         stats: ScanStats {
             errors,
@@ -367,12 +376,79 @@ pub fn scan_cached(
             total: errors + warnings,
             files_scanned,
             baseline_filtered: 0,
+            diff_base: None,
+            files_changed: None,
         },
         cache_stats: Some(CacheStats {
             cached: cached_count,
             changed: changed_count,
         }),
-    })
+    }
+}
+
+/// Scan the given paths for rule violations.
+pub fn scan(paths: &[PathBuf], rules: &[Rule], config: &Config) -> Result<ScanResult, ScanError> {
+    let compiled = compile_rules(rules)?;
+    let ignores = build_glob_set(&config.scan.ignores)?;
+    Ok(scan_collected(walk_files(paths, &ignores), &compiled))
+}
+
+/// Scan with file-level caching. Files whose content hash matches a cached
+/// entry (and whose rules have not changed) return cached findings without
+/// reparsing.
+///
+/// `cache_dir` is the directory where cache files are stored. When a custom
+/// cache directory is specified (via `--cache-dir`, `SLOPGUARD_CACHE_DIR`,
+/// or `scan.cache_dir` in config), pass it directly. Otherwise pass the
+/// project root and use `CacheStore::new` which appends `.slopguard-cache`.
+pub fn scan_cached(
+    paths: &[PathBuf],
+    rules: &[Rule],
+    config: &Config,
+    cache_dir: &Path,
+) -> Result<ScanResult, ScanError> {
+    let compiled = compile_rules(rules)?;
+    let ignores = build_glob_set(&config.scan.ignores)?;
+    Ok(scan_collected_cached(
+        walk_files(paths, &ignores),
+        &compiled,
+        rules,
+        cache_dir,
+        true,
+    ))
+}
+
+/// Scan an explicit list of files instead of walking directories.
+///
+/// Used by `--diff`, where git already produced the exact file set. Paths that
+/// no longer exist or that slopguard cannot parse are silently skipped.
+pub fn scan_files(
+    files: &[PathBuf],
+    rules: &[Rule],
+    config: &Config,
+) -> Result<ScanResult, ScanError> {
+    let compiled = compile_rules(rules)?;
+    let ignores = build_glob_set(&config.scan.ignores)?;
+    Ok(scan_collected(explicit_files(files, &ignores), &compiled))
+}
+
+/// Cached variant of [`scan_files`]. Cache pruning is skipped: a partial scan
+/// must not evict the entries of files it did not look at.
+pub fn scan_files_cached(
+    files: &[PathBuf],
+    rules: &[Rule],
+    config: &Config,
+    cache_dir: &Path,
+) -> Result<ScanResult, ScanError> {
+    let compiled = compile_rules(rules)?;
+    let ignores = build_glob_set(&config.scan.ignores)?;
+    Ok(scan_collected_cached(
+        explicit_files(files, &ignores),
+        &compiled,
+        rules,
+        cache_dir,
+        false,
+    ))
 }
 
 #[cfg(test)]
@@ -786,6 +862,81 @@ skip_test_code: true
         );
         let compiled = compile_rules(&rules).expect("all builtin rules should compile");
         assert_eq!(compiled.by_id.len(), rules.len());
+    }
+
+    #[test]
+    fn scan_files_only_scans_given_files() {
+        let dir = tempdir().unwrap();
+        let a = dir.path().join("a.rs");
+        let b = dir.path().join("b.rs");
+        write(&a, "fn a() {\n    foo().unwrap();\n}\n").unwrap();
+        write(&b, "fn b() {\n    bar().unwrap();\n}\n").unwrap();
+
+        let result = scan_files(&[a], &[unwrap_rule()], &Config::default()).unwrap();
+        assert_eq!(result.findings.len(), 1);
+        assert_eq!(result.stats.files_scanned, 1);
+        assert!(result.findings[0].file.to_string_lossy().contains("a.rs"));
+    }
+
+    #[test]
+    fn scan_files_skips_unsupported_language() {
+        let dir = tempdir().unwrap();
+        let py = dir.path().join("script.py");
+        write(&py, "x.unwrap()\n").unwrap();
+
+        let result = scan_files(&[py], &[unwrap_rule()], &Config::default()).unwrap();
+        assert_eq!(result.findings.len(), 0);
+        assert_eq!(result.stats.files_scanned, 0);
+    }
+
+    #[test]
+    fn scan_files_skips_missing_file() {
+        let dir = tempdir().unwrap();
+        let missing = dir.path().join("gone.rs");
+
+        let result = scan_files(&[missing], &[unwrap_rule()], &Config::default()).unwrap();
+        assert_eq!(result.findings.len(), 0);
+        assert_eq!(result.stats.files_scanned, 0);
+    }
+
+    #[test]
+    fn scan_files_respects_config_ignores() {
+        let dir = tempdir().unwrap();
+        let gen = dir.path().join("generated");
+        create_dir(&gen).unwrap();
+        let out = gen.join("out.rs");
+        write(&out, "fn g() { foo().unwrap(); }\n").unwrap();
+
+        let mut cfg = Config::default();
+        cfg.scan.ignores = vec!["**/generated/**".to_string()];
+        let result = scan_files(&[out], &[unwrap_rule()], &cfg).unwrap();
+        assert_eq!(result.findings.len(), 0);
+        assert_eq!(result.stats.files_scanned, 0);
+    }
+
+    #[test]
+    fn scan_files_cached_keeps_other_entries() {
+        let src_dir = tempdir().unwrap();
+        let cache_dir = tempdir().unwrap();
+        let cache_path = cache_dir.path().join("cache");
+        let a = src_dir.path().join("a.rs");
+        let b = src_dir.path().join("b.rs");
+        write(&a, "fn a() {\n    foo().unwrap();\n}\n").unwrap();
+        write(&b, "fn b() {\n    bar().unwrap();\n}\n").unwrap();
+
+        let rules = [unwrap_rule()];
+        let config = Config::default();
+        let paths = [src_dir.path().to_path_buf()];
+
+        scan_cached(&paths, &rules, &config, &cache_path).unwrap();
+
+        // A partial scan must not evict the entry of the file it skipped.
+        scan_files_cached(&[a], &rules, &config, &cache_path).unwrap();
+
+        let result = scan_cached(&paths, &rules, &config, &cache_path).unwrap();
+        let stats = result.cache_stats.as_ref().unwrap();
+        assert_eq!(stats.cached, 2, "a partial scan must not prune");
+        assert_eq!(stats.changed, 0);
     }
 
     #[test]
