@@ -1,3 +1,5 @@
+mod baseline_cmd;
+mod cli;
 mod output;
 
 use std::cmp::Ordering;
@@ -8,11 +10,12 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::Parser;
 use strsim::normalized_levenshtein;
 use thiserror::Error;
 
 use slopguard_ai::{build_provider, run_ai_pass, AiCache, AiCandidate, DEFAULT_MODEL};
+use slopguard_core::baseline::BaselineError;
 use slopguard_core::config::{load_config, load_config_file, Config, ConfigError, OutputFormat};
 use slopguard_core::finding::{Finding, ScanResult, ScanStats};
 use slopguard_core::rule::{
@@ -22,136 +25,9 @@ use slopguard_core::rule::{
 use slopguard_core::scanner::{scan, scan_cached, ScanError};
 use slopguard_core::testing::{self, RuleTestStatus, TestError, TestFailureKind};
 
+use crate::baseline_cmd::{apply_baseline, run_baseline, BaselineOpts};
+use crate::cli::{CategoryFilter, Cli, Command, Format, LanguageFilter, SeverityThreshold};
 use crate::output::{json, sarif, text};
-
-#[derive(Parser)]
-#[command(
-    name = "slopguard",
-    about = "Catch AI-generated code patterns and common issues"
-)]
-struct Cli {
-    #[command(subcommand)]
-    command: Command,
-}
-
-#[derive(Clone, ValueEnum)]
-enum Format {
-    Text,
-    Json,
-    Sarif,
-}
-
-#[derive(Clone, ValueEnum)]
-enum SeverityThreshold {
-    Error,
-    Warning,
-}
-
-#[derive(Clone, ValueEnum)]
-enum CategoryFilter {
-    Slop,
-    Security,
-    Correctness,
-}
-
-#[derive(Clone, ValueEnum)]
-enum LanguageFilter {
-    Rust,
-    Typescript,
-}
-
-#[derive(Subcommand)]
-enum Command {
-    /// Scan files for findings
-    Scan {
-        /// Paths to scan (defaults to current directory)
-        #[arg(default_value = ".")]
-        paths: Vec<PathBuf>,
-
-        /// Output format
-        #[arg(long)]
-        format: Option<Format>,
-
-        /// Only exit non-zero for findings at or above this severity
-        #[arg(long, default_value = "warning")]
-        severity_threshold: SeverityThreshold,
-
-        /// Path to a specific slopguard.toml config file
-        #[arg(long)]
-        config: Option<PathBuf>,
-
-        /// Disable colored output
-        #[arg(long)]
-        no_colors: bool,
-
-        /// Disable specific rules (overrides config, repeatable)
-        #[arg(long = "disable", value_name = "RULE_ID")]
-        cli_disable: Vec<String>,
-
-        /// Enable specific rules even if disabled by default or config (repeatable)
-        #[arg(long = "enable", value_name = "RULE_ID")]
-        cli_enable: Vec<String>,
-
-        /// Scan with only this rule
-        #[arg(long = "rule", value_name = "RULE_ID")]
-        rule_filter: Option<String>,
-
-        /// Disable file caching and force a full rescan
-        #[arg(long)]
-        no_cache: bool,
-
-        /// Directory to store the scan cache (overrides SLOPGUARD_CACHE_DIR and config)
-        #[arg(long, value_name = "PATH")]
-        cache_dir: Option<PathBuf>,
-
-        /// Skip AI rules entirely (no LLM calls), even if a provider is configured
-        #[arg(long)]
-        no_ai: bool,
-    },
-    /// Generate a slopguard.toml config file
-    Init {
-        /// Overwrite existing slopguard.toml
-        #[arg(long)]
-        force: bool,
-    },
-    /// Validate inline tests for all rules
-    Test {
-        /// Path to a specific slopguard.toml config file
-        #[arg(long)]
-        config: Option<PathBuf>,
-    },
-    /// Show details of a specific rule
-    Explain {
-        /// The rule id to explain
-        rule_id: String,
-
-        /// Output format
-        #[arg(long)]
-        format: Option<Format>,
-
-        /// Path to a specific slopguard.toml config file
-        #[arg(long)]
-        config: Option<PathBuf>,
-    },
-    /// List active rules
-    List {
-        /// Show all rules including disabled ones
-        #[arg(long)]
-        all: bool,
-
-        /// Filter by category
-        #[arg(long)]
-        category: Option<CategoryFilter>,
-
-        /// Filter by language
-        #[arg(long)]
-        language: Option<LanguageFilter>,
-
-        /// Path to a specific slopguard.toml config file
-        #[arg(long)]
-        config: Option<PathBuf>,
-    },
-}
 
 fn has_findings_above_threshold(result: &ScanResult, threshold: &SeverityThreshold) -> bool {
     result.findings.iter().any(|f| match threshold {
@@ -174,7 +50,7 @@ fn write_output(
 }
 
 #[derive(Debug, Error)]
-enum AppError {
+pub enum AppError {
     #[error("{0}")]
     Config(#[from] ConfigError),
     #[error("{0}")]
@@ -185,6 +61,8 @@ enum AppError {
     Test(#[from] TestError),
     #[error("{0}")]
     Io(#[from] io::Error),
+    #[error("{0}")]
+    Baseline(#[from] BaselineError),
 }
 
 fn suggest_similar<'a>(id: &str, rules: &'a [Rule]) -> Option<&'a str> {
@@ -208,15 +86,30 @@ struct ScanOpts {
     no_cache: bool,
     cache_dir: Option<PathBuf>,
     no_ai: bool,
+    no_baseline: bool,
+    baseline_path: Option<PathBuf>,
 }
 
-fn run_scan(opts: ScanOpts) -> Result<bool, AppError> {
-    let ScanOpts {
+/// Options shared by `scan` and `baseline`, which collect findings the same
+/// way and only differ in what they do with them.
+pub struct CollectOpts {
+    pub paths: Vec<PathBuf>,
+    pub config_path: Option<PathBuf>,
+    pub cli_disable: Vec<String>,
+    pub cli_enable: Vec<String>,
+    pub rule_filter: Option<String>,
+    pub no_cache: bool,
+    pub cache_dir: Option<PathBuf>,
+    pub no_ai: bool,
+}
+
+/// Resolve the config, load the active rules, run the AST pass (cached or
+/// not) then the AI pass, and return the raw unfiltered result along with the
+/// resolved config.
+pub fn collect_findings(opts: CollectOpts) -> Result<(ScanResult, Config), AppError> {
+    let CollectOpts {
         paths,
-        format,
-        severity_threshold,
         config_path,
-        no_colors,
         cli_disable,
         cli_enable,
         rule_filter,
@@ -224,17 +117,10 @@ fn run_scan(opts: ScanOpts) -> Result<bool, AppError> {
         cache_dir,
         no_ai,
     } = opts;
-    let use_colors = !no_colors && env::var_os("NO_COLOR").is_none();
 
     let mut config = resolve_config(config_path.as_deref())?;
     config.rules.disable.extend(cli_disable);
     config.rules.enable.extend(cli_enable);
-
-    let format = format.unwrap_or(match config.output.format {
-        OutputFormat::Text => Format::Text,
-        OutputFormat::Json => Format::Json,
-        OutputFormat::Sarif => Format::Sarif,
-    });
 
     let mut rules = load_effective_rules(&config)?;
 
@@ -277,6 +163,46 @@ fn run_scan(opts: ScanOpts) -> Result<bool, AppError> {
             merge_ai_findings(&mut result, ai_findings);
         }
     }
+
+    Ok((result, config))
+}
+
+fn run_scan(opts: ScanOpts) -> Result<bool, AppError> {
+    let ScanOpts {
+        paths,
+        format,
+        severity_threshold,
+        config_path,
+        no_colors,
+        cli_disable,
+        cli_enable,
+        rule_filter,
+        no_cache,
+        cache_dir,
+        no_ai,
+        no_baseline,
+        baseline_path,
+    } = opts;
+    let use_colors = !no_colors && env::var_os("NO_COLOR").is_none();
+
+    let (mut result, config) = collect_findings(CollectOpts {
+        paths,
+        config_path,
+        cli_disable,
+        cli_enable,
+        rule_filter,
+        no_cache,
+        cache_dir,
+        no_ai,
+    })?;
+
+    apply_baseline(&mut result, no_baseline, baseline_path)?;
+
+    let format = format.unwrap_or(match config.output.format {
+        OutputFormat::Text => Format::Text,
+        OutputFormat::Json => Format::Json,
+        OutputFormat::Sarif => Format::Sarif,
+    });
 
     let has_findings = has_findings_above_threshold(&result, &severity_threshold);
 
@@ -369,6 +295,7 @@ fn merge_ai_findings(result: &mut ScanResult, ai_findings: Vec<Finding>) {
         warnings,
         total: errors + warnings,
         files_scanned: result.stats.files_scanned,
+        baseline_filtered: result.stats.baseline_filtered,
     };
 }
 
@@ -692,6 +619,8 @@ fn main() -> ExitCode {
             no_cache,
             cache_dir,
             no_ai,
+            no_baseline,
+            baseline_path,
         } => match run_scan(ScanOpts {
             paths,
             format,
@@ -704,9 +633,36 @@ fn main() -> ExitCode {
             no_cache,
             cache_dir,
             no_ai,
+            no_baseline,
+            baseline_path,
         }) {
             Ok(true) => ExitCode::from(1),
             Ok(false) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("error: {e}");
+                ExitCode::from(2)
+            }
+        },
+        Command::Baseline {
+            paths,
+            output,
+            config,
+            cli_disable,
+            cli_enable,
+            no_cache,
+            cache_dir,
+            no_ai,
+        } => match run_baseline(BaselineOpts {
+            paths,
+            output,
+            config_path: config,
+            cli_disable,
+            cli_enable,
+            no_cache,
+            cache_dir,
+            no_ai,
+        }) {
+            Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
                 eprintln!("error: {e}");
                 ExitCode::from(2)
@@ -747,74 +703,5 @@ fn main() -> ExitCode {
                 ExitCode::from(2)
             }
         },
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use clap::CommandFactory;
-
-    #[test]
-    fn cli_parses_scan_subcommand() {
-        Cli::command()
-            .try_get_matches_from(["slopguard", "scan", "."])
-            .expect("scan subcommand should parse");
-    }
-
-    #[test]
-    fn cli_parses_scan_subcommand_default_path() {
-        Cli::command()
-            .try_get_matches_from(["slopguard", "scan"])
-            .expect("scan subcommand should parse without explicit path");
-    }
-
-    #[test]
-    fn cli_parses_scan_with_format() {
-        Cli::command()
-            .try_get_matches_from(["slopguard", "scan", "--format", "json", "."])
-            .expect("scan with --format json should parse");
-    }
-
-    #[test]
-    fn cli_parses_scan_with_severity_threshold() {
-        Cli::command()
-            .try_get_matches_from(["slopguard", "scan", "--severity-threshold", "error", "."])
-            .expect("scan with --severity-threshold should parse");
-    }
-
-    #[test]
-    fn cli_parses_scan_with_config() {
-        Cli::command()
-            .try_get_matches_from(["slopguard", "scan", "--config", "my.toml", "."])
-            .expect("scan with --config should parse");
-    }
-
-    #[test]
-    fn cli_parses_scan_with_no_colors() {
-        Cli::command()
-            .try_get_matches_from(["slopguard", "scan", "--no-colors", "."])
-            .expect("scan with --no-colors should parse");
-    }
-
-    #[test]
-    fn cli_parses_init_subcommand() {
-        Cli::command()
-            .try_get_matches_from(["slopguard", "init"])
-            .expect("init subcommand should parse");
-    }
-
-    #[test]
-    fn cli_parses_test_subcommand() {
-        Cli::command()
-            .try_get_matches_from(["slopguard", "test"])
-            .expect("test subcommand should parse");
-    }
-
-    #[test]
-    fn cli_parses_list_subcommand() {
-        Cli::command()
-            .try_get_matches_from(["slopguard", "list"])
-            .expect("list subcommand should parse");
     }
 }
