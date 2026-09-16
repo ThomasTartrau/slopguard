@@ -18,11 +18,12 @@ use slopguard_ai::{build_provider, run_ai_pass, AiCache, AiCandidate, DEFAULT_MO
 use slopguard_core::baseline::BaselineError;
 use slopguard_core::config::{load_config, load_config_file, Config, ConfigError, OutputFormat};
 use slopguard_core::finding::{Finding, ScanResult, ScanStats};
+use slopguard_core::git::{changed_files, GitError};
 use slopguard_core::rule::{
     is_rule_active, load_all_rules, load_builtin_rules, load_effective_rules, Category, Language,
     Rule, RuleError, Severity,
 };
-use slopguard_core::scanner::{scan, scan_cached, ScanError};
+use slopguard_core::scanner::{scan, scan_cached, scan_files, scan_files_cached, ScanError};
 use slopguard_core::testing::{self, RuleTestStatus, TestError, TestFailureKind};
 
 use crate::baseline_cmd::{apply_baseline, run_baseline, BaselineOpts};
@@ -63,6 +64,8 @@ pub enum AppError {
     Io(#[from] io::Error),
     #[error("{0}")]
     Baseline(#[from] BaselineError),
+    #[error("{0}")]
+    Git(#[from] GitError),
 }
 
 fn suggest_similar<'a>(id: &str, rules: &'a [Rule]) -> Option<&'a str> {
@@ -88,6 +91,8 @@ struct ScanOpts {
     no_ai: bool,
     no_baseline: bool,
     baseline_path: Option<PathBuf>,
+    diff: bool,
+    base: Option<String>,
 }
 
 /// Options shared by `scan` and `baseline`, which collect findings the same
@@ -101,6 +106,50 @@ pub struct CollectOpts {
     pub no_cache: bool,
     pub cache_dir: Option<PathBuf>,
     pub no_ai: bool,
+    pub diff: bool,
+    pub diff_base: Option<String>,
+}
+
+/// Where the AST pass looks: directory roots to walk (normal scan), or the
+/// exact list of files git reported as changed (`--diff`).
+enum ScanTargets {
+    Walk(Vec<PathBuf>),
+    Files(Vec<PathBuf>),
+}
+
+impl ScanTargets {
+    fn run(
+        &self,
+        rules: &[Rule],
+        config: &Config,
+        no_cache: bool,
+        cache_dir: &Path,
+    ) -> Result<ScanResult, ScanError> {
+        match (self, no_cache) {
+            (ScanTargets::Walk(p), true) => scan(p, rules, config),
+            (ScanTargets::Walk(p), false) => scan_cached(p, rules, config, cache_dir),
+            (ScanTargets::Files(f), true) => scan_files(f, rules, config),
+            (ScanTargets::Files(f), false) => scan_files_cached(f, rules, config, cache_dir),
+        }
+    }
+}
+
+/// Keep the changed files that live under one of the requested paths, so
+/// `slopguard scan src/ --diff` stays scoped to `src/`.
+///
+/// Paths that cannot be canonicalized are compared as given.
+fn under_requested_paths(files: Vec<PathBuf>, paths: &[PathBuf]) -> Vec<PathBuf> {
+    let roots: Vec<PathBuf> = paths
+        .iter()
+        .map(|p| p.canonicalize().unwrap_or_else(|_| p.clone()))
+        .collect();
+    files
+        .into_iter()
+        .filter(|file| {
+            let resolved = file.canonicalize().unwrap_or_else(|_| file.clone());
+            roots.iter().any(|root| resolved.starts_with(root))
+        })
+        .collect()
 }
 
 /// Resolve the config, load the active rules, run the AST pass (cached or
@@ -116,6 +165,8 @@ pub fn collect_findings(opts: CollectOpts) -> Result<(ScanResult, Config), AppEr
         no_cache,
         cache_dir,
         no_ai,
+        diff,
+        diff_base,
     } = opts;
 
     let mut config = resolve_config(config_path.as_deref())?;
@@ -150,18 +201,29 @@ pub fn collect_findings(opts: CollectOpts) -> Result<(ScanResult, Config), AppEr
     let (ai_rules, ast_rules): (Vec<Rule>, Vec<Rule>) =
         rules.into_iter().partition(|r| r.ai_check.is_some());
 
-    let resolved_cache_dir = resolve_cache_dir(cache_dir, &config);
-    let mut result = if no_cache {
-        scan(&paths, &ast_rules, &config)?
+    let targets = if diff {
+        let cwd = env::current_dir().map_err(AppError::Io)?;
+        let changed = under_requested_paths(changed_files(&cwd, diff_base.as_deref())?, &paths);
+        ScanTargets::Files(changed)
     } else {
-        scan_cached(&paths, &ast_rules, &config, &resolved_cache_dir)?
+        ScanTargets::Walk(paths)
     };
 
+    let resolved_cache_dir = resolve_cache_dir(cache_dir, &config);
+    let mut result = targets.run(&ast_rules, &config, no_cache, &resolved_cache_dir)?;
+
     if !ai_rules.is_empty() {
-        let ai_findings = run_ai_phase(&paths, &ai_rules, &config, no_cache, &resolved_cache_dir)?;
+        let ai_findings =
+            run_ai_phase(&targets, &ai_rules, &config, no_cache, &resolved_cache_dir)?;
         if !ai_findings.is_empty() {
             merge_ai_findings(&mut result, ai_findings);
         }
+    }
+
+    // Set last, so the AI merge cannot drop the diff metadata.
+    if let ScanTargets::Files(ref files) = targets {
+        result.stats.diff_base = Some(diff_base.unwrap_or_else(|| "HEAD".to_string()));
+        result.stats.files_changed = Some(files.len());
     }
 
     Ok((result, config))
@@ -182,6 +244,8 @@ fn run_scan(opts: ScanOpts) -> Result<bool, AppError> {
         no_ai,
         no_baseline,
         baseline_path,
+        diff,
+        base,
     } = opts;
     let use_colors = !no_colors && env::var_os("NO_COLOR").is_none();
 
@@ -194,6 +258,8 @@ fn run_scan(opts: ScanOpts) -> Result<bool, AppError> {
         no_cache,
         cache_dir,
         no_ai,
+        diff,
+        diff_base: base,
     })?;
 
     apply_baseline(&mut result, no_baseline, baseline_path)?;
@@ -296,6 +362,8 @@ fn merge_ai_findings(result: &mut ScanResult, ai_findings: Vec<Finding>) {
         total: errors + warnings,
         files_scanned: result.stats.files_scanned,
         baseline_filtered: result.stats.baseline_filtered,
+        diff_base: result.stats.diff_base.clone(),
+        files_changed: result.stats.files_changed,
     };
 }
 
@@ -305,7 +373,7 @@ fn merge_ai_findings(result: &mut ScanResult, ai_findings: Vec<Finding>) {
 /// warning is emitted and no LLM call is made. Otherwise the AST pre-filter
 /// produces candidates that the LLM confirms.
 fn run_ai_phase(
-    paths: &[PathBuf],
+    targets: &ScanTargets,
     ai_rules: &[Rule],
     config: &Config,
     no_cache: bool,
@@ -323,7 +391,7 @@ fn run_ai_phase(
     };
 
     // Pre-filter: run the AST patterns of the AI rules to collect candidates.
-    let candidate_result = scan(paths, ai_rules, config)?;
+    let candidate_result = targets.run(ai_rules, config, true, cache_dir)?;
     if candidate_result.findings.is_empty() {
         return Ok(Vec::new());
     }
@@ -621,6 +689,8 @@ fn main() -> ExitCode {
             no_ai,
             no_baseline,
             baseline_path,
+            diff,
+            base,
         } => match run_scan(ScanOpts {
             paths,
             format,
@@ -635,6 +705,8 @@ fn main() -> ExitCode {
             no_ai,
             no_baseline,
             baseline_path,
+            diff,
+            base,
         }) {
             Ok(true) => ExitCode::from(1),
             Ok(false) => ExitCode::SUCCESS,

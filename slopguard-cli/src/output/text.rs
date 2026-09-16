@@ -200,6 +200,12 @@ fn write_cache_line(w: &mut impl Write, files_scanned: usize, cs: &CacheStats) -
 
 pub fn format_text(result: &ScanResult, w: &mut impl Write, use_colors: bool) -> io::Result<()> {
     let c = Colors::new(use_colors);
+
+    if let (Some(base), Some(changed)) = (&result.stats.diff_base, result.stats.files_changed) {
+        writeln!(w, "Scanning {changed} changed files (base: {base})")?;
+        writeln!(w)?;
+    }
+
     let mut files_cache: BTreeMap<&Path, Vec<String>> = BTreeMap::new();
 
     for finding in &result.findings {

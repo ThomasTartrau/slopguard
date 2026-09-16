@@ -133,6 +133,7 @@
 
 ### CI integration
 
+- [x] `slopguard scan --diff [--base <ref>]` pour ne scanner que les fichiers changes
 - [ ] GitHub Action (`slopguard/action`)
 - [ ] GitLab CI template
 - [ ] Pre-commit hook support

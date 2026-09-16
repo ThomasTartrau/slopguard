@@ -41,6 +41,8 @@ fn recompute_stats(result: &mut ScanResult, baseline_filtered: usize) {
         total: errors + warnings,
         files_scanned: result.stats.files_scanned,
         baseline_filtered,
+        diff_base: result.stats.diff_base.clone(),
+        files_changed: result.stats.files_changed,
     };
 }
 
@@ -117,6 +119,8 @@ pub fn run_baseline(opts: BaselineOpts) -> Result<(), AppError> {
         no_cache,
         cache_dir,
         no_ai,
+        diff: false,
+        diff_base: None,
     })?;
 
     let out_path = match output {
