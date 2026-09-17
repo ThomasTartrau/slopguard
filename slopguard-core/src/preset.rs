@@ -105,12 +105,14 @@ impl Preset {
 
     /// Render the preset as the full text of a `slopguard.toml`.
     pub fn render(&self) -> Result<String, RuleError> {
-        match self {
-            Preset::Default => Ok(render_default()),
-            Preset::Strict => render_strict(),
-            Preset::Relaxed => render_relaxed(),
-            Preset::Ai => Ok(render_ai()),
-        }
+        let mut out = match self {
+            Preset::Default => render_default(),
+            Preset::Strict => render_strict()?,
+            Preset::Relaxed => render_relaxed()?,
+            Preset::Ai => render_ai(),
+        };
+        out.push_str(COMMENTED_ESCALATION_BODY);
+        Ok(out)
     }
 }
 
@@ -175,18 +177,14 @@ fn correctness_warning_rule_ids() -> Result<Vec<String>, RuleError> {
 
 fn render_default() -> String {
     format!(
-        "{}{}{COMMENTED_AI_BODY}{COMMENTED_ESCALATION_BODY}",
+        "{}{}{COMMENTED_AI_BODY}",
         header(Preset::Default),
         common_body()
     )
 }
 
 fn render_ai() -> String {
-    format!(
-        "{}{}{LIVE_AI_BODY}{COMMENTED_ESCALATION_BODY}",
-        header(Preset::Ai),
-        common_body()
-    )
+    format!("{}{}{LIVE_AI_BODY}", header(Preset::Ai), common_body())
 }
 
 fn render_strict() -> Result<String, RuleError> {
@@ -204,7 +202,6 @@ fn render_strict() -> Result<String, RuleError> {
          #   slopguard scan --severity-threshold warning\n",
     );
     out.push_str(COMMENTED_AI_BODY);
-    out.push_str(COMMENTED_ESCALATION_BODY);
     Ok(out)
 }
 
@@ -218,7 +215,6 @@ fn render_relaxed() -> Result<String, RuleError> {
     out.push_str(&toml_array("disable", &correctness_warning_rule_ids()?));
     out.push_str("enable = []\n# custom_dirs = [\"./my-rules\"]\n\n[scan]\nignores = []\n\n");
     out.push_str(OUTPUT_BLOCK);
-    out.push_str(COMMENTED_ESCALATION_BODY);
     Ok(out)
 }
 
@@ -287,6 +283,15 @@ mod tests {
                 "preset {preset} should leave escalation off"
             );
             assert_eq!(config.escalation.threshold, 5);
+        }
+    }
+
+    #[test]
+    fn every_preset_ends_with_one_escalation_block() {
+        for preset in Preset::iter() {
+            let rendered = preset.render().unwrap();
+            assert!(rendered.ends_with(COMMENTED_ESCALATION_BODY));
+            assert_eq!(rendered.matches("# [escalation]\n").count(), 1);
         }
     }
 

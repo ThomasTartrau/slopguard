@@ -84,10 +84,6 @@ fn default_concurrency() -> usize {
     4
 }
 
-fn default_escalation_threshold() -> usize {
-    5
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, SmartDefault)]
 #[serde(default)]
 pub struct AiConfig {
@@ -115,7 +111,6 @@ pub struct EscalationConfig {
     pub enabled: bool,
     /// Findings of the same rule in the same file needed to escalate.
     #[default = 5]
-    #[serde(default = "default_escalation_threshold")]
     pub threshold: usize,
     /// Per-rule thresholds, overriding `threshold`. Keys are rule ids.
     pub rules: HashMap<String, usize>,
