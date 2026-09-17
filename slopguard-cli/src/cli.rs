@@ -20,6 +20,7 @@ pub enum Format {
     Text,
     Json,
     Sarif,
+    Html,
 }
 
 #[derive(Clone, ValueEnum)]
@@ -52,6 +53,10 @@ pub enum Command {
         /// Output format
         #[arg(long)]
         format: Option<Format>,
+
+        /// Write the report to a file instead of stdout
+        #[arg(long, short = 'o', value_name = "PATH")]
+        output: Option<PathBuf>,
 
         /// Only exit non-zero for findings at or above this severity
         #[arg(long, default_value = "warning")]
@@ -262,6 +267,42 @@ mod tests {
         Cli::command()
             .try_get_matches_from(["slopguard", "scan", "--format", "json", "."])
             .expect("scan with --format json should parse");
+    }
+
+    #[test]
+    fn cli_parses_scan_with_format_html() {
+        Cli::command()
+            .try_get_matches_from(["slopguard", "scan", "--format", "html", "."])
+            .expect("scan with --format html should parse");
+    }
+
+    #[test]
+    fn cli_parses_scan_with_output() {
+        Cli::command()
+            .try_get_matches_from(["slopguard", "scan", "-o", "report.html", "."])
+            .expect("scan with -o should parse");
+    }
+
+    #[test]
+    fn cli_parses_scan_with_long_output() {
+        Cli::command()
+            .try_get_matches_from(["slopguard", "scan", "--output", "report.html", "."])
+            .expect("scan with --output should parse");
+    }
+
+    #[test]
+    fn cli_parses_scan_html_with_output() {
+        Cli::command()
+            .try_get_matches_from([
+                "slopguard",
+                "scan",
+                "--format",
+                "html",
+                "--output",
+                "report.html",
+                ".",
+            ])
+            .expect("scan with --format html and --output should parse");
     }
 
     #[test]
