@@ -23,7 +23,8 @@ cargo install slopguard-cli
 
 | Flag | Description |
 |------|-------------|
-| `--format <text\|json\|sarif>` | Output format (default: text) |
+| `--format <text\|json\|sarif\|html>` | Output format (default: text) |
+| `-o, --output <path>` | Write the report to a file instead of stdout |
 | `--severity-threshold <error\|warning>` | Minimum severity to report (default: warning) |
 | `--config <path>` | Path to a slopguard.toml config file |
 | `--no-colors` | Disable colored output |
@@ -57,6 +58,9 @@ slopguard scan --format json
 
 # SARIF for GitLab/GitHub code scanning integration
 slopguard scan --format sarif
+
+# Standalone visual report, single file, no external requests
+slopguard scan --format html -o report.html
 
 # Only fail on errors, not warnings
 slopguard scan --severity-threshold error

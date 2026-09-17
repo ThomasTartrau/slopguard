@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>slopguard report - {{PROJECT_NAME}}</title>
+<style>
+:root {
+  color-scheme: light;
+  --plane: #f9f9f7;
+  --surface: #fcfcfb;
+  --ink: #0b0b0b;
+  --ink-secondary: #52514e;
+  --ink-muted: #898781;
+  --hairline: #e1e0d9;
+  --track: #edece7;
+  --border: rgba(11, 11, 11, 0.10);
+  --series: #2a78d6;
+  --error: #d03b3b;
+  --warning: #fab219;
+  --good: #0ca30c;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --plane: #0d0d0d;
+    --surface: #1a1a19;
+    --ink: #ffffff;
+    --ink-secondary: #c3c2b7;
+    --ink-muted: #898781;
+    --hairline: #2c2c2a;
+    --track: #2c2c2a;
+    --border: rgba(255, 255, 255, 0.10);
+    --series: #3987e5;
+    --error: #d03b3b;
+    --warning: #fab219;
+    --good: #0ca30c;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  padding: 32px 24px 64px;
+  background: var(--plane);
+  color: var(--ink);
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+main { max-width: 1100px; margin: 0 auto; }
+
+h1 { font-size: 22px; margin: 0 0 4px; font-weight: 600; }
+h2 { font-size: 13px; margin: 20px 0 8px; font-weight: 600; color: var(--ink-secondary); text-transform: uppercase; letter-spacing: 0.06em; }
+
+.meta { margin: 0; color: var(--ink-muted); font-size: 13px; }
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 20px 24px;
+  margin-bottom: 20px;
+}
+
+.badges { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 8px; }
+.badge {
+  display: inline-block;
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 12px;
+  color: var(--ink-secondary);
+}
+.badges:empty { display: none; }
+
+.totals { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 20px; }
+.tile {
+  display: flex;
+  flex-direction: column;
+  min-width: 128px;
+  padding: 12px 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.tile .n { font-size: 28px; font-weight: 600; line-height: 1.1; }
+.tile .l { font-size: 12px; color: var(--ink-secondary); }
+.tile.error .n { color: var(--error); }
+.tile.warning .n { color: var(--warning); }
+
+.bars { display: flex; flex-direction: column; gap: 6px; }
+.bar-row { display: grid; grid-template-columns: 110px 1fr 48px; align-items: center; gap: 12px; }
+.bar-label { color: var(--ink-secondary); font-size: 13px; }
+.bar-track { background: var(--track); border-radius: 4px; height: 12px; overflow: hidden; }
+.bar { display: block; height: 100%; background: var(--series); border-radius: 0 4px 4px 0; }
+.bar.error { background: var(--error); }
+.bar.warning { background: var(--warning); }
+.bar-count { text-align: right; font-variant-numeric: tabular-nums; color: var(--ink); }
+
+.filters { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; }
+.filters label { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--ink-secondary); }
+.filters select, .filters input {
+  font: inherit;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 8px;
+}
+#f-count { margin-left: auto; color: var(--ink-muted); font-size: 13px; }
+
+table { width: 100%; border-collapse: collapse; }
+thead th {
+  text-align: left;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-muted);
+  font-weight: 600;
+  padding: 0 12px 8px;
+  border-bottom: 1px solid var(--hairline);
+}
+tbody td { padding: 10px 12px; vertical-align: top; border-bottom: 1px solid var(--hairline); }
+tr[data-file] td { border-bottom: none; }
+td.loc { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; color: var(--ink-secondary); white-space: nowrap; }
+td code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
+
+.sev { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: 600; color: #0b0b0b; }
+.sev.error { background: var(--error); color: #ffffff; }
+.sev.warning { background: var(--warning); }
+
+.detail td { padding-top: 0; }
+.detail pre {
+  margin: 0;
+  padding: 10px 12px;
+  background: var(--plane);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow-x: auto;
+  font-size: 12px;
+  line-height: 1.45;
+}
+.detail pre code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.detail .note, .detail .fix { margin: 8px 0 0; font-size: 13px; color: var(--ink-secondary); }
+.detail .fix { color: var(--good); }
+
+tr.empty td { color: var(--ink-secondary); text-align: center; padding: 32px 12px; }
+#no-results { color: var(--ink-secondary); text-align: center; padding: 24px 0; }
+</style>
+</head>
+<body>
+<main>
+
+<header class="card">
+  <h1>{{PROJECT_NAME}}</h1>
+  <p class="meta">Generated {{GENERATED_AT}}</p>
+  <div class="badges">{{MODE_BADGES}}</div>
+  <div class="totals">
+    <div class="tile"><span class="n">{{TOTAL}}</span><span class="l">findings</span></div>
+    <div class="tile error"><span class="n">{{ERRORS}}</span><span class="l">errors</span></div>
+    <div class="tile warning"><span class="n">{{WARNINGS}}</span><span class="l">warnings</span></div>
+    <div class="tile"><span class="n">{{FILES_SCANNED}}</span><span class="l">files scanned</span></div>
+  </div>
+</header>
+
+<section class="summary card">
+  <h2>Severity</h2><div class="bars">{{BARS_SEVERITY}}</div>
+  <h2>Category</h2><div class="bars">{{BARS_CATEGORY}}</div>
+  <h2>Language</h2><div class="bars">{{BARS_LANGUAGE}}</div>
+</section>
+
+<section class="filters card">
+  <label>Severity <select id="f-severity"><option value="">all</option>{{OPTIONS_SEVERITY}}</select></label>
+  <label>Category <select id="f-category"><option value="">all</option>{{OPTIONS_CATEGORY}}</select></label>
+  <label>Language <select id="f-language"><option value="">all</option>{{OPTIONS_LANGUAGE}}</select></label>
+  <label>File <input id="f-file" type="search" placeholder="path contains..."></label>
+  <span id="f-count"></span>
+</section>
+
+<section class="card">
+<table id="findings">
+  <thead><tr><th>Severity</th><th>Rule</th><th>Location</th><th>Message</th></tr></thead>
+  <tbody>{{ROWS}}</tbody>
+</table>
+<p id="no-results" hidden>No findings match the current filters.</p>
+</section>
+
+</main>
+<script>
+(function () {
+  var controls = ["f-severity", "f-category", "f-language", "f-file"].map(function (id) {
+    return document.getElementById(id);
+  });
+  var rows = Array.prototype.slice.call(
+    document.querySelectorAll("#findings tbody tr[data-file]")
+  );
+  var counter = document.getElementById("f-count");
+  var empty = document.getElementById("no-results");
+
+  function apply() {
+    var severity = controls[0].value;
+    var category = controls[1].value;
+    var language = controls[2].value;
+    var query = controls[3].value.trim().toLowerCase();
+    var shown = 0;
+
+    rows.forEach(function (row) {
+      var visible =
+        (severity === "" || row.dataset.severity === severity) &&
+        (category === "" || row.dataset.category === category) &&
+        (language === "" || row.dataset.language === language) &&
+        (query === "" || row.dataset.file.toLowerCase().indexOf(query) !== -1);
+      row.hidden = !visible;
+      var detail = row.nextElementSibling;
+      if (detail && detail.classList.contains("detail")) {
+        detail.hidden = !visible;
+      }
+      if (visible) {
+        shown += 1;
+      }
+    });
+
+    counter.textContent = shown + " of " + rows.length + " findings";
+    empty.hidden = rows.length === 0 || shown > 0;
+  }
+
+  controls.forEach(function (control) {
+    control.addEventListener("input", apply);
+  });
+  apply();
+})();
+</script>
+</body>
+</html>

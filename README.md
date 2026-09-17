@@ -69,7 +69,7 @@ You can extend slopguard with your own YAML rules, disable rules per-line with i
   findings
        |
        v
-  formatter (text / json / sarif)
+  formatter (text / json / sarif / html)
 ```
 
 ---
@@ -135,6 +135,7 @@ Other commands:
 ```bash
 slopguard scan src/ --format json    # JSON output for CI
 slopguard scan --format sarif        # SARIF for GitLab/GitHub integration
+slopguard scan --format html -o report.html   # standalone visual report
 slopguard scan --severity-threshold error  # exit 0 on warnings-only
 slopguard scan --no-ai               # AST-only, skip AI rules (no LLM calls)
 slopguard stats .                    # distribution of findings by severity/category/language
@@ -399,6 +400,29 @@ slopguard stats . --format json | jq '.by_category'
 
 ---
 
+## 🖼️ HTML Report
+
+`--format html` renders a standalone visual report: a header with the project
+name, the generation date and the run totals, horizontal bars for the severity,
+category and language distributions, and a findings table sorted errors first
+with the matched snippet, note and suggested fix under each row. Four filters
+(severity, category, language, file path) narrow the table client side.
+
+The report is a single file: styles and script are inlined, so it makes zero
+external requests and opens straight from disk. It follows
+`prefers-color-scheme`, so it is readable in light and dark mode.
+
+```bash
+slopguard scan --format html > report.html
+slopguard scan --format html -o report.html
+```
+
+`-o`/`--output` is not HTML specific: it writes any format to a file and leaves
+stdout empty, so `slopguard scan --format json -o findings.json` works too.
+Colors are never written to a file, and the exit code is unchanged.
+
+---
+
 ## 📊 Baseline
 
 Adopting slopguard on an existing codebase usually means hundreds of pre-existing
@@ -526,7 +550,7 @@ Or copy `ci/slopguard.gitlab-ci.yml` into your project and adjust as needed.
 - uses: ThomasTartrau/slopguard/.github/actions/slopguard@main
   with:
     severity-threshold: warning  # or 'error' to ignore warnings
-    format: text                 # text, json, or sarif
+    format: text                 # text, json, sarif, or html
 ```
 
 ### Pre-commit
