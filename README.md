@@ -315,6 +315,73 @@ Inspect any of them, including the exact prompt sent to the model, with
 
 ---
 
+## 📏 File-Level Rules
+
+Some problems are not in any single line: a 900-line module, a file with 60
+imports, or a file where the comments outnumber the code. slopguard expresses
+these as **metric rules**: instead of an AST pattern, they measure a structural
+property of the whole file and report one finding, anchored at line 1, when the
+measured value is **strictly greater than** the threshold.
+
+Metric rules are marked `metric` in the `type` column of `slopguard list`, and
+`slopguard list --format json` emits them with `"type": "metric"`:
+
+```bash
+slopguard list --format json | jq '[.[] | select(.type == "metric")] | length'
+```
+
+### Builtin file-level rules
+
+| Rule | Language | Metric | Threshold |
+| ---- | -------- | ------ | --------- |
+| `max-file-lines` | rust | `file_lines` | 500 |
+| `max-file-lines-ts` | typescript | `file_lines` | 500 |
+| `max-import-count` | rust | `import_count` | 40 |
+| `max-import-count-ts` | typescript | `import_count` | 40 |
+| `max-function-count` | rust | `function_count` | 30 |
+| `max-function-count-ts` | typescript | `function_count` | 30 |
+| `high-comment-ratio` | rust | `comment_ratio` | 0.4 |
+| `high-comment-ratio-ts` | typescript | `comment_ratio` | 0.4 |
+
+`function_count` counts nested functions, and in TypeScript also arrow
+functions and class methods. `comment_ratio` counts distinct comment lines, so
+a five-line block comment counts as five.
+
+### Writing one
+
+```yaml
+id: max-file-lines
+language: rust
+severity: warning
+category: slop
+metric: file_lines          # file_lines | import_count | function_count | comment_ratio
+threshold: 500              # fires above this value, never at it
+message: "File exceeds 500 lines ($value lines). Split it into focused modules."
+tests:
+  should_match_files:
+    - "fixtures/metrics/rust_large.rs"
+  should_not_match_files:
+    - "fixtures/metrics/rust_small.rs"
+```
+
+`metric` replaces `rule`; setting both is an error. `$value` in the message is
+substituted with the measured value (an integer for counts, two decimals for
+ratios). A metric cannot be measured on a snippet, so tests point at whole
+files: paths are relative to the rule's own directory, and `should_match` /
+`should_not_match` may still be used with complete file contents inline.
+
+### Two things to know
+
+- **Inline suppression does not work on them.** `// slopguard-disable-next-line`
+  targets the line *after* the comment, so it can never target line 1. Use the
+  rule's `ignores` globs or `rules.disable` in `slopguard.toml` instead.
+- **A baselined file-level finding comes back when the value changes.** The
+  baseline hash mixes the matched text, which for these rules is the measured
+  value, so a file baselined at 547 lines is reported again at 548. That is the
+  point: the file grew.
+
+---
+
 ## 🚫 Inline Suppression
 
 ```rust

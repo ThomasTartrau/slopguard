@@ -7,6 +7,7 @@ use ast_grep_config::{
 };
 use ast_grep_core::tree_sitter::LanguageExt;
 use ast_grep_core::Language as AstLanguage;
+use ast_grep_core::{AstGrep, Doc};
 use ast_grep_language::SupportLang;
 use globset::{Error as GlobError, Glob, GlobSet, GlobSetBuilder};
 use ignore::WalkBuilder;
@@ -21,6 +22,7 @@ use crate::cache::{file_content_hash, rules_hash, CacheStore};
 use crate::config::Config;
 use crate::disable::filter_disabled;
 use crate::finding::{CacheStats, Finding, ScanResult, ScanStats};
+use crate::metric::{self, Metric};
 use crate::rule::{Language, Rule, RuleId, Severity};
 use crate::test_filter::CfgTestRanges;
 
@@ -35,6 +37,9 @@ pub enum ScanError {
 
     #[error("invalid glob pattern: {0}")]
     Glob(#[from] GlobError),
+
+    #[error("rule '{id}': metric rule is missing a threshold")]
+    InvalidMetricRule { id: RuleId },
 }
 
 /// The subset of a slopguard rule that ast-grep understands. slopguard-only
@@ -59,6 +64,26 @@ pub struct AstGrepRule<'a> {
 struct CompiledRules<'a> {
     collection: RuleCollection<SupportLang>,
     by_id: HashMap<(&'a str, Language), &'a Rule>,
+    metrics: Vec<MetricRule<'a>>,
+}
+
+/// A metric rule prepared for scanning: threshold resolved and `files` /
+/// `ignores` globs compiled once. ast-grep applies those globs for AST rules;
+/// metric rules are evaluated outside ast-grep so they apply them here.
+struct MetricRule<'a> {
+    rule: &'a Rule,
+    metric: Metric,
+    threshold: f64,
+    files: Option<GlobSet>,
+    ignores: Option<GlobSet>,
+}
+
+impl MetricRule<'_> {
+    fn applies_to(&self, path: &Path, lang: &Language) -> bool {
+        self.rule.language == *lang
+            && self.files.as_ref().is_none_or(|g| g.is_match(path))
+            && !self.ignores.as_ref().is_some_and(|g| g.is_match(path))
+    }
 }
 
 fn extension_to_lang(path: &Path) -> Option<SupportLang> {
@@ -99,9 +124,31 @@ fn compile_rule(rule: &Rule, lang: SupportLang) -> Result<RuleConfig<SupportLang
     })
 }
 
+/// Resolve a metric rule's threshold and compile its path globs.
+fn build_metric_rule(rule: &Rule) -> Result<MetricRule<'_>, ScanError> {
+    let Some((metric, threshold)) = rule.metric_spec() else {
+        return Err(ScanError::InvalidMetricRule {
+            id: rule.id.clone(),
+        });
+    };
+    Ok(MetricRule {
+        rule,
+        metric,
+        threshold,
+        files: rule.files.as_deref().map(build_glob_set).transpose()?,
+        ignores: rule.ignores.as_deref().map(build_glob_set).transpose()?,
+    })
+}
+
 fn compile_rules(rules: &[Rule]) -> Result<CompiledRules<'_>, ScanError> {
-    let configs = rules
+    // Metric rules must never reach ast-grep: their `rule` field is null and
+    // would fail to compile.
+    let (metric_rules, ast_rules): (Vec<&Rule>, Vec<&Rule>) =
+        rules.iter().partition(|r| r.is_metric());
+
+    let configs = ast_rules
         .iter()
+        .copied()
         .flat_map(|rule| {
             rule.language
                 .ast_grep_langs()
@@ -111,10 +158,15 @@ fn compile_rules(rules: &[Rule]) -> Result<CompiledRules<'_>, ScanError> {
         .collect::<Result<Vec<_>, _>>()?;
     Ok(CompiledRules {
         collection: RuleCollection::try_new(configs)?,
-        by_id: rules
+        by_id: ast_rules
             .iter()
+            .copied()
             .map(|rule| ((rule.id.as_str(), rule.language.clone()), rule))
             .collect::<HashMap<_, _>>(),
+        metrics: metric_rules
+            .into_iter()
+            .map(build_metric_rule)
+            .collect::<Result<Vec<_>, _>>()?,
     })
 }
 
@@ -152,9 +204,55 @@ fn is_test_path(path: &Path) -> bool {
     in_test_dir || test_file_name
 }
 
+/// One finding per metric rule whose measured value exceeds its threshold.
+///
+/// File-level findings have no source position, so they are anchored at 1:1.
+/// `skip_test_code` drops the whole file: a line-1 finding can never be inside
+/// a `#[cfg(test)]` block.
+fn metric_findings<D: Doc>(
+    metrics: &[&MetricRule],
+    path: &Path,
+    root: &AstGrep<D>,
+    source: &str,
+    lang: &Language,
+) -> Vec<Finding> {
+    metrics
+        .iter()
+        .filter(|m| !(m.rule.skip_test_code && is_test_path(path)))
+        .filter_map(|m| {
+            let value = metric::compute(m.metric, lang, root, source);
+            if !metric::exceeds(value, m.threshold) {
+                return None;
+            }
+            let rendered = m.metric.format_value(value);
+            Some(Finding {
+                rule_id: m.rule.id.clone(),
+                severity: m.rule.severity.clone(),
+                category: m.rule.category.clone().unwrap_or_default(),
+                message: m.rule.message.replace("$value", &rendered),
+                note: m.rule.note.clone(),
+                fix: m.rule.fix.clone(),
+                file: path.to_path_buf(),
+                line: 1,
+                column: 1,
+                end_line: 1,
+                end_column: 1,
+                matched_text: m.metric.describe(value),
+                confidence: None,
+            })
+        })
+        .collect()
+}
+
 fn scan_file(path: &Path, lang: SupportLang, rules: &CompiledRules) -> Vec<Finding> {
+    let rule_lang = support_lang_to_language(lang);
     let applicable = rules.collection.get_rule_from_lang(path, lang);
-    if applicable.is_empty() {
+    let metrics: Vec<&MetricRule> = rules
+        .metrics
+        .iter()
+        .filter(|m| m.applies_to(path, &rule_lang))
+        .collect();
+    if applicable.is_empty() && metrics.is_empty() {
         return Vec::new();
     }
     let Ok(source) = read_to_string(path) else {
@@ -162,56 +260,61 @@ fn scan_file(path: &Path, lang: SupportLang, rules: &CompiledRules) -> Vec<Findi
     };
 
     let root = lang.ast_grep(&source);
-    let combined = CombinedScan::new(applicable);
-    let result = combined.scan(&root, false);
 
-    let cfg_test = (lang == SupportLang::Rust && !result.matches.is_empty())
-        .then(|| CfgTestRanges::from_root(&root));
-    let cfg_test = cfg_test.as_ref();
-    let is_test_file = is_test_path(path);
+    let mut findings: Vec<Finding> = if applicable.is_empty() {
+        Vec::new()
+    } else {
+        let combined = CombinedScan::new(applicable);
+        let result = combined.scan(&root, false);
 
-    let findings = result
-        .matches
-        .into_iter()
-        .filter_map(|(config, matches)| {
-            let rule_lang = support_lang_to_language(lang);
-            let rule = rules.by_id.get(&(config.id.as_str(), rule_lang))?;
-            Some((*rule, matches))
-        })
-        .flat_map(|(rule, matches)| {
-            let skip_test_code = rule.skip_test_code;
-            matches
-                .into_iter()
-                .map(move |node_match| {
-                    let start = node_match.start_pos();
-                    let end = node_match.end_pos();
-                    Finding {
-                        rule_id: rule.id.clone(),
-                        severity: rule.severity.clone(),
-                        category: rule.category.clone().unwrap_or_default(),
-                        message: rule.message.clone(),
-                        note: rule.note.clone(),
-                        fix: rule.fix.clone(),
-                        file: path.to_path_buf(),
-                        line: start.line() + 1,
-                        column: start.byte_point().1 + 1,
-                        end_line: end.line() + 1,
-                        end_column: end.byte_point().1 + 1,
-                        matched_text: node_match.text().to_string(),
-                        confidence: None,
-                    }
-                })
-                .filter(move |f| {
-                    if !skip_test_code {
-                        return true;
-                    }
-                    let in_test_code =
-                        is_test_file || cfg_test.is_some_and(|r| r.contains_line(f.line));
-                    !in_test_code
-                })
-        })
-        .collect();
+        let cfg_test = (lang == SupportLang::Rust && !result.matches.is_empty())
+            .then(|| CfgTestRanges::from_root(&root));
+        let cfg_test = cfg_test.as_ref();
+        let is_test_file = is_test_path(path);
 
+        result
+            .matches
+            .into_iter()
+            .filter_map(|(config, matches)| {
+                let rule = rules.by_id.get(&(config.id.as_str(), rule_lang.clone()))?;
+                Some((*rule, matches))
+            })
+            .flat_map(|(rule, matches)| {
+                let skip_test_code = rule.skip_test_code;
+                matches
+                    .into_iter()
+                    .map(move |node_match| {
+                        let start = node_match.start_pos();
+                        let end = node_match.end_pos();
+                        Finding {
+                            rule_id: rule.id.clone(),
+                            severity: rule.severity.clone(),
+                            category: rule.category.clone().unwrap_or_default(),
+                            message: rule.message.clone(),
+                            note: rule.note.clone(),
+                            fix: rule.fix.clone(),
+                            file: path.to_path_buf(),
+                            line: start.line() + 1,
+                            column: start.byte_point().1 + 1,
+                            end_line: end.line() + 1,
+                            end_column: end.byte_point().1 + 1,
+                            matched_text: node_match.text().to_string(),
+                            confidence: None,
+                        }
+                    })
+                    .filter(move |f| {
+                        if !skip_test_code {
+                            return true;
+                        }
+                        let in_test_code =
+                            is_test_file || cfg_test.is_some_and(|r| r.contains_line(f.line));
+                        !in_test_code
+                    })
+            })
+            .collect()
+    };
+
+    findings.extend(metric_findings(&metrics, path, &root, &source, &rule_lang));
     filter_disabled(findings, &source)
 }
 
@@ -861,7 +964,12 @@ skip_test_code: true
             rules.len()
         );
         let compiled = compile_rules(&rules).expect("all builtin rules should compile");
-        assert_eq!(compiled.by_id.len(), rules.len());
+        let ast_rule_count = rules.iter().filter(|r| !r.is_metric()).count();
+        assert_eq!(compiled.by_id.len(), ast_rule_count);
+        assert!(
+            !compiled.metrics.is_empty(),
+            "builtin rules should include metric rules"
+        );
     }
 
     #[test]
@@ -937,6 +1045,252 @@ skip_test_code: true
         let stats = result.cache_stats.as_ref().unwrap();
         assert_eq!(stats.cached, 2, "a partial scan must not prune");
         assert_eq!(stats.changed, 0);
+    }
+
+    fn metric_rule(body: &str) -> Rule {
+        parse_rule(body).unwrap()
+    }
+
+    fn file_lines_rule() -> Rule {
+        metric_rule(
+            r#"
+id: test-file-lines
+language: rust
+severity: warning
+category: slop
+metric: file_lines
+threshold: 10
+message: "File is too long"
+"#,
+        )
+    }
+
+    /// `n` lines of trivial Rust, one statement per line.
+    fn rust_lines(n: usize) -> String {
+        (0..n).map(|i| format!("// line {i}\n")).collect()
+    }
+
+    #[test]
+    fn scan_finds_file_lines_violation() {
+        let dir = tempdir().unwrap();
+        write(dir.path().join("big.rs"), rust_lines(12)).unwrap();
+        let result = scan_dir(dir.path(), &[file_lines_rule()]);
+        assert_eq!(result.findings.len(), 1);
+        let f = &result.findings[0];
+        assert_eq!(f.rule_id, RuleId::from("test-file-lines"));
+        assert_eq!(f.line, 1);
+        assert_eq!(f.column, 1);
+        assert_eq!(f.end_line, 1);
+        assert_eq!(f.end_column, 1);
+        assert_eq!(f.matched_text, "12 lines");
+    }
+
+    #[test]
+    fn metric_message_interpolates_value() {
+        let dir = tempdir().unwrap();
+        write(dir.path().join("big.rs"), rust_lines(12)).unwrap();
+        let rule = metric_rule(
+            r#"
+id: test-interpolate
+language: rust
+severity: warning
+category: slop
+metric: file_lines
+threshold: 10
+message: "File exceeds 10 lines ($value lines)"
+"#,
+        );
+        let result = scan_dir(dir.path(), &[rule]);
+        assert_eq!(result.findings.len(), 1);
+        let message = &result.findings[0].message;
+        assert!(message.contains("(12 lines)"), "got: {message}");
+        assert!(!message.contains("$value"), "got: {message}");
+    }
+
+    #[test]
+    fn metric_rule_below_threshold_no_finding() {
+        let dir = tempdir().unwrap();
+        write(dir.path().join("exact.rs"), rust_lines(10)).unwrap();
+        let result = scan_dir(dir.path(), &[file_lines_rule()]);
+        assert_eq!(
+            result.findings.len(),
+            0,
+            "a file of exactly the threshold length must not fire"
+        );
+    }
+
+    #[test]
+    fn metric_comment_ratio_finding() {
+        let dir = tempdir().unwrap();
+        write(
+            dir.path().join("commented.rs"),
+            "// a\n// b\n// c\n// d\nfn f() {}\nfn g() {}\nfn h() {}\n",
+        )
+        .unwrap();
+        let rule = metric_rule(
+            r#"
+id: test-comment-ratio
+language: rust
+severity: warning
+category: slop
+metric: comment_ratio
+threshold: 0.4
+message: "Too many comments ($value)"
+"#,
+        );
+        let result = scan_dir(dir.path(), &[rule]);
+        assert_eq!(result.findings.len(), 1);
+        assert!(
+            result.findings[0].matched_text.ends_with("comment ratio"),
+            "got: {}",
+            result.findings[0].matched_text
+        );
+    }
+
+    #[test]
+    fn metric_rule_respects_ignores_glob() {
+        let dir = tempdir().unwrap();
+        let gen = dir.path().join("generated");
+        create_dir(&gen).unwrap();
+        write(gen.join("out.rs"), rust_lines(12)).unwrap();
+        write(dir.path().join("main.rs"), rust_lines(12)).unwrap();
+        let rule = metric_rule(
+            r#"
+id: test-metric-ignores
+language: rust
+severity: warning
+category: slop
+metric: file_lines
+threshold: 10
+message: "too long"
+ignores:
+  - "**/generated/**"
+"#,
+        );
+        let result = scan_dir(dir.path(), &[rule]);
+        assert_eq!(result.findings.len(), 1);
+        assert!(result.findings[0]
+            .file
+            .to_string_lossy()
+            .contains("main.rs"));
+    }
+
+    #[test]
+    fn metric_rule_respects_files_glob() {
+        let dir = tempdir().unwrap();
+        let src = dir.path().join("src");
+        create_dir(&src).unwrap();
+        write(src.join("lib.rs"), rust_lines(12)).unwrap();
+        write(dir.path().join("build.rs"), rust_lines(12)).unwrap();
+        let rule = metric_rule(
+            r#"
+id: test-metric-files
+language: rust
+severity: warning
+category: slop
+metric: file_lines
+threshold: 10
+message: "too long"
+files:
+  - "**/src/**/*.rs"
+"#,
+        );
+        let result = scan_dir(dir.path(), &[rule]);
+        assert_eq!(result.findings.len(), 1);
+        assert!(result.findings[0].file.to_string_lossy().contains("lib.rs"));
+    }
+
+    #[test]
+    fn metric_rule_skip_test_code_skips_test_files() {
+        let dir = tempdir().unwrap();
+        let tests_dir = dir.path().join("tests");
+        create_dir(&tests_dir).unwrap();
+        write(tests_dir.join("it.rs"), rust_lines(12)).unwrap();
+
+        let skipping = metric_rule(
+            r#"
+id: test-metric-skip
+language: rust
+severity: warning
+category: slop
+metric: file_lines
+threshold: 10
+message: "too long"
+skip_test_code: true
+"#,
+        );
+        let skipped = scan_dir(dir.path(), &[skipping]);
+        assert_eq!(skipped.findings.len(), 0);
+        let reported = scan_dir(dir.path(), &[file_lines_rule()]);
+        assert_eq!(reported.findings.len(), 1);
+    }
+
+    #[test]
+    fn metric_only_ruleset_still_scans() {
+        let dir = tempdir().unwrap();
+        write(dir.path().join("big.rs"), rust_lines(12)).unwrap();
+        let result = scan_dir(dir.path(), &[file_lines_rule()]);
+        assert_eq!(
+            result.findings.len(),
+            1,
+            "a rule set with only metric rules must still scan files"
+        );
+    }
+
+    #[test]
+    fn metric_and_ast_rules_together() {
+        let dir = tempdir().unwrap();
+        let mut source = String::from("fn main() {\n    foo().unwrap();\n}\n");
+        source.push_str(&rust_lines(12));
+        write(dir.path().join("main.rs"), source).unwrap();
+
+        let result = scan_dir(dir.path(), &[unwrap_rule(), file_lines_rule()]);
+        assert_eq!(result.findings.len(), 2);
+        let first = &result.findings[0];
+        assert_eq!(first.rule_id, RuleId::from("test-file-lines"));
+        assert_eq!(first.line, 1);
+        let second = &result.findings[1];
+        assert_eq!(second.rule_id, RuleId::from("test-unwrap"));
+    }
+
+    #[test]
+    fn metric_rule_wrong_language_not_applied() {
+        let dir = tempdir().unwrap();
+        write(dir.path().join("big.rs"), rust_lines(12)).unwrap();
+        let rule = metric_rule(
+            r#"
+id: test-metric-ts
+language: typescript
+severity: warning
+category: slop
+metric: file_lines
+threshold: 10
+message: "too long"
+"#,
+        );
+        let result = scan_dir(dir.path(), &[rule]);
+        assert_eq!(result.findings.len(), 0);
+    }
+
+    #[test]
+    fn metric_findings_are_cached() {
+        let src_dir = tempdir().unwrap();
+        let cache_dir = tempdir().unwrap();
+        let cache_path = cache_dir.path().join("cache");
+        write(src_dir.path().join("big.rs"), rust_lines(12)).unwrap();
+
+        let rules = [file_lines_rule()];
+        let config = Config::default();
+        let paths = [src_dir.path().to_path_buf()];
+
+        let first = scan_cached(&paths, &rules, &config, &cache_path).unwrap();
+        assert_eq!(first.findings.len(), 1);
+        assert_eq!(first.cache_stats.as_ref().unwrap().changed, 1);
+
+        let second = scan_cached(&paths, &rules, &config, &cache_path).unwrap();
+        assert_eq!(second.cache_stats.as_ref().unwrap().cached, 1);
+        assert_eq!(second.findings.len(), 1);
+        assert_eq!(second.findings[0].matched_text, "12 lines");
     }
 
     #[test]

@@ -34,6 +34,7 @@ use slopguard_core::testing::{self, RuleTestStatus, TestError, TestFailureKind};
 use crate::baseline_cmd::{apply_baseline, run_baseline, BaselineOpts};
 use crate::cli::{CategoryFilter, Cli, Command, Format, LanguageFilter, SeverityThreshold};
 use crate::output::html::{project_name, HtmlMeta};
+use crate::output::json::ListEntry;
 use crate::output::{html, json, sarif, text};
 use crate::stats_cmd::{compute_report, run_stats, StatsOpts};
 
@@ -545,19 +546,11 @@ fn run_test(config_path: Option<PathBuf>) -> Result<bool, AppError> {
     Ok(summary.failed > 0)
 }
 
-struct ListEntry {
-    id: String,
-    language: String,
-    severity: String,
-    category: String,
-    kind: String,
-    status: String,
-}
-
 fn run_list(
     show_all: bool,
     category: Option<CategoryFilter>,
     language: Option<LanguageFilter>,
+    format: Option<Format>,
     config_path: Option<PathBuf>,
 ) -> Result<(), AppError> {
     let config = resolve_config(config_path.as_deref())?;
@@ -579,11 +572,7 @@ fn run_list(
                 .as_ref()
                 .unwrap_or(&Category::Correctness)
                 .to_string(),
-            kind: if r.ai_check.is_some() {
-                "ai".to_string()
-            } else {
-                "ast".to_string()
-            },
+            kind: json::rule_kind(r).to_string(),
             status: if !show_all || is_rule_active(r, &config) {
                 "enabled".to_string()
             } else {
@@ -606,6 +595,28 @@ fn run_list(
             None => true,
         })
         .collect();
+
+    match format {
+        Some(Format::Json) => {
+            return json::format_list_json(&filtered, &mut io::stdout().lock())
+                .map_err(AppError::Io);
+        }
+        Some(Format::Sarif) => {
+            eprintln!("error: SARIF format is not supported for list");
+            return Err(AppError::Io(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "SARIF format is not supported for list",
+            )));
+        }
+        Some(Format::Html) => {
+            eprintln!("error: HTML format is not supported for list");
+            return Err(AppError::Io(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "HTML format is not supported for list",
+            )));
+        }
+        None | Some(Format::Text) => {}
+    }
 
     let id_w = filtered
         .iter()
@@ -807,10 +818,11 @@ fn main() -> ExitCode {
         },
         Command::List {
             all,
+            format,
             category,
             language,
             config,
-        } => match run_list(all, category, language, config) {
+        } => match run_list(all, category, language, format, config) {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
                 eprintln!("error: {e}");

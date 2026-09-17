@@ -13,6 +13,8 @@ use slopguard_rules::BuiltinRules;
 use strum::{Display, EnumIter, EnumString};
 use thiserror::Error;
 
+use crate::metric::Metric;
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct RuleId(pub String);
 
@@ -95,6 +97,13 @@ pub struct RuleTests {
     pub should_match: Vec<String>,
     #[serde(default)]
     pub should_not_match: Vec<String>,
+    /// Whole-file fixtures for metric rules, resolved against the embedded
+    /// ruleset root (builtin rules) or the custom rule directory the rule was
+    /// loaded from. A metric cannot be measured on a snippet.
+    #[serde(default)]
+    pub should_match_files: Vec<String>,
+    #[serde(default)]
+    pub should_not_match_files: Vec<String>,
 }
 
 /// Optional AI confirmation step for a rule. When present, the rule's `rule`
@@ -127,7 +136,18 @@ pub struct Rule {
     pub category: Option<Category>,
     #[serde(default)]
     pub fix: Option<String>,
+    #[serde(default)]
     pub rule: Value,
+    /// File-level metric evaluated instead of `rule`. Mutually exclusive with it.
+    #[serde(default)]
+    pub metric: Option<Metric>,
+    /// The value `metric` must exceed for the rule to fire. Required with `metric`.
+    #[serde(default)]
+    pub threshold: Option<f64>,
+    /// Directory a custom rule was loaded from, used to resolve test fixture
+    /// paths. `None` for builtin rules, which resolve against `BuiltinRules`.
+    #[serde(skip)]
+    pub source_dir: Option<PathBuf>,
     #[serde(default)]
     pub files: Option<Vec<String>>,
     #[serde(default)]
@@ -152,6 +172,16 @@ impl Rule {
     pub fn effective_category(&self) -> Category {
         self.category.clone().unwrap_or_default()
     }
+
+    /// Whether this rule measures a file-level metric instead of matching AST.
+    pub fn is_metric(&self) -> bool {
+        self.metric.is_some()
+    }
+
+    /// The metric and threshold of a file-level rule, `None` for AST rules.
+    pub fn metric_spec(&self) -> Option<(Metric, f64)> {
+        Some((self.metric?, self.threshold?))
+    }
 }
 
 #[derive(Debug, Error)]
@@ -161,6 +191,21 @@ pub enum RuleError {
 
     #[error("rule '{id}': rule field must not be empty")]
     EmptyRule { id: RuleId },
+
+    #[error("rule '{id}': 'metric' and 'rule' are mutually exclusive")]
+    MetricAndRule { id: RuleId },
+
+    #[error("rule '{id}': a metric rule requires a 'threshold'")]
+    MissingThreshold { id: RuleId },
+
+    #[error("rule '{id}': test fixture files are only supported for metric rules")]
+    FixturesOnAstRule { id: RuleId },
+
+    #[error("rule '{id}': fixture path '{path}' must be relative and must not contain '..'")]
+    InvalidFixturePath { id: RuleId, path: String },
+
+    #[error("rule '{id}': fixture '{path}' not found")]
+    FixtureNotFound { id: RuleId, path: String },
 
     #[error("duplicate rule id: '{id}'")]
     DuplicateId { id: RuleId },
@@ -190,12 +235,69 @@ impl RuleError {
 }
 
 /// Parse a single YAML string into a Rule, validating required fields.
+///
+/// A rule carries either an ast-grep `rule` matcher or a file-level `metric`
+/// plus its `threshold`, never both and never neither.
 pub fn parse_rule(yaml: &str) -> Result<Rule, RuleError> {
     let rule: Rule = serde_yaml::from_str(yaml)?;
-    if rule.rule.is_null() {
-        return Err(RuleError::EmptyRule { id: rule.id });
+    match (rule.metric.is_some(), rule.rule.is_null()) {
+        (true, false) => return Err(RuleError::MetricAndRule { id: rule.id }),
+        (true, true) if rule.threshold.is_none() => {
+            return Err(RuleError::MissingThreshold { id: rule.id })
+        }
+        (false, true) => return Err(RuleError::EmptyRule { id: rule.id }),
+        _ => {}
+    }
+    if !rule.is_metric() {
+        if let Some(tests) = &rule.tests {
+            if !tests.should_match_files.is_empty() || !tests.should_not_match_files.is_empty() {
+                return Err(RuleError::FixturesOnAstRule { id: rule.id });
+            }
+        }
     }
     Ok(rule)
+}
+
+/// Read a whole-file test fixture referenced by `tests.should_match_files` or
+/// `tests.should_not_match_files`. Builtin rules resolve against the embedded
+/// ruleset; custom rules resolve against the directory they were loaded from.
+pub fn read_fixture(rule: &Rule, relative: &str) -> Result<String, RuleError> {
+    let path = Path::new(relative);
+    let traverses = path.components().any(|c| matches!(c, Component::ParentDir));
+    if path.is_absolute() || traverses {
+        return Err(RuleError::InvalidFixturePath {
+            id: rule.id.clone(),
+            path: relative.to_string(),
+        });
+    }
+
+    match &rule.source_dir {
+        Some(dir) => {
+            let full = dir.join(path);
+            read_to_string(&full).map_err(|e| {
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    RuleError::FixtureNotFound {
+                        id: rule.id.clone(),
+                        path: relative.to_string(),
+                    }
+                } else {
+                    RuleError::io(&full, e)
+                }
+            })
+        }
+        None => {
+            let file = BuiltinRules::get(relative).ok_or_else(|| RuleError::FixtureNotFound {
+                id: rule.id.clone(),
+                path: relative.to_string(),
+            })?;
+            from_utf8(&file.data)
+                .map(str::to_string)
+                .map_err(|e| RuleError::Utf8 {
+                    path: relative.to_string(),
+                    source: e,
+                })
+        }
+    }
 }
 
 /// Parse a rule and fill in its category from the ruleset-relative path when
@@ -246,7 +348,9 @@ pub fn load_custom_rules(dirs: &[PathBuf]) -> Result<Vec<Rule>, RuleError> {
             }
             let yaml = read_to_string(path).map_err(|e| RuleError::io(path, e))?;
             let relative = path.strip_prefix(dir).unwrap_or(path);
-            rules.push(parse_rule_at(&yaml, relative)?);
+            let mut rule = parse_rule_at(&yaml, relative)?;
+            rule.source_dir = Some(dir.clone());
+            rules.push(rule);
         }
     }
     Ok(rules)
@@ -532,8 +636,8 @@ rule:
         let rules = load_builtin_rules().unwrap();
         assert_eq!(
             rules.len(),
-            86,
-            "expected 86 builtin rules, got {}",
+            94,
+            "expected 94 builtin rules, got {}",
             rules.len()
         );
 
@@ -549,7 +653,7 @@ rule:
             .iter()
             .filter(|r| r.category == Some(Category::Correctness))
             .count();
-        assert_eq!(slop_count, 28, "expected 28 slop rules");
+        assert_eq!(slop_count, 36, "expected 36 slop rules");
         assert_eq!(security_count, 20, "expected 20 security rules");
         assert_eq!(correctness_count, 38, "expected 38 correctness rules");
 
@@ -560,6 +664,12 @@ rule:
             .iter()
             .any(|r| r.id == RuleId::from("no-debug-on-secrets")));
         assert!(rules.iter().any(|r| r.id == RuleId::from("no-slop-words")));
+        assert!(
+            rules
+                .iter()
+                .any(|r| r.id == RuleId::from("max-file-lines") && r.is_metric()),
+            "max-file-lines should be loaded as a metric rule"
+        );
 
         validate_unique_ids(&rules).unwrap();
     }
@@ -700,6 +810,21 @@ rule:
             let tests = rule.tests.as_ref().unwrap_or_else(|| {
                 panic!("rule '{}' (at {path}) is missing `tests` block", rule.id)
             });
+            if rule.is_metric() {
+                // Two near-identical whole-file fixtures add no coverage, so a
+                // metric rule only needs one case per direction.
+                assert!(
+                    tests.should_match.len() + tests.should_match_files.len() >= 1,
+                    "metric rule '{}' (at {path}) needs >= 1 should_match case",
+                    rule.id
+                );
+                assert!(
+                    tests.should_not_match.len() + tests.should_not_match_files.len() >= 1,
+                    "metric rule '{}' (at {path}) needs >= 1 should_not_match case",
+                    rule.id
+                );
+                continue;
+            }
             assert!(
                 tests.should_match.len() >= 2,
                 "rule '{}' (at {path}) needs >= 2 should_match, got {}",
@@ -730,6 +855,219 @@ rule:
                 rule.id
             );
         }
+    }
+
+    #[test]
+    fn parse_metric_rule() {
+        let yaml = r#"
+id: max-lines
+language: rust
+severity: warning
+category: slop
+metric: file_lines
+threshold: 500
+message: "File exceeds 500 lines ($value lines)."
+"#;
+        let rule = parse_rule(yaml).unwrap();
+        assert_eq!(rule.metric, Some(Metric::FileLines));
+        assert_eq!(rule.threshold, Some(500.0));
+        assert!(rule.is_metric());
+        assert_eq!(rule.metric_spec(), Some((Metric::FileLines, 500.0)));
+        assert!(rule.rule.is_null());
+    }
+
+    #[test]
+    fn reject_metric_with_rule() {
+        let yaml = r#"
+id: both
+language: rust
+severity: warning
+category: slop
+metric: file_lines
+threshold: 500
+message: "m"
+rule:
+  pattern: $X
+"#;
+        let err = parse_rule(yaml).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("mutually exclusive"),
+            "expected mutually exclusive error, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn reject_metric_without_threshold() {
+        let yaml = r#"
+id: no-threshold
+language: rust
+severity: warning
+category: slop
+metric: file_lines
+message: "m"
+"#;
+        let err = parse_rule(yaml).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("threshold"),
+            "expected threshold error, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn reject_fixture_files_on_ast_rule() {
+        let yaml = r#"
+id: ast-with-fixture
+language: rust
+severity: warning
+category: slop
+message: "m"
+rule:
+  pattern: $X
+tests:
+  should_match_files:
+    - "fixtures/metrics/rust_large.rs"
+"#;
+        let err = parse_rule(yaml).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("only supported for metric rules"),
+            "expected fixture-on-ast-rule error, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn parse_metric_rule_with_fixture_files() {
+        let yaml = r#"
+id: metric-with-fixtures
+language: rust
+severity: warning
+category: slop
+metric: import_count
+threshold: 40
+message: "m"
+tests:
+  should_match_files:
+    - "fixtures/metrics/rust_large.rs"
+  should_not_match_files:
+    - "fixtures/metrics/rust_small.rs"
+"#;
+        let rule = parse_rule(yaml).unwrap();
+        let tests = rule.tests.as_ref().unwrap();
+        assert_eq!(
+            tests.should_match_files,
+            vec!["fixtures/metrics/rust_large.rs".to_string()]
+        );
+        assert_eq!(
+            tests.should_not_match_files,
+            vec!["fixtures/metrics/rust_small.rs".to_string()]
+        );
+    }
+
+    fn fixture_metric_rule() -> Rule {
+        parse_rule(
+            r#"
+id: fixture-reader
+language: rust
+severity: warning
+category: slop
+metric: file_lines
+threshold: 500
+message: "m"
+"#,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn read_fixture_rejects_parent_dir() {
+        let rule = fixture_metric_rule();
+        let err = read_fixture(&rule, "../secrets.rs").unwrap_err();
+        assert!(
+            matches!(err, RuleError::InvalidFixturePath { .. }),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn read_fixture_rejects_absolute_path() {
+        let rule = fixture_metric_rule();
+        let err = read_fixture(&rule, "/etc/passwd").unwrap_err();
+        assert!(
+            matches!(err, RuleError::InvalidFixturePath { .. }),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn read_fixture_from_custom_dir() {
+        let dir = tempdir().unwrap();
+        let fixtures = dir.path().join("fixtures");
+        create_dir(&fixtures).unwrap();
+        write(fixtures.join("big.rs"), "fn a() {}
+fn b() {}
+").unwrap();
+        write(
+            dir.path().join("metric.yml"),
+            r#"
+id: custom-metric
+language: rust
+severity: warning
+category: slop
+metric: file_lines
+threshold: 1
+message: "m"
+tests:
+  should_match_files:
+    - "fixtures/big.rs"
+"#,
+        )
+        .unwrap();
+
+        let rules = load_custom_rules(&[dir.path().to_path_buf()]).unwrap();
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].source_dir.as_deref(), Some(dir.path()));
+        let content = read_fixture(&rules[0], "fixtures/big.rs").unwrap();
+        assert_eq!(content, "fn a() {}
+fn b() {}
+");
+    }
+
+    #[test]
+    fn read_fixture_missing_in_custom_dir() {
+        let dir = tempdir().unwrap();
+        write(
+            dir.path().join("metric.yml"),
+            r#"
+id: custom-metric-missing
+language: rust
+severity: warning
+category: slop
+metric: file_lines
+threshold: 1
+message: "m"
+"#,
+        )
+        .unwrap();
+        let rules = load_custom_rules(&[dir.path().to_path_buf()]).unwrap();
+        let err = read_fixture(&rules[0], "fixtures/nope.rs").unwrap_err();
+        assert!(matches!(err, RuleError::FixtureNotFound { .. }), "{err:?}");
+    }
+
+    #[test]
+    fn read_builtin_fixture() {
+        let rules = load_builtin_rules().unwrap();
+        let rule = rules
+            .iter()
+            .find(|r| r.id == RuleId::from("max-file-lines"))
+            .expect("max-file-lines should be a builtin rule");
+        let content = read_fixture(rule, "fixtures/metrics/rust_large.rs").unwrap();
+        assert!(
+            content.lines().count() > 500,
+            "the large fixture should exceed 500 lines, got {}",
+            content.lines().count()
+        );
     }
 
     #[test]

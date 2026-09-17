@@ -3,6 +3,7 @@ use std::io::{self, Write};
 use serde::Serialize;
 
 use slopguard_core::finding::{Finding, ScanResult};
+use slopguard_core::metric::Metric;
 use slopguard_core::rule::{Category, Language, Rule, Severity};
 
 use crate::output::write_json_pretty;
@@ -38,6 +39,36 @@ struct ScanSummary {
     total: usize,
 }
 
+/// One row of `slopguard list`, shared by the text table and the JSON output.
+#[derive(Serialize)]
+pub struct ListEntry {
+    pub id: String,
+    pub language: String,
+    pub severity: String,
+    pub category: String,
+    /// "ast", "ai", or "metric".
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub status: String,
+}
+
+/// The rule kind reported by `list` and `explain`.
+pub fn rule_kind(rule: &Rule) -> &'static str {
+    if rule.is_metric() {
+        "metric"
+    } else if rule.ai_check.is_some() {
+        "ai"
+    } else {
+        "ast"
+    }
+}
+
+/// `slopguard list --format json`, emitted as a top-level array so a consumer
+/// can filter it directly (`jq '[.[] | select(.type == "metric")] | length'`).
+pub fn format_list_json(entries: &[&ListEntry], w: &mut impl Write) -> io::Result<()> {
+    write_json_pretty(w, &entries)
+}
+
 #[derive(Serialize)]
 struct ExplainOutput<'a> {
     id: &'a str,
@@ -49,8 +80,15 @@ struct ExplainOutput<'a> {
     note: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     fix: Option<&'a str>,
-    /// "ai" for rules with an `ai_check`, "ast" otherwise.
+    /// "metric" for file-level rules, "ai" for rules with an `ai_check`,
+    /// "ast" otherwise.
     kind: &'a str,
+    /// The measured file-level property, present only for metric rules.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    metric: Option<&'a Metric>,
+    /// The value the metric must exceed, present only for metric rules.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    threshold: Option<f64>,
     /// The LLM prompt template, present only for AI rules.
     #[serde(skip_serializing_if = "Option::is_none")]
     prompt: Option<&'a str>,
@@ -70,7 +108,9 @@ pub fn format_explain_json(rule: &Rule, w: &mut impl Write) -> io::Result<()> {
         message: &rule.message,
         note: rule.note.as_deref(),
         fix: rule.fix.as_deref(),
-        kind: if rule.ai_check.is_some() { "ai" } else { "ast" },
+        kind: rule_kind(rule),
+        metric: rule.metric.as_ref(),
+        threshold: rule.threshold,
         prompt: rule.ai_check.as_ref().map(|a| a.prompt.as_str()),
         should_match: rule.tests.as_ref().map(|t| t.should_match.as_slice()),
         should_not_match: rule.tests.as_ref().map(|t| t.should_not_match.as_slice()),

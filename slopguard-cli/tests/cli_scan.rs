@@ -558,3 +558,58 @@ fn cache_gitignore_created() {
     let content = fs::read_to_string(&gitignore).unwrap();
     assert_eq!(content, "*\n");
 }
+
+#[test]
+fn scan_reports_file_level_finding() {
+    let dir = tempdir().unwrap();
+    let big: String = (0..200)
+        .map(|i| format!("fn f{i}() {{\n    let _ = {i};\n}}\n"))
+        .collect();
+    write(dir.path().join("big.rs"), big).unwrap();
+
+    let output = slopguard()
+        .args(["scan", "--format", "json", dir.path().to_str().unwrap()])
+        .output()
+        .unwrap();
+
+    let json: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("output should be valid JSON");
+    let findings = json["findings"].as_array().unwrap();
+
+    let file_level = findings
+        .iter()
+        .find(|f| f["rule_id"] == "max-file-lines")
+        .expect("a 600 line file should trigger max-file-lines");
+
+    assert_eq!(file_level["line"], 1, "file-level findings sit on line 1");
+    assert_eq!(file_level["column"], 1);
+    let matched = file_level["matched_text"].as_str().unwrap();
+    assert!(matched.ends_with(" lines"), "got: {matched}");
+    assert_eq!(matched, "600 lines");
+    let message = file_level["message"].as_str().unwrap();
+    assert!(
+        message.contains("600 lines"),
+        "the measured value should be interpolated, got: {message}"
+    );
+}
+
+#[test]
+fn scan_short_file_has_no_file_level_finding() {
+    let dir = tempdir().unwrap();
+    let small: String = (0..5)
+        .map(|i| format!("fn f{i}() {{\n    let _ = {i};\n}}\n"))
+        .collect();
+    write(dir.path().join("small.rs"), small).unwrap();
+
+    let output = slopguard()
+        .args(["scan", "--format", "json", dir.path().to_str().unwrap()])
+        .output()
+        .unwrap();
+
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let findings = json["findings"].as_array().unwrap();
+    assert!(
+        !findings.iter().any(|f| f["rule_id"] == "max-file-lines"),
+        "a 15 line file must not trigger max-file-lines"
+    );
+}

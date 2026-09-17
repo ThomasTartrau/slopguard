@@ -1,0 +1,15 @@
+id: max-file-lines-ts
+language: typescript
+severity: warning
+category: slop
+metric: file_lines
+threshold: 500
+message: "File exceeds 500 lines ($value lines). Split it into focused modules."
+note: "Very large single files are a common signature of generated code: the model keeps appending instead of splitting."
+ignores:
+  - "**/fixtures/**"
+tests:
+  should_match_files:
+    - "fixtures/metrics/ts_large.ts"
+  should_not_match_files:
+    - "fixtures/metrics/ts_small.ts"

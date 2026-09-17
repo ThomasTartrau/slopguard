@@ -7,6 +7,7 @@ use std::path::Path;
 use slopguard_core::finding::{CacheStats, Finding, ScanResult};
 use slopguard_core::rule::{Category, Rule, Severity};
 
+use crate::output::json::rule_kind;
 use crate::output::plural;
 
 const RED: &str = "\x1b[1;31m";
@@ -151,11 +152,13 @@ pub fn format_explain(rule: &Rule, w: &mut impl Write) -> io::Result<()> {
     if let Some(fix) = &rule.fix {
         writeln!(w, "fix:       {fix}")?;
     }
-    writeln!(
-        w,
-        "type:      {}",
-        if rule.ai_check.is_some() { "ai" } else { "ast" }
-    )?;
+    writeln!(w, "type:      {}", rule_kind(rule))?;
+    if let Some(metric) = &rule.metric {
+        writeln!(w, "metric:    {metric}")?;
+    }
+    if let Some(threshold) = rule.threshold {
+        writeln!(w, "threshold: {threshold}")?;
+    }
     if let Some(ai_check) = &rule.ai_check {
         if let Some(model) = &ai_check.model {
             writeln!(w, "model:     {model}")?;
