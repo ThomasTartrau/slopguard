@@ -182,7 +182,6 @@ pub fn run_stats(opts: StatsOpts) -> Result<(), AppError> {
     }
 
     if let Some(Format::Html) = format {
-        eprintln!("error: HTML format is not supported for stats");
         return Err(AppError::Io(io::Error::new(
             io::ErrorKind::InvalidInput,
             "HTML format is not supported for stats",

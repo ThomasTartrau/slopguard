@@ -452,7 +452,6 @@ fn run_explain(
                     )));
                 }
                 Format::Html => {
-                    eprintln!("error: HTML format is not supported for explain");
                     return Err(AppError::Io(io::Error::new(
                         io::ErrorKind::InvalidInput,
                         "HTML format is not supported for explain",

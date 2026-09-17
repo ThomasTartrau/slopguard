@@ -204,7 +204,12 @@ fn severity_rank(severity: &Severity) -> u8 {
 
 /// Sort key placing errors before warnings, then by file path and position.
 fn sort_key(f: &Finding) -> (u8, &Path, usize, usize) {
-    (severity_rank(&f.severity), f.file.as_path(), f.line, f.column)
+    (
+        severity_rank(&f.severity),
+        f.file.as_path(),
+        f.line,
+        f.column,
+    )
 }
 
 /// Order the findings for display: errors first, then by file and position.
@@ -371,7 +376,12 @@ mod tests {
 
     #[test]
     fn output_starts_with_doctype() {
-        let result = result_of(vec![finding("a", Severity::Error, Category::Correctness, "a.rs")]);
+        let result = result_of(vec![finding(
+            "a",
+            Severity::Error,
+            Category::Correctness,
+            "a.rs",
+        )]);
         let out = render(&result, &meta());
         assert!(
             out.starts_with("<!DOCTYPE html>"),
@@ -381,7 +391,12 @@ mod tests {
 
     #[test]
     fn output_has_no_external_references() {
-        let result = result_of(vec![finding("a", Severity::Warning, Category::Slop, "a.rs")]);
+        let result = result_of(vec![finding(
+            "a",
+            Severity::Warning,
+            Category::Slop,
+            "a.rs",
+        )]);
         let out = render(&result, &meta());
         for needle in ["http://", "https://", "src=\"//\"", "<link", "fetch("] {
             assert!(!out.contains(needle), "not self-contained: {needle}");
@@ -390,7 +405,12 @@ mod tests {
 
     #[test]
     fn every_placeholder_is_substituted() {
-        let result = result_of(vec![finding("a", Severity::Warning, Category::Slop, "a.rs")]);
+        let result = result_of(vec![finding(
+            "a",
+            Severity::Warning,
+            Category::Slop,
+            "a.rs",
+        )]);
         let out = render(&result, &meta());
         assert!(
             !out.contains("{{"),
@@ -421,7 +441,9 @@ mod tests {
         let out = render(&result, &meta());
 
         let error_at = out.find("err-rule").expect("the error row should render");
-        let warning_at = out.find("warn-rule").expect("the warning row should render");
+        let warning_at = out
+            .find("warn-rule")
+            .expect("the warning row should render");
         assert!(error_at < warning_at, "errors should be listed first");
     }
 
