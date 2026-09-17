@@ -254,7 +254,6 @@ fn rows(findings: &[&Finding]) -> String {
         let category = f.category.to_string();
         let language = language_slug(&f.file);
         let file = escape_html(&f.file.display().to_string());
-        let escalated = if f.escalated { "true" } else { "false" };
         let escalated_badge = if f.escalated {
             "<span class=\"esc\">escalated</span>"
         } else {
@@ -272,7 +271,8 @@ fn rows(findings: &[&Finding]) -> String {
             rule = escape_html(f.rule_id.as_str()),
             line = f.line,
             column = f.column,
-            message = escape_html(&f.message)
+            message = escape_html(&f.message),
+            escalated = f.escalated
         ));
 
         out.push_str(&format!(

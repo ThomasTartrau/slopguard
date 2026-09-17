@@ -67,10 +67,7 @@ fn write_finding(
     c: &Colors,
 ) -> io::Result<()> {
     let sev_color = c.severity(&finding.severity);
-    let sev_label = match finding.severity {
-        Severity::Error => "error",
-        Severity::Warning => "warning",
-    };
+    let sev_label = &finding.severity;
     let escalated = if finding.escalated { "[escalated]" } else { "" };
 
     writeln!(

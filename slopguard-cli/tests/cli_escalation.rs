@@ -169,6 +169,46 @@ fn sarif_marks_escalated() {
 }
 
 #[test]
+fn html_output_marks_only_escalated_findings() {
+    for (count, escalated) in [(4, false), (5, true)] {
+        let dir = project(count, ESCALATION_ON);
+        let output = run(dir.path(), &["scan", ".", "--format", "html"], &[]);
+        assert_eq!(output.status.code(), Some(1));
+        let html = String::from_utf8(output.stdout).unwrap();
+        let attribute = format!("data-escalated=\"{escalated}\"");
+        assert_eq!(html.matches(&attribute).count(), count);
+        assert_eq!(
+            html.matches("<span class=\"esc\">escalated</span>").count(),
+            if escalated { count } else { 0 }
+        );
+    }
+}
+
+#[test]
+fn text_output_omits_marker_below_threshold() {
+    let dir = project(4, ESCALATION_ON);
+    let output = run(dir.path(), &["scan", ".", "--no-colors"], &[]);
+    assert_eq!(output.status.code(), Some(1));
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert_eq!(text.matches("warning[no-todo-fixme]").count(), 4);
+    assert!(!text.contains("escalated"));
+}
+
+#[test]
+fn sarif_omits_properties_below_threshold() {
+    let dir = project(4, ESCALATION_ON);
+    let output = run(dir.path(), &["scan", ".", "--format", "sarif"], &[]);
+    assert_eq!(output.status.code(), Some(1));
+    let json = parse_json(&output);
+    let findings = json["runs"][0]["results"].as_array().unwrap();
+    assert_eq!(findings.len(), 4);
+    for finding in findings {
+        assert_eq!(finding["level"], "warning");
+        assert!(finding.get("properties").is_none());
+    }
+}
+
+#[test]
 fn severity_threshold_error_fails_on_escalated_warnings() {
     let dir = project(5, ESCALATION_ON);
     let base = ["scan", ".", "--severity-threshold", "error"];
