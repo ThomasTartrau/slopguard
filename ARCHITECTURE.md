@@ -32,7 +32,7 @@ slopguard/
 The binary crate. Responsible for:
 - CLI argument parsing via clap (derive API)
 - Subcommands: scan, stats, baseline, explain, init, test, list
-- Output formatting (text with colors, JSON, SARIF)
+- Output formatting (text with colors, JSON, SARIF, HTML)
 - Exit code logic (0 = clean, 1 = findings, 2 = config error)
 - Reading config from slopguard.toml (hierarchical: global + project)
 
@@ -148,7 +148,7 @@ custom_dirs = ["./my-rules"]
 ignores = ["target/", "generated/", "*.generated.rs"]
 
 [output]
-format = "text"    # text | json | sarif
+format = "text"    # text | json | sarif | html
 colors = true
 
 [ai]
@@ -214,6 +214,21 @@ normal scan omits them entirely.
 
 ### SARIF
 Standard SARIF 2.1.0 for GitHub Code Scanning / GitLab SAST integration.
+
+### HTML
+A standalone single-file report rendered from `slopguard-cli/templates/report.html`
+(embedded with `include_str!`). The CLI expands `{{PLACEHOLDER}}` tokens with
+server-rendered markup: the header totals, one horizontal bar per severity,
+category and language, and one table row per finding plus a detail row carrying
+the matched snippet. Styles and the filter script are inlined, so the document
+makes no external request, and colors are CSS custom properties overridden under
+`@media (prefers-color-scheme: dark)`.
+
+Every value taken from scanned source (message, note, fix, snippet, file path)
+goes through a single-pass HTML escape before it reaches the document.
+
+`-o/--output <path>` writes the report to a file instead of stdout. It works for
+every format and never emits ANSI escapes into the file.
 
 ## Exit codes
 

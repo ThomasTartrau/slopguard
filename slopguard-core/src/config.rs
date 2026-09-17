@@ -17,6 +17,7 @@ pub enum OutputFormat {
     Text,
     Json,
     Sarif,
+    Html,
 }
 
 /// Transport used to reach the LLM.
@@ -468,6 +469,19 @@ ignores = ["target/"]
 
         let cfg = load_config_from(None, dir.path()).unwrap();
         assert!(cfg.scan.cache_dir.is_none());
+    }
+
+    #[test]
+    fn parses_html_output_format() {
+        let dir = tempdir().unwrap();
+        write(
+            dir.path().join("slopguard.toml"),
+            "[output]\nformat = \"html\"\n",
+        )
+        .unwrap();
+
+        let cfg = load_config_from(None, dir.path()).unwrap();
+        assert_eq!(cfg.output.format, OutputFormat::Html);
     }
 
     #[test]

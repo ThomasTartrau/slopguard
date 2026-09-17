@@ -7,9 +7,10 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::env;
 use std::fs;
-use std::io::{self, Write};
+use std::io::{self, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use clap::Parser;
 use strsim::normalized_levenshtein;
@@ -32,8 +33,9 @@ use slopguard_core::testing::{self, RuleTestStatus, TestError, TestFailureKind};
 
 use crate::baseline_cmd::{apply_baseline, run_baseline, BaselineOpts};
 use crate::cli::{CategoryFilter, Cli, Command, Format, LanguageFilter, SeverityThreshold};
-use crate::output::{json, sarif, text};
-use crate::stats_cmd::{run_stats, StatsOpts};
+use crate::output::html::{project_name, HtmlMeta};
+use crate::output::{html, json, sarif, text};
+use crate::stats_cmd::{compute_report, run_stats, StatsOpts};
 
 fn has_findings_above_threshold(result: &ScanResult, threshold: &SeverityThreshold) -> bool {
     result.findings.iter().any(|f| match threshold {
@@ -47,11 +49,13 @@ fn write_output(
     format: &Format,
     w: &mut impl Write,
     use_colors: bool,
+    html_meta: &HtmlMeta,
 ) -> io::Result<()> {
     match format {
         Format::Text => text::format_text(result, w, use_colors),
         Format::Json => json::format_json(result, w),
         Format::Sarif => sarif::format_sarif(result, w),
+        Format::Html => html::format_html(result, &compute_report(result), html_meta, w),
     }
 }
 
@@ -85,6 +89,7 @@ fn suggest_similar<'a>(id: &str, rules: &'a [Rule]) -> Option<&'a str> {
 struct ScanOpts {
     paths: Vec<PathBuf>,
     format: Option<Format>,
+    output: Option<PathBuf>,
     severity_threshold: SeverityThreshold,
     config_path: Option<PathBuf>,
     no_colors: bool,
@@ -238,6 +243,7 @@ fn run_scan(opts: ScanOpts) -> Result<bool, AppError> {
     let ScanOpts {
         paths,
         format,
+        output,
         severity_threshold,
         config_path,
         no_colors,
@@ -253,6 +259,8 @@ fn run_scan(opts: ScanOpts) -> Result<bool, AppError> {
         base,
     } = opts;
     let use_colors = !no_colors && env::var_os("NO_COLOR").is_none();
+    // `paths` is moved into CollectOpts below, so derive the title first.
+    let project = project_name(&paths);
 
     let (mut result, config) = collect_findings(CollectOpts {
         paths,
@@ -267,19 +275,40 @@ fn run_scan(opts: ScanOpts) -> Result<bool, AppError> {
         diff_base: base,
     })?;
 
-    apply_baseline(&mut result, no_baseline, baseline_path)?;
+    let baseline_active = apply_baseline(&mut result, no_baseline, baseline_path)?;
 
     let format = format.unwrap_or(match config.output.format {
         OutputFormat::Text => Format::Text,
         OutputFormat::Json => Format::Json,
         OutputFormat::Sarif => Format::Sarif,
+        OutputFormat::Html => Format::Html,
     });
 
     let has_findings = has_findings_above_threshold(&result, &severity_threshold);
 
-    let stdout = io::stdout();
-    let mut out = stdout.lock();
-    write_output(&result, &format, &mut out, use_colors)?;
+    let html_meta = HtmlMeta {
+        project_name: project,
+        generated_at_secs: SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0),
+        baseline_active,
+    };
+
+    match output {
+        Some(path) => {
+            let file = fs::File::create(&path)?;
+            let mut w = BufWriter::new(file);
+            // A file is never a terminal: never emit ANSI escapes into it.
+            write_output(&result, &format, &mut w, false, &html_meta)?;
+            w.flush()?;
+        }
+        None => {
+            let stdout = io::stdout();
+            let mut out = stdout.lock();
+            write_output(&result, &format, &mut out, use_colors, &html_meta)?;
+        }
+    }
 
     Ok(has_findings)
 }
@@ -420,6 +449,12 @@ fn run_explain(
                     return Err(AppError::Io(io::Error::new(
                         io::ErrorKind::InvalidInput,
                         "SARIF format is not supported for explain",
+                    )));
+                }
+                Format::Html => {
+                    return Err(AppError::Io(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "HTML format is not supported for explain",
                     )));
                 }
             }?;
@@ -650,6 +685,7 @@ fn main() -> ExitCode {
         Command::Scan {
             paths,
             format,
+            output,
             severity_threshold,
             config,
             no_colors,
@@ -666,6 +702,7 @@ fn main() -> ExitCode {
         } => match run_scan(ScanOpts {
             paths,
             format,
+            output,
             severity_threshold,
             config_path: config,
             no_colors,

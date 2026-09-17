@@ -69,18 +69,20 @@ fn resolve_baseline(
 
 /// Drop the findings already recorded in the baseline and update the stats.
 ///
-/// A no-op when no baseline applies.
+/// Returns `true` when a baseline was resolved and applied, `false` when none
+/// applies (`--no-baseline`, or no baseline file found).
 pub fn apply_baseline(
     result: &mut ScanResult,
     no_baseline: bool,
     baseline_path: Option<PathBuf>,
-) -> Result<(), AppError> {
+) -> Result<bool, AppError> {
     if let Some((bl, root)) = resolve_baseline(no_baseline, baseline_path)? {
         let (kept, filtered) = baseline::filter(take(&mut result.findings), &bl, &root);
         result.findings = kept;
         recompute_stats(result, filtered);
+        return Ok(true);
     }
-    Ok(())
+    Ok(false)
 }
 
 /// Scan and record every current finding into a baseline file.

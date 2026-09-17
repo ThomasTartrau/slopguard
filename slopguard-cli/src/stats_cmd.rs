@@ -181,6 +181,13 @@ pub fn run_stats(opts: StatsOpts) -> Result<(), AppError> {
         )));
     }
 
+    if let Some(Format::Html) = format {
+        return Err(AppError::Io(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "HTML format is not supported for stats",
+        )));
+    }
+
     let (mut result, config) = collect_findings(CollectOpts {
         paths,
         config_path,
@@ -194,14 +201,14 @@ pub fn run_stats(opts: StatsOpts) -> Result<(), AppError> {
         diff_base: None,
     })?;
 
-    apply_baseline(&mut result, no_baseline, baseline_path)?;
+    let _baseline_active = apply_baseline(&mut result, no_baseline, baseline_path)?;
 
-    // A config-level `format = "sarif"` falls back to text rather than
-    // failing: only an explicit `--format sarif` is an error.
+    // A config-level `format = "sarif"` or `"html"` falls back to text rather
+    // than failing: only an explicit `--format sarif|html` is an error.
     let format = format.unwrap_or(match config.output.format {
         OutputFormat::Text => Format::Text,
         OutputFormat::Json => Format::Json,
-        OutputFormat::Sarif => Format::Text,
+        OutputFormat::Sarif | OutputFormat::Html => Format::Text,
     });
 
     let report = compute_report(&result);
@@ -210,7 +217,9 @@ pub fn run_stats(opts: StatsOpts) -> Result<(), AppError> {
     let mut out = stdout.lock();
     match format {
         Format::Json => format_stats_json(&report, &mut out)?,
-        Format::Text | Format::Sarif => format_stats_text(&report, &mut out, use_colors)?,
+        Format::Text | Format::Sarif | Format::Html => {
+            format_stats_text(&report, &mut out, use_colors)?
+        }
     }
 
     Ok(())
