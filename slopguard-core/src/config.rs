@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -83,6 +84,10 @@ fn default_concurrency() -> usize {
     4
 }
 
+fn default_escalation_threshold() -> usize {
+    5
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, SmartDefault)]
 #[serde(default)]
 pub struct AiConfig {
@@ -101,6 +106,21 @@ pub struct AiConfig {
     pub api_key: Option<String>,
 }
 
+/// Severity escalation: when one rule fires repeatedly in a single file, its
+/// warnings become errors. Opt-in so existing CI results do not change.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, SmartDefault)]
+#[serde(default)]
+pub struct EscalationConfig {
+    /// Off by default.
+    pub enabled: bool,
+    /// Findings of the same rule in the same file needed to escalate.
+    #[default = 5]
+    #[serde(default = "default_escalation_threshold")]
+    pub threshold: usize,
+    /// Per-rule thresholds, overriding `threshold`. Keys are rule ids.
+    pub rules: HashMap<String, usize>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct Config {
@@ -109,6 +129,7 @@ pub struct Config {
     pub scan: ScanConfig,
     pub output: OutputConfig,
     pub ai: AiConfig,
+    pub escalation: EscalationConfig,
 }
 
 #[derive(Debug, Error)]
@@ -245,6 +266,13 @@ vendor = "openai"
 model = "claude-sonnet-5"
 concurrency = 8
 api_key = "sk-test"
+
+[escalation]
+enabled = true
+threshold = 3
+
+[escalation.rules]
+no-magic-number = 2
 "#;
         write(dir.path().join("slopguard.toml"), toml).unwrap();
 
@@ -267,6 +295,9 @@ api_key = "sk-test"
         assert_eq!(cfg.ai.model.as_deref(), Some("claude-sonnet-5"));
         assert_eq!(cfg.ai.concurrency, 8);
         assert_eq!(cfg.ai.api_key.as_deref(), Some("sk-test"));
+        assert!(cfg.escalation.enabled);
+        assert_eq!(cfg.escalation.threshold, 3);
+        assert_eq!(cfg.escalation.rules.get("no-magic-number"), Some(&2));
     }
 
     #[test]
@@ -290,6 +321,10 @@ slop = false
         assert_eq!(cfg.ai.provider, AiTransport::Api);
         assert_eq!(cfg.ai.vendor, AiVendor::Anthropic);
         assert_eq!(cfg.ai.concurrency, 4);
+        // defaults hold when [escalation] is absent
+        assert!(!cfg.escalation.enabled);
+        assert_eq!(cfg.escalation.threshold, 5);
+        assert!(cfg.escalation.rules.is_empty());
     }
 
     #[test]
@@ -443,6 +478,69 @@ format = "xml"
         assert_eq!(cfg.ai.concurrency, 4);
         assert!(cfg.ai.model.is_none());
         assert!(cfg.ai.api_key.is_none());
+        assert!(!cfg.escalation.enabled);
+        assert_eq!(cfg.escalation.threshold, 5);
+        assert!(cfg.escalation.rules.is_empty());
+    }
+
+    #[test]
+    fn escalation_section_defaults_threshold() {
+        let dir = tempdir().unwrap();
+        write(
+            dir.path().join("slopguard.toml"),
+            "[escalation]\nenabled = true\n",
+        )
+        .unwrap();
+
+        let cfg = load_config_from(None, dir.path()).unwrap();
+        assert!(cfg.escalation.enabled);
+        assert_eq!(cfg.escalation.threshold, 5);
+    }
+
+    #[test]
+    fn escalation_rules_merge_global_and_project() {
+        let global_dir = tempdir().unwrap();
+        let project_dir = tempdir().unwrap();
+
+        let slopguard_config_dir = global_dir.path().join("slopguard");
+        create_dir_all(&slopguard_config_dir).unwrap();
+
+        write(
+            slopguard_config_dir.join("config.toml"),
+            "[escalation]\nenabled = true\n\n[escalation.rules]\na = 3\n",
+        )
+        .unwrap();
+        write(
+            project_dir.path().join("slopguard.toml"),
+            "[escalation.rules]\nb = 7\n",
+        )
+        .unwrap();
+
+        let cfg = load_config_from(Some(global_dir.path()), project_dir.path()).unwrap();
+        assert!(cfg.escalation.enabled);
+        assert_eq!(cfg.escalation.rules.get("a"), Some(&3));
+        assert_eq!(cfg.escalation.rules.get("b"), Some(&7));
+    }
+
+    #[test]
+    fn invalid_escalation_threshold_is_an_error() {
+        let dir = tempdir().unwrap();
+        write(
+            dir.path().join("slopguard.toml"),
+            "[escalation]\nthreshold = \"five\"\n",
+        )
+        .unwrap();
+
+        let err = load_config_from(None, dir.path()).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            matches!(err, ConfigError::Parse { .. }),
+            "expected Parse error for a non-numeric threshold, got: {msg}"
+        );
+        assert!(
+            msg.contains("slopguard.toml"),
+            "error should mention the file path, got: {msg}"
+        );
     }
 
     #[test]

@@ -71,7 +71,15 @@ struct SarifResult<'a> {
 #[serde(rename_all = "camelCase")]
 struct SarifResultProperties {
     /// LLM confidence for AI-confirmed findings.
-    confidence: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    confidence: Option<f64>,
+    /// True when repetition escalation raised this finding's level.
+    #[serde(skip_serializing_if = "is_false")]
+    escalated: bool,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 #[derive(Serialize)]
@@ -153,6 +161,17 @@ pub fn format_sarif(result: &ScanResult, w: &mut impl Write) -> io::Result<()> {
                 .position(|(rid, _, _)| *rid == f.rule_id.as_str())
                 .unwrap_or(0);
 
+            // Emitted only when there is something to say, so a plain AST
+            // finding keeps the same shape it had before escalation existed.
+            let properties = if f.confidence.is_some() || f.escalated {
+                Some(SarifResultProperties {
+                    confidence: f.confidence,
+                    escalated: f.escalated,
+                })
+            } else {
+                None
+            };
+
             SarifResult {
                 rule_id: f.rule_id.as_str(),
                 rule_index,
@@ -177,9 +196,7 @@ pub fn format_sarif(result: &ScanResult, w: &mut impl Write) -> io::Result<()> {
                         description: SarifMessage { text: fix },
                     }]
                 }),
-                properties: f
-                    .confidence
-                    .map(|confidence| SarifResultProperties { confidence }),
+                properties,
             }
         })
         .collect();

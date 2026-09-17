@@ -156,6 +156,13 @@ enabled = false
 provider = "anthropic"   # anthropic | openai | ollama
 model = "claude-sonnet-5"
 # api_key via ANTHROPIC_API_KEY / OPENAI_API_KEY env var
+
+[escalation]
+enabled = false    # opt-in
+threshold = 5      # same rule firing N times in one file becomes an error
+
+[escalation.rules]
+no-magic-number = 3    # per-rule override
 ```
 
 Hierarchical resolution:
@@ -192,7 +199,8 @@ error[no-unwrap-in-prod]: .unwrap() forbidden in production. Use ? or .expect('e
       "end_line": 42,
       "end_column": 40,
       "note": "unwrap() crashes the process on a single invalid input.",
-      "fix": "Use ? or .expect('explicit message')."
+      "fix": "Use ? or .expect('explicit message').",
+      "escalated": false
     }
   ],
   "summary": { "errors": 1, "warnings": 0, "total": 1 },
@@ -252,6 +260,26 @@ let x = foo().unwrap();
 ```
 
 The core scanner reads the line above each finding. If it contains `slopguard-disable-next-line` (optionally with a rule id), the finding is suppressed.
+
+## Severity escalation
+
+`slopguard_core::escalation` groups the reported findings by `(file, rule id)`
+and, when a group reaches its threshold, raises that group's warnings to errors
+and marks them `escalated: true`.
+
+Pipeline position: the CLI applies it after baseline filtering (suppressed
+findings must not inflate the per-file count) and before the severity threshold
+is evaluated and the report rendered. So an escalated finding can fail a
+`--severity-threshold error` run, and the text, JSON, SARIF and HTML outputs all
+see the raised severity.
+
+One level only: a finding already at `error` counts toward the threshold but is
+never modified, and its `escalated` stays `false`.
+
+The scan cache sits below this transform and always stores the un-escalated
+severity, so a cached re-scan escalates again from the raw findings. Baseline
+hashes exclude severity, so escalation can never invalidate an existing
+baseline. `--no-escalation` skips the transform for a single run.
 
 ## Testing rules
 

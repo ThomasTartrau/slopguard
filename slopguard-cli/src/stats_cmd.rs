@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 
 use slopguard_core::config::OutputFormat;
+use slopguard_core::escalation::apply_escalation;
 use slopguard_core::finding::ScanResult;
 use slopguard_core::rule::{Category, Language, Severity};
 
@@ -148,6 +149,7 @@ pub struct StatsOpts {
     pub no_ai: bool,
     pub no_baseline: bool,
     pub baseline_path: Option<PathBuf>,
+    pub no_escalation: bool,
 }
 
 /// Run the same pipeline as `scan`, then print the aggregated distribution
@@ -170,6 +172,7 @@ pub fn run_stats(opts: StatsOpts) -> Result<(), AppError> {
         no_ai,
         no_baseline,
         baseline_path,
+        no_escalation,
     } = opts;
     let use_colors = !no_colors && env::var_os("NO_COLOR").is_none();
 
@@ -202,6 +205,12 @@ pub fn run_stats(opts: StatsOpts) -> Result<(), AppError> {
     })?;
 
     let _baseline_active = apply_baseline(&mut result, no_baseline, baseline_path)?;
+
+    // Same pipeline position as `scan`, so the aggregated severity counts
+    // match what `scan` reports for the same run.
+    if !no_escalation {
+        apply_escalation(&mut result, &config.escalation);
+    }
 
     // A config-level `format = "sarif"` or `"html"` falls back to text rather
     // than failing: only an explicit `--format sarif|html` is an error.
@@ -249,6 +258,7 @@ mod tests {
             end_column: 2,
             matched_text: "x".to_string(),
             confidence: None,
+            escalated: false,
         }
     }
 

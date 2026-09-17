@@ -254,11 +254,18 @@ fn rows(findings: &[&Finding]) -> String {
         let category = f.category.to_string();
         let language = language_slug(&f.file);
         let file = escape_html(&f.file.display().to_string());
+        let escalated = if f.escalated { "true" } else { "false" };
+        let escalated_badge = if f.escalated {
+            "<span class=\"esc\">escalated</span>"
+        } else {
+            ""
+        };
 
         out.push_str(&format!(
             "<tr data-severity=\"{severity}\" data-category=\"{category}\" \
-             data-language=\"{language}\" data-file=\"{file}\">\
-             <td><span class=\"sev {severity}\">{severity}</span></td>\
+             data-language=\"{language}\" data-file=\"{file}\" \
+             data-escalated=\"{escalated}\">\
+             <td><span class=\"sev {severity}\">{severity}</span>{escalated_badge}</td>\
              <td><code>{rule}</code></td>\
              <td class=\"loc\">{file}:{line}:{column}</td>\
              <td>{message}</td></tr>",
@@ -307,6 +314,7 @@ mod tests {
             end_column: 2,
             matched_text: "x".to_string(),
             confidence: None,
+            escalated: false,
         }
     }
 

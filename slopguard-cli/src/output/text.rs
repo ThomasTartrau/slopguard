@@ -71,10 +71,11 @@ fn write_finding(
         Severity::Error => "error",
         Severity::Warning => "warning",
     };
+    let escalated = if finding.escalated { "[escalated]" } else { "" };
 
     writeln!(
         w,
-        "{sev_color}{sev_label}{reset}[{id}]: {msg}",
+        "{sev_color}{sev_label}{escalated}{reset}[{id}]: {msg}",
         reset = c.reset,
         id = finding.rule_id,
         msg = finding.message
@@ -237,6 +238,12 @@ pub fn format_text(result: &ScanResult, w: &mut impl Write, use_colors: bool) ->
             "{n} {label} filtered by baseline",
             n = result.stats.baseline_filtered
         )?;
+    }
+
+    let escalated = result.findings.iter().filter(|f| f.escalated).count();
+    if escalated > 0 {
+        let label = plural(escalated, "finding", "findings");
+        writeln!(w, "{escalated} {label} escalated to error")?;
     }
 
     if result.stats.total > 0 {

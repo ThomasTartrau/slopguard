@@ -74,6 +74,17 @@ concurrency = 4
 # api_key via ANTHROPIC_API_KEY / OPENAI_API_KEY env, or ai.api_key
 "#;
 
+/// The commented-out `[escalation]` block shipped by every preset. Escalation
+/// is opt-in, so no preset turns it on.
+const COMMENTED_ESCALATION_BODY: &str = r#"
+# [escalation]
+# enabled = false
+# threshold = 5          # same rule firing N times in one file becomes an error
+#
+# [escalation.rules]
+# no-magic-number = 3    # per-rule override
+"#;
+
 impl Preset {
     /// One-line summary shown by `slopguard init --preset` and written into
     /// the header of the generated file.
@@ -164,14 +175,18 @@ fn correctness_warning_rule_ids() -> Result<Vec<String>, RuleError> {
 
 fn render_default() -> String {
     format!(
-        "{}{}{COMMENTED_AI_BODY}",
+        "{}{}{COMMENTED_AI_BODY}{COMMENTED_ESCALATION_BODY}",
         header(Preset::Default),
         common_body()
     )
 }
 
 fn render_ai() -> String {
-    format!("{}{}{LIVE_AI_BODY}", header(Preset::Ai), common_body())
+    format!(
+        "{}{}{LIVE_AI_BODY}{COMMENTED_ESCALATION_BODY}",
+        header(Preset::Ai),
+        common_body()
+    )
 }
 
 fn render_strict() -> Result<String, RuleError> {
@@ -189,6 +204,7 @@ fn render_strict() -> Result<String, RuleError> {
          #   slopguard scan --severity-threshold warning\n",
     );
     out.push_str(COMMENTED_AI_BODY);
+    out.push_str(COMMENTED_ESCALATION_BODY);
     Ok(out)
 }
 
@@ -202,6 +218,7 @@ fn render_relaxed() -> Result<String, RuleError> {
     out.push_str(&toml_array("disable", &correctness_warning_rule_ids()?));
     out.push_str("enable = []\n# custom_dirs = [\"./my-rules\"]\n\n[scan]\nignores = []\n\n");
     out.push_str(OUTPUT_BLOCK);
+    out.push_str(COMMENTED_ESCALATION_BODY);
     Ok(out)
 }
 
@@ -258,6 +275,18 @@ mod tests {
     fn every_preset_renders_valid_config() {
         for preset in Preset::iter() {
             let _config = parse(preset);
+        }
+    }
+
+    #[test]
+    fn every_preset_leaves_escalation_off() {
+        for preset in Preset::iter() {
+            let config = parse(preset);
+            assert!(
+                !config.escalation.enabled,
+                "preset {preset} should leave escalation off"
+            );
+            assert_eq!(config.escalation.threshold, 5);
         }
     }
 
