@@ -1,4 +1,5 @@
 use std::io::{self, Write};
+use std::ops::Not;
 
 use serde::Serialize;
 
@@ -71,7 +72,12 @@ struct SarifResult<'a> {
 #[serde(rename_all = "camelCase")]
 struct SarifResultProperties {
     /// LLM confidence for AI-confirmed findings.
-    confidence: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    confidence: Option<f64>,
+    /// True when repetition escalation raised this finding's level. Absent
+    /// from the JSON when `false`, so plain AST findings keep their shape.
+    #[serde(skip_serializing_if = "Not::not")]
+    escalated: bool,
 }
 
 #[derive(Serialize)]
@@ -153,6 +159,14 @@ pub fn format_sarif(result: &ScanResult, w: &mut impl Write) -> io::Result<()> {
                 .position(|(rid, _, _)| *rid == f.rule_id.as_str())
                 .unwrap_or(0);
 
+            // Emitted only when there is something to say, so a plain AST
+            // finding keeps the same shape it had before escalation existed.
+            let properties =
+                (f.confidence.is_some() || f.escalated).then_some(SarifResultProperties {
+                    confidence: f.confidence,
+                    escalated: f.escalated,
+                });
+
             SarifResult {
                 rule_id: f.rule_id.as_str(),
                 rule_index,
@@ -177,9 +191,7 @@ pub fn format_sarif(result: &ScanResult, w: &mut impl Write) -> io::Result<()> {
                         description: SarifMessage { text: fix },
                     }]
                 }),
-                properties: f
-                    .confidence
-                    .map(|confidence| SarifResultProperties { confidence }),
+                properties,
             }
         })
         .collect();
@@ -201,4 +213,31 @@ pub fn format_sarif(result: &ScanResult, w: &mut impl Write) -> io::Result<()> {
     };
 
     write_json_pretty(w, &sarif)
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::{json, to_value};
+
+    use super::SarifResultProperties;
+
+    #[test]
+    fn properties_omit_absent_confidence_and_false_escalation() {
+        for (confidence, escalated, expected) in [
+            (None, false, json!({})),
+            (None, true, json!({ "escalated": true })),
+            (Some(0.9), false, json!({ "confidence": 0.9 })),
+            (
+                Some(0.9),
+                true,
+                json!({ "confidence": 0.9, "escalated": true }),
+            ),
+        ] {
+            let properties = SarifResultProperties {
+                confidence,
+                escalated,
+            };
+            assert_eq!(to_value(properties).unwrap(), expected);
+        }
+    }
 }

@@ -102,6 +102,10 @@ pub enum Command {
         #[arg(long = "baseline", value_name = "PATH")]
         baseline_path: Option<PathBuf>,
 
+        /// Disable severity escalation for this run
+        #[arg(long)]
+        no_escalation: bool,
+
         /// Only scan files changed in git (staged and unstaged, or against --base)
         #[arg(long)]
         diff: bool,
@@ -159,6 +163,10 @@ pub enum Command {
         /// Path to a specific baseline file
         #[arg(long = "baseline", value_name = "PATH")]
         baseline_path: Option<PathBuf>,
+
+        /// Disable severity escalation for this run
+        #[arg(long)]
+        no_escalation: bool,
     },
     /// Capture current findings into a baseline file
     Baseline {
@@ -478,6 +486,20 @@ mod tests {
         let result =
             Cli::command().try_get_matches_from(["slopguard", "scan", "--base", "main", "."]);
         assert!(result.is_err(), "--base should require --diff");
+    }
+
+    #[test]
+    fn cli_parses_scan_with_no_escalation() {
+        Cli::command()
+            .try_get_matches_from(["slopguard", "scan", "--no-escalation", "."])
+            .expect("scan with --no-escalation should parse");
+    }
+
+    #[test]
+    fn cli_parses_stats_with_no_escalation() {
+        Cli::command()
+            .try_get_matches_from(["slopguard", "stats", "--no-escalation", "."])
+            .expect("stats with --no-escalation should parse");
     }
 
     #[test]
