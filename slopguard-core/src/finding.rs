@@ -26,6 +26,11 @@ pub struct Finding {
     /// output ignores it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub confidence: Option<f64>,
+    /// True when severity escalation raised this finding from warning to error
+    /// because its rule fired repeatedly in the same file. Always serialized so
+    /// consumers can filter on `escalated == false` without a null check.
+    #[serde(default)]
+    pub escalated: bool,
 }
 
 /// Aggregate statistics from a scan run.

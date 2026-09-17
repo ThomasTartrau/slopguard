@@ -74,6 +74,17 @@ concurrency = 4
 # api_key via ANTHROPIC_API_KEY / OPENAI_API_KEY env, or ai.api_key
 "#;
 
+/// The commented-out `[escalation]` block shipped by every preset. Escalation
+/// is opt-in, so no preset turns it on.
+const COMMENTED_ESCALATION_BODY: &str = r#"
+# [escalation]
+# enabled = false
+# threshold = 5          # same rule firing N times in one file becomes an error
+#
+# [escalation.rules]
+# no-magic-number = 3    # per-rule override
+"#;
+
 impl Preset {
     /// One-line summary shown by `slopguard init --preset` and written into
     /// the header of the generated file.
@@ -94,12 +105,14 @@ impl Preset {
 
     /// Render the preset as the full text of a `slopguard.toml`.
     pub fn render(&self) -> Result<String, RuleError> {
-        match self {
-            Preset::Default => Ok(render_default()),
-            Preset::Strict => render_strict(),
-            Preset::Relaxed => render_relaxed(),
-            Preset::Ai => Ok(render_ai()),
-        }
+        let mut out = match self {
+            Preset::Default => render_default(),
+            Preset::Strict => render_strict()?,
+            Preset::Relaxed => render_relaxed()?,
+            Preset::Ai => render_ai(),
+        };
+        out.push_str(COMMENTED_ESCALATION_BODY);
+        Ok(out)
     }
 }
 
@@ -258,6 +271,27 @@ mod tests {
     fn every_preset_renders_valid_config() {
         for preset in Preset::iter() {
             let _config = parse(preset);
+        }
+    }
+
+    #[test]
+    fn every_preset_leaves_escalation_off() {
+        for preset in Preset::iter() {
+            let config = parse(preset);
+            assert!(
+                !config.escalation.enabled,
+                "preset {preset} should leave escalation off"
+            );
+            assert_eq!(config.escalation.threshold, 5);
+        }
+    }
+
+    #[test]
+    fn every_preset_ends_with_one_escalation_block() {
+        for preset in Preset::iter() {
+            let rendered = preset.render().unwrap();
+            assert!(rendered.ends_with(COMMENTED_ESCALATION_BODY));
+            assert_eq!(rendered.matches("# [escalation]\n").count(), 1);
         }
     }
 

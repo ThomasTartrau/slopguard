@@ -26,6 +26,7 @@ fn make_finding(rule_id: &str, file: &str, line: usize, matched_text: &str) -> F
         end_column: 10,
         matched_text: matched_text.to_string(),
         confidence: None,
+        escalated: false,
     }
 }
 
