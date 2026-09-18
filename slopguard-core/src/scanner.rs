@@ -403,8 +403,8 @@ fn scan_collected_cached(
     cache_dir: &Path,
     prune: bool,
 ) -> ScanResult {
-    let store = CacheStore::with_dir(cache_dir.to_path_buf());
     let current_rules_hash = rules_hash(rules);
+    let store = CacheStore::with_dir(cache_dir.to_path_buf()).scoped_to_rules(&current_rules_hash);
     let rules_changed = store
         .check_rules_changed(&current_rules_hash)
         .unwrap_or(true);

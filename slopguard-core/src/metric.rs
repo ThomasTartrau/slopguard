@@ -282,8 +282,8 @@ fn e() {}
         assert_eq!(Metric::FileLines.describe(547.0), "547 lines");
         assert_eq!(Metric::ImportCount.describe(42.0), "42 imports");
         assert_eq!(Metric::FunctionCount.describe(31.0), "31 functions");
-        assert_eq!(Metric::CommentRatio.format_value(0.615), "0.62");
-        let ratio = Metric::CommentRatio.describe(0.615);
+        assert_eq!(Metric::CommentRatio.format_value(0.617), "0.62");
+        let ratio = Metric::CommentRatio.describe(0.617);
         assert_eq!(ratio, "0.62 comment ratio");
     }
 

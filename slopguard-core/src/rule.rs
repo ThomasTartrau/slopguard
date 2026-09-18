@@ -1005,9 +1005,13 @@ message: "m"
         let dir = tempdir().unwrap();
         let fixtures = dir.path().join("fixtures");
         create_dir(&fixtures).unwrap();
-        write(fixtures.join("big.rs"), "fn a() {}
+        write(
+            fixtures.join("big.rs"),
+            "fn a() {}
 fn b() {}
-").unwrap();
+",
+        )
+        .unwrap();
         write(
             dir.path().join("metric.yml"),
             r#"
@@ -1029,9 +1033,12 @@ tests:
         assert_eq!(rules.len(), 1);
         assert_eq!(rules[0].source_dir.as_deref(), Some(dir.path()));
         let content = read_fixture(&rules[0], "fixtures/big.rs").unwrap();
-        assert_eq!(content, "fn a() {}
+        assert_eq!(
+            content,
+            "fn a() {}
 fn b() {}
-");
+"
+        );
     }
 
     #[test]

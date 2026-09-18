@@ -82,6 +82,7 @@ struct ExplainOutput<'a> {
     fix: Option<&'a str>,
     /// "metric" for file-level rules, "ai" for rules with an `ai_check`,
     /// "ast" otherwise.
+    #[serde(rename = "type")]
     kind: &'a str,
     /// The measured file-level property, present only for metric rules.
     #[serde(skip_serializing_if = "Option::is_none")]
