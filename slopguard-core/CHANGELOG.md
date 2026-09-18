@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.1.14](https://gitlab.com/ThomasTartrau/slopguard/compare/slopguard-core-v0.1.13...slopguard-core-v0.1.14) - 2026-09-17
+
+### Added
+
+- #29 escalate repeated warnings to errors per file
+
+
+### Fixed
+
+- #29 deduplicate escalation block across presets
+
 ## [0.1.13](https://gitlab.com/ThomasTartrau/slopguard/compare/slopguard-core-v0.1.12...slopguard-core-v0.1.13) - 2026-09-17
 
 ### Added

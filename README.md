@@ -24,6 +24,7 @@
 [Architecture](#%EF%B8%8F-architecture) -
 [Rulesets](#-rulesets) -
 [Configuration](#%EF%B8%8F-configuration) -
+[Severity Escalation](#-severity-escalation) -
 [Custom Rules](#-custom-rules) -
 [AI Rules](#-ai-rules)
 
@@ -183,6 +184,10 @@ custom_dirs = ["./my-rules"]
 
 [scan]
 ignores = ["target/", "generated/", "vendor/"]
+
+[escalation]
+enabled = false     # opt-in, see Severity Escalation below
+threshold = 5
 ```
 
 Hierarchical config: `~/.config/slopguard/config.toml` (global defaults) is overridden by project-level `slopguard.toml`, which is overridden by CLI flags.
@@ -393,6 +398,55 @@ let value = safe_call().unwrap();
 ```
 
 The first form suppresses all rules for the next line. The second form suppresses only the named rule.
+
+---
+
+## 🔺 Severity Escalation
+
+One `// TODO` is noise. Twenty of them in the same file is a quality problem.
+Severity escalation turns the second case into an error: when a rule produces at
+least `threshold` findings in a single file, that rule's warnings in that file
+become errors.
+
+```toml
+[escalation]
+enabled = true      # off by default
+threshold = 5       # same rule firing 5 times in one file becomes an error
+
+[escalation.rules]
+no-todo-fixme = 3   # per-rule override of `threshold`
+no-magic-number = 10
+```
+
+Rules:
+
+- **Opt-in.** `enabled = false` by default, so existing CI results are unchanged
+  until you switch it on.
+- **Per file, per rule.** Counts never mix files or rule ids.
+- **One level only.** A finding already at `error` counts toward the threshold
+  but is never modified.
+- **After the baseline.** Findings suppressed by a baseline do not inflate the
+  count.
+
+`slopguard scan --no-escalation` (also on `stats`) skips it for a single run,
+whatever the config says.
+
+Escalated findings are marked in every output:
+
+```text
+error[escalated][no-todo-fixme]: TODO/FIXME left in code. Resolve it or open an issue.
+...
+5 findings escalated to error
+```
+
+- **JSON**: `"escalated": true` on the finding, with `"severity": "error"`.
+- **SARIF**: `properties.escalated: true`, with `level: "error"`.
+- **HTML**: an `escalated` badge next to the severity chip, plus
+  `data-escalated` on the row.
+
+Because escalated findings are errors, `--severity-threshold error` now fails a
+warnings-only run once a rule crosses its threshold. That is the point of the
+feature, and why it ships off by default.
 
 ---
 

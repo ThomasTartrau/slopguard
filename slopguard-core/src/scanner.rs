@@ -239,6 +239,7 @@ fn metric_findings<D: Doc>(
                 end_column: 1,
                 matched_text: m.metric.describe(value),
                 confidence: None,
+                escalated: false,
             })
         })
         .collect()
@@ -300,6 +301,7 @@ fn scan_file(path: &Path, lang: SupportLang, rules: &CompiledRules) -> Vec<Findi
                             end_column: end.byte_point().1 + 1,
                             matched_text: node_match.text().to_string(),
                             confidence: None,
+                            escalated: false,
                         }
                     })
                     .filter(move |f| {

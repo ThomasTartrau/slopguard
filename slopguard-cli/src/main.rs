@@ -19,6 +19,7 @@ use thiserror::Error;
 use slopguard_ai::{build_provider, run_ai_pass, AiCache, AiCandidate, DEFAULT_MODEL};
 use slopguard_core::baseline::BaselineError;
 use slopguard_core::config::{load_config, load_config_file, Config, ConfigError, OutputFormat};
+use slopguard_core::escalation::apply_escalation;
 use slopguard_core::finding::{Finding, ScanResult};
 use slopguard_core::git::{changed_files, GitError};
 use slopguard_core::preset::{presets_help, Preset};
@@ -102,6 +103,7 @@ struct ScanOpts {
     no_ai: bool,
     no_baseline: bool,
     baseline_path: Option<PathBuf>,
+    no_escalation: bool,
     diff: bool,
     base: Option<String>,
 }
@@ -256,6 +258,7 @@ fn run_scan(opts: ScanOpts) -> Result<bool, AppError> {
         no_ai,
         no_baseline,
         baseline_path,
+        no_escalation,
         diff,
         base,
     } = opts;
@@ -277,6 +280,13 @@ fn run_scan(opts: ScanOpts) -> Result<bool, AppError> {
     })?;
 
     let baseline_active = apply_baseline(&mut result, no_baseline, baseline_path)?;
+
+    // After the baseline (suppressed findings must not inflate the per-file
+    // count) and before the severity threshold, so an escalated finding can
+    // fail a `--severity-threshold error` run.
+    if !no_escalation {
+        apply_escalation(&mut result, &config.escalation);
+    }
 
     let format = format.unwrap_or(match config.output.format {
         OutputFormat::Text => Format::Text,
@@ -708,6 +718,7 @@ fn main() -> ExitCode {
             no_ai,
             no_baseline,
             baseline_path,
+            no_escalation,
             diff,
             base,
         } => match run_scan(ScanOpts {
@@ -725,6 +736,7 @@ fn main() -> ExitCode {
             no_ai,
             no_baseline,
             baseline_path,
+            no_escalation,
             diff,
             base,
         }) {
@@ -748,6 +760,7 @@ fn main() -> ExitCode {
             no_ai,
             no_baseline,
             baseline_path,
+            no_escalation,
         } => match run_stats(StatsOpts {
             paths,
             format,
@@ -761,6 +774,7 @@ fn main() -> ExitCode {
             no_ai,
             no_baseline,
             baseline_path,
+            no_escalation,
         }) {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {

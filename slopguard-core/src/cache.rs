@@ -227,6 +227,7 @@ rule:
             end_column: 20,
             matched_text: "foo().unwrap()".to_string(),
             confidence: None,
+            escalated: false,
         }
     }
 

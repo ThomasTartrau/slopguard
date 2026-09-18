@@ -206,6 +206,7 @@ mod tests {
                 end_column: 2,
                 matched_text: "x".to_string(),
                 confidence: None,
+                escalated: false,
             },
             file_content: content.to_string(),
             prompt_template: "check {{filename}} at:\n{{code}}\ncontext={{rule_context}}"
