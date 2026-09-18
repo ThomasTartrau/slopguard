@@ -311,6 +311,8 @@ slopguard scan . --no-ai
 | Rule | Ruleset | What it catches |
 | ---- | ------- | --------------- |
 | `ai-safety-comment-validation` | security | `// SAFETY:` comments that reassure instead of stating real invariants |
+| `ai-ssrf-unvalidated-url` | security | Outbound HTTP request whose URL is an unvalidated external-input variable (SSRF) |
+| `ai-open-redirect-unvalidated` | security | Redirect target taken from request input without an allowlist check (open redirect) |
 | `ai-doc-comment-quality` | slop | Doc-comments that only restate the function name |
 | `ai-intermediate-row-struct` | correctness | Redundant `*Row` structs mirroring an already-typed struct |
 | `ai-redundant-to-string-serialize` | correctness | `.to_string()` on values that are already `Serialize` |
