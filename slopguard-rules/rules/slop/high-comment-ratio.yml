@@ -1,0 +1,17 @@
+id: high-comment-ratio
+language: rust
+severity: warning
+category: slop
+metric: comment_ratio
+threshold: 0.4
+message: "More than 40 percent of this file is comments (ratio $value). Delete the ones that restate the code."
+note: "Generated code tends to narrate every line. Comments should explain why, not repeat what the next line already says."
+ignores:
+  - "**/fixtures/**"
+tests:
+  should_match:
+    - "// step one\n// step two\n// step three\n// step four\nfn run() {\n    let x = 1;\n}\n"
+    - "/// Adds two numbers.\n/// Returns the sum.\n/// Never panics.\nfn add(a: u8, b: u8) -> u8 {\n    a + b\n}\n"
+  should_not_match:
+    - "fn run() {\n    let x = 1;\n    let y = 2;\n    x + y\n}\n"
+    - "// Overflow is impossible for the caller's range.\nfn add(a: u8, b: u8) -> u8 {\n    let sum = a + b;\n    sum\n}\n"

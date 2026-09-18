@@ -1,0 +1,15 @@
+id: max-function-count
+language: rust
+severity: warning
+category: slop
+metric: function_count
+threshold: 30
+message: "File defines more than 30 functions ($value functions). Split it into focused modules."
+note: "Nested functions and closures count too. A file with this many entry points is hard to review as a unit."
+ignores:
+  - "**/fixtures/**"
+tests:
+  should_match_files:
+    - "fixtures/metrics/rust_large.rs"
+  should_not_match_files:
+    - "fixtures/metrics/rust_small.rs"

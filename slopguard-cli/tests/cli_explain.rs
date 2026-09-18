@@ -56,3 +56,32 @@ fn explain_json_output() {
     assert!(json["should_match"].is_array());
     assert!(json["should_not_match"].is_array());
 }
+
+#[test]
+fn explain_metric_rule_text() {
+    slopguard()
+        .args(["explain", "max-file-lines"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("type:      metric"))
+        .stdout(predicate::str::contains("metric:    file_lines"))
+        .stdout(predicate::str::contains("threshold: 500"));
+}
+
+#[test]
+fn explain_metric_rule_json() {
+    let output = slopguard()
+        .args(["explain", "max-file-lines", "--format", "json"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+
+    let json: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("output should be valid JSON");
+
+    assert_eq!(json["id"].as_str(), Some("max-file-lines"));
+    assert_eq!(json["type"].as_str(), Some("metric"));
+    assert_eq!(json["metric"].as_str(), Some("file_lines"));
+    assert_eq!(json["threshold"].as_f64(), Some(500.0));
+}

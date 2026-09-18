@@ -132,6 +132,40 @@ tests:                         # inline test cases
     - "another safe snippet"
 ```
 
+### File-level metric rules
+
+`metric` and `threshold` replace `rule`: they are mutually exclusive with it,
+and a rule that sets neither (or sets `metric` without `threshold`) is rejected
+at parse time. A metric rule measures the whole file and reports a single
+finding anchored at line 1 when the measured value is **strictly greater than**
+the threshold.
+
+```yaml
+metric: file_lines             # file_lines | import_count | function_count | comment_ratio
+threshold: 500                 # required with `metric`; firing is strictly `>`
+message: "File exceeds 500 lines ($value lines)."   # $value is the measured value
+tests:                         # a metric cannot be measured on a snippet
+  should_match_files:
+    - "fixtures/metrics/rust_large.rs"
+  should_not_match_files:
+    - "fixtures/metrics/rust_small.rs"
+```
+
+| Metric | Measures |
+|--------|----------|
+| `file_lines` | `str::lines()` count, so a trailing newline terminates the last line (`"a\n"` is 1 line) |
+| `import_count` | `use` / `extern crate` (Rust), `import` statements (TypeScript), including nested ones |
+| `function_count` | `function_item` (Rust); declarations, function expressions, arrow functions and methods (TypeScript). Nested functions count |
+| `comment_ratio` | distinct comment lines divided by total lines; `0.0` for an empty file |
+
+Metric rules are evaluated outside ast-grep, so the scanner applies their
+`files` / `ignores` globs itself, and `skip_test_code` drops the whole file
+rather than a line range.
+
+Fixture paths are relative: builtin rules resolve them against the embedded
+ruleset root, custom rules against the directory they were loaded from.
+Absolute paths and `..` components are rejected.
+
 ## Config format (slopguard.toml)
 
 ```toml
@@ -296,6 +330,11 @@ tests:
 `slopguard test` iterates all rules (builtin + custom), parses each snippet as the rule's language, runs the rule's matcher, and asserts:
 - Every should_match snippet produces at least one finding
 - Every should_not_match snippet produces zero findings
+
+Metric rules are tested on whole files instead of snippets: every entry of
+`should_match` / `should_not_match` is itself a complete file, and
+`should_match_files` / `should_not_match_files` name fixtures on disk. A
+failure reports the fixture path rather than its contents.
 
 ## Key dependencies
 
