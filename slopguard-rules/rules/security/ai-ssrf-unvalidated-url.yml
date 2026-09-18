@@ -1,0 +1,81 @@
+id: ai-ssrf-unvalidated-url
+language: rust
+severity: error
+category: security
+message: >-
+  Outbound HTTP request built from a variable URL. If it comes from external
+  input without an allowlist check, this is an SSRF.
+note: >-
+  A URL passed as a bare variable to an HTTP client (reqwest .get/.post/... or
+  reqwest::get) is only safe when validated against an allowlist of hosts and
+  schemes before the call. There is no string literal to inspect statically, so
+  an LLM confirms whether the source is unvalidated external input.
+rule:
+  kind: call_expression
+  all:
+    # The URL argument is a bare variable, not a string literal.
+    - has:
+        field: arguments
+        has:
+          kind: identifier
+    - not:
+        has:
+          field: arguments
+          has:
+            kind: string_literal
+            stopBy: end
+    - any:
+        # Builder-style call inside a .send() chain: client.get(url).send().
+        - all:
+            - has:
+                field: function
+                kind: field_expression
+                regex: '\.(get|post|put|patch|delete|head)$'
+            - inside:
+                kind: call_expression
+                regex: '\.send\s*\('
+                stopBy: end
+        # One-shot free function: reqwest::get(url).
+        - has:
+            field: function
+            kind: scoped_identifier
+            regex: '::(get|post|put|patch|delete|head)$'
+ai_check:
+  prompt: |
+    You are auditing a Rust outbound HTTP call in {{filename}} for SSRF.
+
+    The URL is passed as a variable, not a literal. It is an SSRF risk only
+    when that variable originates from external input (a request query
+    parameter, request body, header, or path segment) and is NOT validated
+    against an allowlist of hosts/schemes (or forced to a fixed base URL)
+    before the call. A variable that is a hardcoded constant, a configured
+    base URL, or already checked against an allowlist is safe.
+
+    Context: {{rule_context}}
+
+    Code (the call plus surrounding lines):
+    {{code}}
+
+    Decide whether the URL is unvalidated external input reaching an outbound
+    request. Set is_issue to true only when the source is explicitly external
+    input with no visible allowlist/scheme validation before the call. Do not
+    set is_issue on the mere absence of validation in a short snippet when the
+    variable could plausibly be a constant or config value.
+ignores:
+  - "**/tests/**"
+  - "**/*_tests/**"
+  - "**/*_test/**"
+  - "**/test_*"
+  - "**/*_test.rs"
+  - "**/fixtures/**"
+  - "**/benches/**"
+  - "**/examples/**"
+skip_test_code: true
+tests:
+  should_match:
+    - 'let resp = client.get(target_url).send().await?;'
+    - 'let body = reqwest::get(user_endpoint).await?.text().await?;'
+  should_not_match:
+    - 'let resp = client.get("https://api.example.com/status").send().await?;'
+    - 'let value = cache.get(user_id);'
+    - 'let entry = map.get(key).cloned();'

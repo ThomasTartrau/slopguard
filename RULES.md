@@ -64,7 +64,7 @@ Error handling, type safety, and correctness issues.
 | no-sort-without-comparator | ts | error | .sort() without comparator (lexicographic, not numeric) |
 | no-useeffect-derived-state | ts | warning | useEffect + setState for derived state |
 
-## AI rules (4 rules)
+## AI rules (6 rules)
 
 Rules that pair an AST pre-filter with an LLM confirmation step. The `rule`
 pattern collects candidates; the `ai_check.prompt` template is sent to the
@@ -76,6 +76,8 @@ configuration.
 | Rule | Ruleset | Lang | Severity | What it catches |
 | ------ | --------- | ------ | ---------- | ----------------- |
 | ai-safety-comment-validation | security | rust | error | `// SAFETY:` comments that reassure ("trust me", "this is safe") instead of stating the concrete invariants that make the unsafe block sound |
+| ai-ssrf-unvalidated-url | security | rust | error | Outbound HTTP call (reqwest `.get`/`.post`/... or `reqwest::get`) whose URL is a bare variable, when that variable is unvalidated external input (SSRF) |
+| ai-open-redirect-unvalidated | security | typescript | error | `.redirect(...)` whose target is derived from `req.query`/`body`/`params` without an allowlist check (open redirect) |
 | ai-doc-comment-quality | slop | rust | warning | Doc-comments that only restate the function name and add no information a reader could not get from the signature |
 | ai-intermediate-row-struct | correctness | rust | warning | Redundant `*Row` structs with String fields mirroring an already-typed struct, an artifact of AI-generated data mapping |
 | ai-redundant-to-string-serialize | correctness | rust | warning | `.to_string()` calls on values that already implement `Serialize` and are about to be serialized |

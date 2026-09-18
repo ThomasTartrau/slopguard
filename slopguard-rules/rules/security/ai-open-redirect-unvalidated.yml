@@ -1,0 +1,62 @@
+id: ai-open-redirect-unvalidated
+language: typescript
+severity: error
+category: security
+message: >-
+  Redirect target taken from request input. If it is not validated against an
+  allowlist, this is an open redirect.
+note: >-
+  A redirect whose target comes straight from req.query/body/params lets an
+  attacker send users to an arbitrary external site. The target must be checked
+  against an allowlist or forced to a relative path before redirecting. An LLM
+  confirms whether the request-derived value reaches the redirect unvalidated.
+rule:
+  kind: call_expression
+  all:
+    # A .redirect(...) call (res.redirect, response.redirect, ...).
+    - has:
+        field: function
+        kind: member_expression
+        regex: '\.redirect$'
+    # The target argument is derived from request input.
+    - has:
+        field: arguments
+        has:
+          kind: member_expression
+          regex: '^(req|request|ctx)\.(query|body|params)\b'
+          stopBy: end
+ai_check:
+  prompt: |
+    You are auditing a redirect in {{filename}} for an open-redirect flaw.
+
+    The redirect target is derived from request input (req.query, req.body, or
+    req.params). It is an open redirect only when that value reaches the
+    redirect WITHOUT being validated against an allowlist of hosts, or forced
+    to a relative/same-origin path, before the call. A target checked against
+    an allowlist, matched to a known route table, or prefixed with a fixed
+    internal base is safe.
+
+    Context: {{rule_context}}
+
+    Code (the redirect plus surrounding lines):
+    {{code}}
+
+    Decide whether the request-derived target reaches the redirect unvalidated.
+    Set is_issue to true only when there is no visible allowlist check or
+    relative-path enforcement between the request input and the redirect. Do
+    not set is_issue when a validation step is visible in the snippet.
+ignores:
+  - "**/tests/**"
+  - "**/*_tests/**"
+  - "**/*_test/**"
+  - "**/*.test.ts"
+  - "**/*.spec.ts"
+  - "**/fixtures/**"
+tests:
+  should_match:
+    - 'res.redirect(req.query.returnUrl);'
+    - 'response.redirect(request.body.next);'
+  should_not_match:
+    - "res.redirect('/dashboard');"
+    - 'res.redirect(302, safeUrl);'
+    - 'res.status(200).json(data);'
