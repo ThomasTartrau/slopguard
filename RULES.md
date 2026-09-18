@@ -84,6 +84,23 @@ configuration.
 
 Inspect the exact prompt sent to the model with `slopguard explain <rule-id>`.
 
+## File-level rules (8 rules)
+
+These carry a `metric` and a `threshold` instead of an AST `rule`. They measure
+the whole file and report one finding at line 1 when the value is strictly
+greater than the threshold.
+
+| Rule | Language | Metric | Threshold | What it catches |
+| ---- | -------- | ------ | --------- | --------------- |
+| `max-file-lines` | rust | `file_lines` | 500 | Modules that kept growing instead of being split |
+| `max-file-lines-ts` | typescript | `file_lines` | 500 | Same, for TypeScript |
+| `max-import-count` | rust | `import_count` | 40 | Files with no single responsibility |
+| `max-import-count-ts` | typescript | `import_count` | 40 | Same, for TypeScript |
+| `max-function-count` | rust | `function_count` | 30 | Files with too many entry points to review as a unit |
+| `max-function-count-ts` | typescript | `function_count` | 30 | Same, counting arrow functions and methods |
+| `high-comment-ratio` | rust | `comment_ratio` | 0.4 | Code narrated line by line instead of explained |
+| `high-comment-ratio-ts` | typescript | `comment_ratio` | 0.4 | Same, for TypeScript |
+
 ## Rule anatomy
 
 Each rule follows this structure:
@@ -104,6 +121,11 @@ fix: "Use X instead"              # textual suggestion
 rule:
   pattern: $X.unwrap()             # or kind/regex/all/any/not/has/precedes/follows/inside
 
+# ...or a file-level metric, mutually exclusive with `rule`
+metric: file_lines                 # file_lines | import_count | function_count | comment_ratio
+threshold: 500                     # required with `metric`; fires only above it, never at it
+                                   # `$value` in `message` becomes the measured value
+
 # Scope
 files: ["**/src/**/*.rs"]          # only scan these
 ignores: ["**/tests/**"]           # skip these
@@ -115,6 +137,11 @@ tests:
     - "snippet that triggers"
   should_not_match:
     - "snippet that must not trigger"
+  # Metric rules only: whole-file fixtures, relative to the rule's directory
+  should_match_files:
+    - "fixtures/metrics/rust_large.rs"
+  should_not_match_files:
+    - "fixtures/metrics/rust_small.rs"
 ```
 
 ## Key ast-grep syntax notes for implementors

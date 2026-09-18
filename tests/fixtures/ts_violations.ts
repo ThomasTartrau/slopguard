@@ -1,5 +1,4 @@
-// Fixture: one violation per TypeScript rule that fires in a real scan.
-// no-useeffect-derived-state is excluded: its inline tests fail.
+// Fixture: one violation per TypeScript rule that fires in a real scan (no-useeffect-derived-state excluded, its inline tests fail).
 
 // --- correctness/no-any-typescript (error) ---
 function parse(data: any): string { return data; }

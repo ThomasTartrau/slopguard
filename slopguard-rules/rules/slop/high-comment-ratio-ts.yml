@@ -1,0 +1,17 @@
+id: high-comment-ratio-ts
+language: typescript
+severity: warning
+category: slop
+metric: comment_ratio
+threshold: 0.4
+message: "More than 40 percent of this file is comments (ratio $value). Delete the ones that restate the code."
+note: "Generated code tends to narrate every line. Comments should explain why, not repeat what the next line already says."
+ignores:
+  - "**/fixtures/**"
+tests:
+  should_match:
+    - "// step one\n// step two\n// step three\n// step four\nexport function run(): number {\n  return 1;\n}\n"
+    - "/** Adds two numbers. */\n/* Returns the sum. */\n// Never throws.\nexport function add(a: number, b: number): number {\n  return a + b;\n}\n"
+  should_not_match:
+    - "export function run(): number {\n  const x = 1;\n  const y = 2;\n  return x + y;\n}\n"
+    - "// Overflow is impossible for the caller's range.\nexport function add(a: number, b: number): number {\n  return a + b;\n}\n"
