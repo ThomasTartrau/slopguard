@@ -60,19 +60,36 @@ pub fn file_content_hash(content: &[u8]) -> String {
 /// A file-based cache store for scan findings.
 pub struct CacheStore {
     dir: PathBuf,
+    /// Prepended to every entry filename so that scans run with different
+    /// rulesets never collide on the same content-hashed entry. Empty when the
+    /// store is not scoped to a ruleset.
+    key_prefix: String,
 }
 
 impl CacheStore {
     pub fn new(project_root: &Path) -> Self {
         Self {
             dir: project_root.join(".slopguard-cache"),
+            key_prefix: String::new(),
         }
     }
 
     /// Create a cache store that writes directly to the given directory
     /// instead of appending `.slopguard-cache`.
     pub fn with_dir(dir: PathBuf) -> Self {
-        Self { dir }
+        Self {
+            dir,
+            key_prefix: String::new(),
+        }
+    }
+
+    /// Scope this store's entries to a ruleset. Entries written by a scan with
+    /// a different active ruleset use a different prefix, so a concurrent scan
+    /// with fewer or disabled rules cannot serve its (correctly empty) result
+    /// to a scan that expects the full ruleset to fire.
+    pub fn scoped_to_rules(mut self, rules_hash: &str) -> Self {
+        self.key_prefix = format!("{rules_hash}-");
+        self
     }
 
     pub fn dir(&self) -> &Path {
@@ -122,7 +139,7 @@ impl CacheStore {
     }
 
     fn entry_path(&self, file_hash: &str) -> PathBuf {
-        self.dir.join(format!("{file_hash}.bin"))
+        self.dir.join(format!("{}{file_hash}.bin", self.key_prefix))
     }
 
     /// Look up cached findings for a file by its content hash.
@@ -154,7 +171,12 @@ impl CacheStore {
             if name_str == ".gitignore" || name_str == RULES_HASH_FILE {
                 continue;
             }
-            let hash = name_str.trim_end_matches(".bin");
+            // Only prune entries written for the active ruleset. Entries from a
+            // different ruleset carry a different prefix and are left alone.
+            let Some(rest) = name_str.strip_prefix(&self.key_prefix) else {
+                continue;
+            };
+            let hash = rest.trim_end_matches(".bin");
             if !current_hashes.iter().any(|h| h == hash) {
                 fs::remove_file(entry.path())?;
                 removed += 1;

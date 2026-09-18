@@ -138,7 +138,7 @@ fn baseline_survives_line_shift() {
 
     write(
         dir.path().join("bad.rs"),
-        format!("// a\n// b\n// c\n// d\n// e\n{PADDED}"),
+        format!("fn a() {{}}\nfn b() {{}}\nfn c() {{}}\nfn d() {{}}\nfn e() {{}}\n{PADDED}"),
     )
     .unwrap();
 

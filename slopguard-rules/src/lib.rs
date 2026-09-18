@@ -23,5 +23,9 @@ mod tests {
             files.iter().any(|f| f.starts_with("correctness/")),
             "should contain correctness/ files, got: {files:?}"
         );
+        assert!(
+            files.iter().any(|f| f.starts_with("fixtures/")),
+            "should contain fixtures/ files, got: {files:?}"
+        );
     }
 }

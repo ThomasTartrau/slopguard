@@ -237,6 +237,10 @@ pub enum Command {
         #[arg(long)]
         all: bool,
 
+        /// Output format (text or json; sarif and html are not supported)
+        #[arg(long)]
+        format: Option<Format>,
+
         /// Filter by category
         #[arg(long)]
         category: Option<CategoryFilter>,
@@ -507,5 +511,26 @@ mod tests {
         Cli::command()
             .try_get_matches_from(["slopguard", "list"])
             .expect("list subcommand should parse");
+    }
+
+    #[test]
+    fn cli_parses_list_with_format_json() {
+        Cli::command()
+            .try_get_matches_from(["slopguard", "list", "--format", "json"])
+            .expect("list with --format json should parse");
+    }
+
+    #[test]
+    fn cli_parses_list_with_format_and_filters() {
+        Cli::command()
+            .try_get_matches_from([
+                "slopguard",
+                "list",
+                "--format",
+                "json",
+                "--category",
+                "slop",
+            ])
+            .expect("list with --format and --category should parse");
     }
 }
