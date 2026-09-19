@@ -47,6 +47,10 @@ The library crate. Responsible for:
 - Config parsing (slopguard.toml via serde + toml)
 - Finding representation (file, line, rule_id, severity, message, note)
 - Baseline hashing, persistence and filtering (baseline.rs)
+- Project-wide (cross-file) analysis: per-file symbol extraction and the index
+  they are folded into (cross_file.rs). A cache entry carries the file's symbol
+  contribution alongside its findings, so a cache hit feeds the cross-file pass
+  without reparsing.
 - Git diff resolution for `--diff` (git.rs)
 - Rule testing (should_match / should_not_match validation)
 - Ruleset management (slop, security, correctness)
@@ -165,6 +169,31 @@ rather than a line range.
 Fixture paths are relative: builtin rules resolve them against the embedded
 ruleset root, custom rules against the directory they were loaded from.
 Absolute paths and `..` components are rejected.
+
+### Cross-file rules
+
+`cross_file` replaces `rule` and `metric` and is mutually exclusive with both.
+It names a builtin analysis; the only kind today is `single_impl_trait`.
+
+```yaml
+cross_file: single_impl_trait  # the only kind in v0.1
+skip_test_code: true           # applies to the declaration site
+ignores: ["**/target/**"]      # applies to the declaration site
+```
+
+The logic behind a kind is builtin Rust keyed on the discriminant, so a custom
+YAML can retune a rule's severity, message, `files` / `ignores` and
+`skip_test_code`, but cannot invent a new kind: an unknown discriminant is a
+parse error. A cross-file rule carries no `tests` block, since no snippet can
+exercise it, and `slopguard test` reports it as untested.
+
+The pass runs after the per-file scan, over the walked paths only. Each scanned
+Rust file contributes a `FileSymbols` (its trait declarations and its
+`impl Trait for Type` headers) from the same parse that produced its findings;
+those contributions are folded into a project-wide `SymbolIndex` and every
+active cross-file rule is evaluated against it. `--diff` and any explicit file
+list skip evaluation, because their index would be incomplete, but they still
+collect and cache contributions so a later full scan is not penalised.
 
 ## Config format (slopguard.toml)
 

@@ -13,6 +13,7 @@ use slopguard_rules::BuiltinRules;
 use strum::{Display, EnumIter, EnumString};
 use thiserror::Error;
 
+use crate::cross_file::CrossFileKind;
 use crate::metric::Metric;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -144,6 +145,11 @@ pub struct Rule {
     /// The value `metric` must exceed for the rule to fire. Required with `metric`.
     #[serde(default)]
     pub threshold: Option<f64>,
+    /// Project-wide analysis evaluated instead of `rule` or `metric`, and
+    /// mutually exclusive with both. The kind selects builtin Rust logic; the
+    /// YAML only carries the rule's identity, severity and user-facing text.
+    #[serde(default)]
+    pub cross_file: Option<CrossFileKind>,
     /// Directory a custom rule was loaded from, used to resolve test fixture
     /// paths. `None` for builtin rules, which resolve against `BuiltinRules`.
     #[serde(skip)]
@@ -182,6 +188,16 @@ impl Rule {
     pub fn metric_spec(&self) -> Option<(Metric, f64)> {
         Some((self.metric?, self.threshold?))
     }
+
+    /// Whether this rule is evaluated by the project-wide pass instead of per file.
+    pub fn is_cross_file(&self) -> bool {
+        self.cross_file.is_some()
+    }
+
+    /// The cross-file analysis this rule requests, `None` for AST and metric rules.
+    pub fn cross_file_kind(&self) -> Option<CrossFileKind> {
+        self.cross_file
+    }
 }
 
 #[derive(Debug, Error)]
@@ -194,6 +210,12 @@ pub enum RuleError {
 
     #[error("rule '{id}': 'metric' and 'rule' are mutually exclusive")]
     MetricAndRule { id: RuleId },
+
+    #[error("rule '{id}': 'cross_file' and 'rule' are mutually exclusive")]
+    CrossFileAndRule { id: RuleId },
+
+    #[error("rule '{id}': 'cross_file' and 'metric' are mutually exclusive")]
+    CrossFileAndMetric { id: RuleId },
 
     #[error("rule '{id}': a metric rule requires a 'threshold'")]
     MissingThreshold { id: RuleId },
@@ -236,16 +258,21 @@ impl RuleError {
 
 /// Parse a single YAML string into a Rule, validating required fields.
 ///
-/// A rule carries either an ast-grep `rule` matcher or a file-level `metric`
-/// plus its `threshold`, never both and never neither.
+/// A rule carries exactly one matcher: an ast-grep `rule`, a file-level
+/// `metric` plus its `threshold`, or a project-wide `cross_file` kind.
 pub fn parse_rule(yaml: &str) -> Result<Rule, RuleError> {
     let rule: Rule = serde_yaml::from_str(yaml)?;
-    match (rule.metric.is_some(), rule.rule.is_null()) {
-        (true, false) => return Err(RuleError::MetricAndRule { id: rule.id }),
-        (true, true) if rule.threshold.is_none() => {
+    let has_rule = !rule.rule.is_null();
+    let has_metric = rule.metric.is_some();
+    let has_cross = rule.cross_file.is_some();
+    match (has_cross, has_metric, has_rule) {
+        (true, _, true) => return Err(RuleError::CrossFileAndRule { id: rule.id }),
+        (true, true, _) => return Err(RuleError::CrossFileAndMetric { id: rule.id }),
+        (false, true, true) => return Err(RuleError::MetricAndRule { id: rule.id }),
+        (false, true, false) if rule.threshold.is_none() => {
             return Err(RuleError::MissingThreshold { id: rule.id })
         }
-        (false, true) => return Err(RuleError::EmptyRule { id: rule.id }),
+        (false, false, false) => return Err(RuleError::EmptyRule { id: rule.id }),
         _ => {}
     }
     if !rule.is_metric() {
@@ -636,8 +663,8 @@ rule:
         let rules = load_builtin_rules().unwrap();
         assert_eq!(
             rules.len(),
-            96,
-            "expected 96 builtin rules, got {}",
+            97,
+            "expected 97 builtin rules, got {}",
             rules.len()
         );
 
@@ -653,7 +680,7 @@ rule:
             .iter()
             .filter(|r| r.category == Some(Category::Correctness))
             .count();
-        assert_eq!(slop_count, 36, "expected 36 slop rules");
+        assert_eq!(slop_count, 37, "expected 37 slop rules");
         assert_eq!(security_count, 22, "expected 22 security rules");
         assert_eq!(correctness_count, 38, "expected 38 correctness rules");
 
@@ -669,6 +696,12 @@ rule:
                 .iter()
                 .any(|r| r.id == RuleId::from("max-file-lines") && r.is_metric()),
             "max-file-lines should be loaded as a metric rule"
+        );
+        assert!(
+            rules
+                .iter()
+                .any(|r| r.id == RuleId::from("no-single-impl-trait") && r.is_cross_file()),
+            "no-single-impl-trait should be loaded as a cross-file rule"
         );
 
         validate_unique_ids(&rules).unwrap();
@@ -807,6 +840,11 @@ rule:
             let file = BuiltinRules::get(&path).unwrap();
             let yaml = from_utf8(&file.data).unwrap();
             let rule: Rule = serde_yaml::from_str(yaml).unwrap();
+            // A cross-file rule needs a whole project to mean anything, so no
+            // snippet can exercise it.
+            if rule.cross_file.is_some() {
+                continue;
+            }
             let tests = rule.tests.as_ref().unwrap_or_else(|| {
                 panic!("rule '{}' (at {path}) is missing `tests` block", rule.id)
             });
@@ -1074,6 +1112,83 @@ message: "m"
             content.lines().count() > 500,
             "the large fixture should exceed 500 lines, got {}",
             content.lines().count()
+        );
+    }
+
+    #[test]
+    fn parse_cross_file_rule() {
+        let yaml = r#"
+id: no-single-impl-trait
+language: rust
+severity: warning
+category: slop
+cross_file: single_impl_trait
+message: "Trait with a single implementation in the project."
+"#;
+        let rule = parse_rule(yaml).unwrap();
+        assert_eq!(rule.cross_file, Some(CrossFileKind::SingleImplTrait));
+        assert_eq!(rule.cross_file_kind(), Some(CrossFileKind::SingleImplTrait));
+        assert!(rule.rule.is_null());
+        assert!(rule.is_cross_file());
+        assert!(!rule.is_metric());
+    }
+
+    #[test]
+    fn reject_cross_file_with_rule() {
+        let yaml = r#"
+id: cross-and-rule
+language: rust
+severity: warning
+category: slop
+cross_file: single_impl_trait
+message: "m"
+rule:
+  pattern: $X
+"#;
+        let err = parse_rule(yaml).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("mutually exclusive"),
+            "expected mutually exclusive error, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn reject_cross_file_with_metric() {
+        let yaml = r#"
+id: cross-and-metric
+language: rust
+severity: warning
+category: slop
+cross_file: single_impl_trait
+metric: file_lines
+threshold: 500
+message: "m"
+"#;
+        let err = parse_rule(yaml).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("mutually exclusive"),
+            "expected mutually exclusive error, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn reject_unknown_cross_file_kind() {
+        let yaml = r#"
+id: unknown-cross-file
+language: rust
+severity: warning
+category: slop
+cross_file: no_such_kind
+message: "m"
+"#;
+        let err = parse_rule(yaml).unwrap_err();
+        assert!(matches!(err, RuleError::Parse(_)));
+        let msg = err.to_string();
+        assert!(
+            msg.contains("unknown variant"),
+            "expected unknown variant error, got: {msg}"
         );
     }
 

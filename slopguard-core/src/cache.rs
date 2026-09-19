@@ -2,14 +2,30 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
+use crate::cross_file::FileSymbols;
 use crate::finding::Finding;
 use crate::rule::Rule;
 
 const RULES_HASH_FILE: &str = "rules.hash";
 const CACHE_GITIGNORE: &str = "*\n";
+
+/// Version of the on-disk entry format. Mixed into the rules hash so a bump
+/// drops every stale entry instead of trying to deserialize it into the new
+/// shape.
+const CACHE_SCHEMA_VERSION: &str = "v2";
+
+/// What one scanned file leaves in the cache: its findings plus the symbols it
+/// contributes to the project index, so a cache hit feeds the cross-file pass
+/// without re-parsing the file.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CacheEntry {
+    pub findings: Vec<Finding>,
+    pub symbols: FileSymbols,
+}
 
 /// Hex-encoded SHA256 of `data`. Shared by every cache key in the workspace.
 pub fn sha256_hex(data: &[u8]) -> String {
@@ -45,6 +61,8 @@ pub fn rules_hash(rules: &[Rule]) -> String {
     ids.sort();
 
     let mut hasher = Sha256::new();
+    hasher.update(CACHE_SCHEMA_VERSION.as_bytes());
+    hasher.update(b"\0");
     for id in &ids {
         hasher.update(id.as_bytes());
         hasher.update(b"\0");
@@ -142,17 +160,17 @@ impl CacheStore {
         self.dir.join(format!("{}{file_hash}.bin", self.key_prefix))
     }
 
-    /// Look up cached findings for a file by its content hash.
-    pub fn get(&self, file_hash: &str) -> Option<Vec<Finding>> {
+    /// Look up a file's cached scan result by its content hash.
+    pub fn get(&self, file_hash: &str) -> Option<CacheEntry> {
         let path = self.entry_path(file_hash);
         let data = fs::read(&path).ok()?;
         rmp_serde::from_slice(&data).ok()
     }
 
-    /// Store findings for a file identified by its content hash.
-    pub fn put(&self, file_hash: &str, findings: &[Finding]) -> Result<(), CacheError> {
+    /// Store a file's scan result, identified by its content hash.
+    pub fn put(&self, file_hash: &str, entry: &CacheEntry) -> Result<(), CacheError> {
         self.ensure_dir()?;
-        let data = rmp_serde::to_vec_named(findings).map_err(io::Error::other)?;
+        let data = rmp_serde::to_vec_named(entry).map_err(io::Error::other)?;
         fs::write(self.entry_path(file_hash), data)?;
         Ok(())
     }
@@ -194,6 +212,7 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
+    use crate::cross_file::{TraitDecl, TraitImpl};
     use crate::rule::{parse_rule, RuleId, Severity};
 
     fn test_rule() -> Rule {
@@ -240,21 +259,64 @@ rule:
         assert!(store.get(&hash).is_none());
     }
 
+    fn entry_with(findings: Vec<Finding>) -> CacheEntry {
+        CacheEntry {
+            findings,
+            symbols: FileSymbols::default(),
+        }
+    }
+
     #[test]
     fn cache_hit() {
         let dir = tempdir().unwrap();
         let store = CacheStore::new(dir.path());
         let content = b"fn main() { foo().unwrap(); }";
         let hash = file_content_hash(content);
-        let findings = vec![sample_finding()];
 
-        store.put(&hash, &findings).unwrap();
-        let cached = store.get(&hash).unwrap();
+        store
+            .put(&hash, &entry_with(vec![sample_finding()]))
+            .unwrap();
+        let cached = store.get(&hash).unwrap().findings;
 
         assert_eq!(cached.len(), 1);
         assert_eq!(cached[0].rule_id, RuleId::from("test-unwrap"));
         assert_eq!(cached[0].line, 2);
         assert_eq!(cached[0].matched_text, "foo().unwrap()");
+    }
+
+    #[test]
+    fn cache_entry_round_trips_symbols() {
+        let dir = tempdir().unwrap();
+        let store = CacheStore::new(dir.path());
+        let hash = file_content_hash(b"pub trait Repository {}");
+        let entry = CacheEntry {
+            findings: Vec::new(),
+            symbols: FileSymbols {
+                traits: vec![TraitDecl {
+                    name: "Repository".to_string(),
+                    line: 1,
+                    column: 1,
+                    end_line: 1,
+                    end_column: 21,
+                    in_cfg_test: false,
+                    header: "pub trait Repository".to_string(),
+                }],
+                impls: vec![TraitImpl {
+                    trait_name: "Repository".to_string(),
+                    blanket: false,
+                }],
+            },
+        };
+
+        store.put(&hash, &entry).unwrap();
+        let cached = store.get(&hash).unwrap();
+
+        assert_eq!(cached.symbols.traits.len(), 1);
+        assert_eq!(cached.symbols.traits[0].name, "Repository");
+        assert_eq!(cached.symbols.traits[0].header, "pub trait Repository");
+        assert_eq!(cached.symbols.impls.len(), 1);
+        assert_eq!(cached.symbols.impls[0].trait_name, "Repository");
+        assert!(!cached.symbols.impls[0].blanket);
     }
 
     #[test]
@@ -267,7 +329,9 @@ rule:
         let hash_v1 = file_content_hash(content_v1);
         let hash_v2 = file_content_hash(content_v2);
 
-        store.put(&hash_v1, &[sample_finding()]).unwrap();
+        store
+            .put(&hash_v1, &entry_with(vec![sample_finding()]))
+            .unwrap();
 
         assert!(store.get(&hash_v1).is_some());
         assert!(store.get(&hash_v2).is_none());
@@ -282,7 +346,7 @@ rule:
         let hash_v1 = rules_hash(&rules_v1);
 
         let content_hash = file_content_hash(b"fn main() {}");
-        store.put(&content_hash, &[]).unwrap();
+        store.put(&content_hash, &entry_with(Vec::new())).unwrap();
         store.write_rules_hash(&hash_v1).unwrap();
 
         assert!(store.get(&content_hash).is_some());
@@ -308,8 +372,10 @@ rule:
 
         let hash_a = file_content_hash(b"file a");
         let hash_b = file_content_hash(b"file b");
-        store.put(&hash_a, &[]).unwrap();
-        store.put(&hash_b, &[sample_finding()]).unwrap();
+        store.put(&hash_a, &entry_with(Vec::new())).unwrap();
+        store
+            .put(&hash_b, &entry_with(vec![sample_finding()]))
+            .unwrap();
 
         let removed = store.cleanup(slice::from_ref(&hash_a)).unwrap();
 

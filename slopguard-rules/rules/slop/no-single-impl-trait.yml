@@ -1,0 +1,12 @@
+id: no-single-impl-trait
+language: rust
+severity: warning
+category: slop
+cross_file: single_impl_trait
+message: "Trait with a single implementation in the project. Call the concrete type directly."
+note: "A trait with one implementor adds an indirection without adding a choice. It stays silent when the trait has no local impl (implemented outside the crate), two or more impls, or a blanket impl. A test mock counts as a second implementation."
+fix: "Remove the trait and use the concrete type, or keep it and add the second implementation it was written for."
+skip_test_code: true
+ignores:
+  - "**/target/**"
+  - "**/fixtures/**"
