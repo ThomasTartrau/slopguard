@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.1.12](https://gitlab.com/ThomasTartrau/slopguard/compare/slopguard-rules-v0.1.11...slopguard-rules-v0.1.12) - 2026-09-19
+
+### Added
+
+- #34 add System One classifier (Jev/TypeSafe) pass
+
 ## [0.1.11](https://gitlab.com/ThomasTartrau/slopguard/compare/slopguard-rules-v0.1.10...slopguard-rules-v0.1.11) - 2026-09-19
 
 ### Changed
