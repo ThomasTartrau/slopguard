@@ -158,6 +158,10 @@ pub fn format_explain(rule: &Rule, w: &mut impl Write) -> io::Result<()> {
         writeln!(w, "threshold: {threshold}")?;
     }
     if let Some(ai_check) = &rule.ai_check {
+        writeln!(w, "reason:    {}", ai_check.reason)?;
+        if let Some(threshold) = ai_check.threshold {
+            writeln!(w, "threshold: {threshold}")?;
+        }
         if let Some(model) = &ai_check.model {
             writeln!(w, "model:     {model}")?;
         }

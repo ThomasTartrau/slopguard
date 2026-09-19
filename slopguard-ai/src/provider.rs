@@ -11,6 +11,8 @@ use std::path::Path;
 use ironflow_core::provider::AgentProvider;
 use ironflow_core::providers::claude::ClaudeCodeProvider;
 use ironflow_core::providers::http::{AnthropicApiProvider, OpenAiProvider};
+#[cfg(test)]
+use slopguard_core::config::ClassifierConfig;
 use slopguard_core::config::{AiConfig, AiTransport, AiVendor};
 use thiserror::Error;
 
@@ -62,6 +64,15 @@ fn vendor_env(vendor: &AiVendor) -> &'static str {
     }
 }
 
+/// Read `name` from the process environment, treating unset and empty the
+/// same: an empty credential is a common misconfiguration, not a value.
+pub(crate) fn non_empty_env(name: &str) -> Option<String> {
+    // env::var().ok() is idiomatic: an unset var is a valid absence, not an
+    // error to propagate.
+    // slopguard-disable-next-line no-ok-chain
+    env::var(name).ok().filter(|s| !s.is_empty())
+}
+
 /// Resolve the API key from config first, then the vendor's env var. Empty
 /// strings are rejected in both places (a common misconfiguration).
 fn resolve_api_key(ai: &AiConfig) -> Result<String, ProviderError> {
@@ -69,10 +80,7 @@ fn resolve_api_key(ai: &AiConfig) -> Result<String, ProviderError> {
     if let Some(key) = ai.api_key.as_deref().filter(|s| !s.is_empty()) {
         return Ok(key.to_string());
     }
-    match env::var(env) {
-        Ok(key) if !key.is_empty() => Ok(key),
-        _ => Err(ProviderError::MissingApiKey { env }),
-    }
+    non_empty_env(env).ok_or(ProviderError::MissingApiKey { env })
 }
 
 /// Whether an executable file named `name` exists in any `PATH` directory.
@@ -100,14 +108,9 @@ struct Prereqs {
 /// Read the credential prerequisites for `ai` from the process environment.
 fn read_prereqs(ai: &AiConfig) -> Prereqs {
     Prereqs {
-        api_key_env: env::var(vendor_env(&ai.vendor))
-            .ok()
-            .filter(|s| !s.is_empty()),
+        api_key_env: non_empty_env(vendor_env(&ai.vendor)),
         claude_in_path: binary_in_path("claude"),
-        // env::var().ok() is idiomatic: an unset var is a valid absence, not an
-        // error to propagate. Same as api_key_env above.
-        // slopguard-disable-next-line no-ok-chain
-        oauth_token: env::var(OAUTH_TOKEN_ENV).ok().filter(|s| !s.is_empty()),
+        oauth_token: non_empty_env(OAUTH_TOKEN_ENV),
     }
 }
 
@@ -166,9 +169,7 @@ pub fn build_provider(ai: &AiConfig) -> Result<Box<dyn AgentProvider>, ProviderE
         }
         ProviderKind::OpenAiApi => {
             let key = resolve_api_key(ai)?;
-            let base_url = env::var("OPENAI_BASE_URL")
-                .ok()
-                .filter(|s| !s.is_empty())
+            let base_url = non_empty_env("OPENAI_BASE_URL")
                 .unwrap_or_else(|| "https://api.openai.com/v1".to_string());
             Ok(Box::new(OpenAiProvider::with_credentials(key, base_url)))
         }
@@ -187,6 +188,7 @@ mod tests {
             model: None,
             concurrency: 4,
             api_key: key.map(str::to_string),
+            classifier: ClassifierConfig::default(),
         }
     }
 

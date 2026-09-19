@@ -14,3 +14,8 @@ pub mod provider;
 pub use cache::{cache_key, AiCache};
 pub use pipeline::{run_ai_pass, AiCandidate, AiVerdict, DEFAULT_MODEL};
 pub use provider::{build_provider, provider_kind, ProviderError, ProviderKind};
+
+#[cfg(feature = "provider-typesafe")]
+pub use pipeline::classifier::{
+    build_classifier, resolve_jev_model, run_classifier_pass, ClassifierError,
+};

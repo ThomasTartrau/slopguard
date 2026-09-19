@@ -19,6 +19,28 @@ fn explain_existing_rule() {
 }
 
 #[test]
+fn explain_shows_generated_reason_for_relational_rule() {
+    // Gate: a relational rule escalates to the LLM for a per-instance reason.
+    slopguard()
+        .args(["explain", "ai-ssrf-unvalidated-url"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("reason:"))
+        .stdout(predicate::str::contains("generated"));
+}
+
+#[test]
+fn explain_shows_static_reason_for_note_rule() {
+    // Gate: a non-relational ai_check rule uses its static note.
+    slopguard()
+        .args(["explain", "ai-doc-comment-quality"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("reason:"))
+        .stdout(predicate::str::contains("static"));
+}
+
+#[test]
 fn explain_unknown_rule_suggests() {
     slopguard()
         .args(["explain", "no-unwarp-in-prod"])

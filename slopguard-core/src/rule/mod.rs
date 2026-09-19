@@ -107,18 +107,50 @@ pub struct RuleTests {
     pub should_not_match_files: Vec<String>,
 }
 
+/// How the `reason` (the finding's `note`) is produced when an `ai_check` rule
+/// fires. See [`AiCheck::reason`].
+#[derive(Debug, Display, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+#[strum(serialize_all = "lowercase")]
+pub enum ReasonMode {
+    /// Use the rule's static `note` as the reason. No generative LLM call.
+    #[default]
+    Static,
+    /// Escalate to the generative LLM to write a per-instance reason. Reserved
+    /// for relational rules whose message depends on the specific match.
+    Generated,
+}
+
 /// Optional AI confirmation step for a rule. When present, the rule's `rule`
 /// AST pattern acts as a cheap pre-filter: matches become candidates that an
-/// LLM must confirm before they are reported. The AST layer never executes
-/// this field; the AI pipeline in `slopguard-ai` reads it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// LLM (or the System One classifier) must confirm before they are reported.
+/// The AST layer never executes this field; the AI pipeline in `slopguard-ai`
+/// reads it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AiCheck {
-    /// Prompt template sent to the model. Supports the variables `{{code}}`,
-    /// `{{filename}}`, and `{{rule_context}}`.
+    /// Prompt template. Double use: the generative LLM prompt (variables
+    /// `{{code}}`, `{{filename}}`, `{{rule_context}}`), and the `instructions`
+    /// of the System One classifier's noul question.
     pub prompt: String,
     /// Model override for this rule. Falls back to `[ai].model` in config.
     #[serde(default)]
     pub model: Option<String>,
+    /// How the finding's reason is produced: a `static` note (default) or a
+    /// per-instance `generated` note written by the LLM.
+    #[serde(default)]
+    pub reason: ReasonMode,
+    /// Per-rule classifier probability threshold, overriding
+    /// `[ai.classifier].threshold`. Fires when `p >= threshold`.
+    #[serde(default)]
+    pub threshold: Option<f64>,
+    /// Classifier calibration: what a "yes" (issue) looks like. Maps to the
+    /// noul question's `criteria.true`.
+    #[serde(default)]
+    pub if_true: Option<String>,
+    /// Classifier calibration: what a "no" (not an issue) looks like. Maps to
+    /// the noul question's `criteria.false`.
+    #[serde(default)]
+    pub if_false: Option<String>,
 }
 
 fn default_enabled() -> bool {
