@@ -438,7 +438,11 @@ message: "Trait with a single implementation in the project."
 
     #[test]
     fn zero_impls_stays_silent() {
-        let contributions = [contribution("src/repo.rs", vec![decl("Repository")], vec![])];
+        let contributions = [contribution(
+            "src/repo.rs",
+            vec![decl("Repository")],
+            vec![],
+        )];
         assert!(findings(&contributions, &open_filter()).is_empty());
     }
 
@@ -477,7 +481,11 @@ message: "Trait with a single implementation in the project."
 
     #[test]
     fn impl_without_local_declaration_is_ignored() {
-        let contributions = [contribution("src/pg.rs", vec![], vec![concrete("Serialize")])];
+        let contributions = [contribution(
+            "src/pg.rs",
+            vec![],
+            vec![concrete("Serialize")],
+        )];
         assert!(findings(&contributions, &open_filter()).is_empty());
     }
 
