@@ -37,6 +37,10 @@ rule:
                               field: function
                               kind: identifier
                               stopBy: neighbor
+                          - not:
+                              has:
+                                kind: call_expression
+                                stopBy: end
     - all:
         - kind: arrow_function
         - has:
@@ -50,6 +54,10 @@ rule:
                       field: function
                       kind: identifier
                       stopBy: neighbor
+                  - not:
+                      has:
+                        kind: call_expression
+                        stopBy: end
 ignores:
   - "**/fixtures/**"
 tests:
@@ -59,3 +67,5 @@ tests:
   should_not_match:
     - "function calc(a, b) { const s = a + b; return s * 2; }"
     - "const id = (x) => x;"
+    - "function kind(c) { return resolve(c, read(c)); }"
+    - "const kind = (c) => resolve(c, read(c));"

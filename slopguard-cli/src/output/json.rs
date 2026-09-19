@@ -67,6 +67,8 @@ pub fn rule_kind(rule: &Rule) -> &'static str {
 
 /// `slopguard list --format json`, emitted as a top-level array so a consumer
 /// can filter it directly (`jq '[.[] | select(.type == "metric")] | length'`).
+// Part of the format_* public API surface of this module.
+// slopguard-disable-next-line no-trivial-function
 pub fn format_list_json(entries: &[&ListEntry], w: &mut impl Write) -> io::Result<()> {
     write_json_pretty(w, &entries)
 }

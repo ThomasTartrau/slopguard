@@ -4,6 +4,7 @@ severity: warning
 category: slop
 metric: function_count
 threshold: 30
+skip_test_code: true
 message: "File defines more than 30 functions ($value functions). Split it into focused modules."
 note: "Arrow functions and class methods count too. A file with this many entry points is hard to review as a unit."
 ignores:

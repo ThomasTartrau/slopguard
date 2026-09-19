@@ -177,6 +177,8 @@ pub fn run_stats(opts: StatsOpts) -> Result<(), AppError> {
     let use_colors = !no_colors && env::var_os("NO_COLOR").is_none();
 
     if let Some(Format::Sarif) = format {
+        // CLI user-facing diagnostic on stderr, not application logging.
+        // slopguard-disable-next-line no-println-in-prod
         eprintln!("error: SARIF format is not supported for stats");
         return Err(AppError::Io(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -196,6 +198,7 @@ pub fn run_stats(opts: StatsOpts) -> Result<(), AppError> {
         config_path,
         cli_disable,
         cli_enable,
+        cli_test_paths: Vec::new(),
         rule_filter,
         no_cache,
         cache_dir,

@@ -30,6 +30,10 @@ rule:
                         not:
                           regex: '^(Self|[A-Z])'
                         stopBy: neighbor
+                    - not:
+                        has:
+                          kind: call_expression
+                          stopBy: end
               stopBy: neighbor
     - not:
         has:
@@ -46,6 +50,7 @@ tests:
   should_not_match:
     - "fn calc(a: i32, b: i32) -> i32 { let s = a + b; s * 2 }"
     - "fn process(items: &[i32]) -> i32 { items.iter().sum() }"
+    - "fn kind(c: &Cfg) -> K { resolve(c, &read(c)) }"
     - "fn from(value: Foo) -> Self { value.0 }"
     - "fn into_inner(self) -> T { self.0 }"
     - "fn new(value: T) -> Self { Self(value) }"

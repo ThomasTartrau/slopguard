@@ -4,6 +4,7 @@ severity: warning
 category: slop
 metric: import_count
 threshold: 40
+skip_test_code: true
 message: "File has more than 40 imports ($value imports). The module is doing too much."
 note: "A long import list means the file has no single responsibility. Split it along the dependency groups."
 ignores:

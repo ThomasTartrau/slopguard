@@ -222,6 +222,8 @@ fn render_relaxed() -> Result<String, RuleError> {
 /// message that lists the valid names. Keeps the name list on the core enum
 /// so the CLI never maintains its own copy.
 pub fn parse_preset(value: &str) -> Result<Preset, String> {
+    // strum's VariantNotFound carries no context; the message lists valid presets.
+    // slopguard-disable-next-line no-swallowed-error
     value.parse().map_err(|_| {
         let names: Vec<String> = Preset::iter().map(|p| p.to_string()).collect();
         format!(

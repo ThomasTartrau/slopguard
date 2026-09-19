@@ -12,6 +12,8 @@ const COUNT_HEADER: &str = "count";
 ///
 /// Every axis is a struct rather than a map, so each key is present even at
 /// zero and CI can index into the output unconditionally.
+// Part of the format_* public API surface of this module.
+// slopguard-disable-next-line no-trivial-function
 pub fn format_stats_json(report: &StatsReport, w: &mut impl Write) -> io::Result<()> {
     write_json_pretty(w, report)
 }

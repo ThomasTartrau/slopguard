@@ -1,65 +1,41 @@
 mod baseline_cmd;
 mod cli;
 mod output;
+mod scan_exec;
 mod stats_cmd;
 
 use std::cmp::Ordering;
-use std::collections::HashMap;
 use std::env;
 use std::fs;
-use std::io::{self, BufWriter, Write};
+use std::io;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use clap::Parser;
 use strsim::normalized_levenshtein;
 use thiserror::Error;
 
-use slopguard_ai::{build_provider, run_ai_pass, AiCache, AiCandidate, DEFAULT_MODEL};
 use slopguard_core::baseline::BaselineError;
-use slopguard_core::config::{load_config, load_config_file, Config, ConfigError, OutputFormat};
-use slopguard_core::escalation::apply_escalation;
-use slopguard_core::finding::{Finding, ScanResult};
-use slopguard_core::git::{changed_files, GitError};
+use slopguard_core::config::{load_config, load_config_file, Config, ConfigError};
+use slopguard_core::git::GitError;
 use slopguard_core::preset::{presets_help, Preset};
 use slopguard_core::rule::{
-    is_rule_active, load_all_rules, load_builtin_rules, load_effective_rules, Category, Language,
-    Rule, RuleError, Severity,
+    is_rule_active, load_all_rules, load_builtin_rules, load_effective_rules, Category, Rule,
+    RuleError,
 };
-use slopguard_core::scanner::{
-    count_severities, scan, scan_cached, scan_files, scan_files_cached, ScanError,
-};
+use slopguard_core::scanner::ScanError;
 use slopguard_core::testing::{self, RuleTestStatus, TestError, TestFailureKind};
 
-use crate::baseline_cmd::{apply_baseline, run_baseline, BaselineOpts};
-use crate::cli::{CategoryFilter, Cli, Command, Format, LanguageFilter, SeverityThreshold};
-use crate::output::html::{project_name, HtmlMeta};
-use crate::output::json::ListEntry;
-use crate::output::{html, json, sarif, text};
-use crate::stats_cmd::{compute_report, run_stats, StatsOpts};
+use crate::baseline_cmd::{run_baseline, BaselineOpts};
+use crate::cli::{CategoryFilter, Cli, Command, Format, LanguageFilter};
+use crate::output::json::{self, ListEntry};
+use crate::output::text;
+use crate::scan_exec::{run_scan, ScanOpts};
+use crate::stats_cmd::{run_stats, StatsOpts};
 
-fn has_findings_above_threshold(result: &ScanResult, threshold: &SeverityThreshold) -> bool {
-    result.findings.iter().any(|f| match threshold {
-        SeverityThreshold::Warning => true,
-        SeverityThreshold::Error => f.severity == Severity::Error,
-    })
-}
-
-fn write_output(
-    result: &ScanResult,
-    format: &Format,
-    w: &mut impl Write,
-    use_colors: bool,
-    html_meta: &HtmlMeta,
-) -> io::Result<()> {
-    match format {
-        Format::Text => text::format_text(result, w, use_colors),
-        Format::Json => json::format_json(result, w),
-        Format::Sarif => sarif::format_sarif(result, w),
-        Format::Html => html::format_html(result, &compute_report(result), html_meta, w),
-    }
-}
+// Shared with the `baseline` and `stats` subcommands and the HTML renderer,
+// which reach these by their crate-root path.
+pub(crate) use crate::scan_exec::{collect_findings, language_for_path, CollectOpts};
 
 #[derive(Debug, Error)]
 pub enum AppError {
@@ -79,7 +55,9 @@ pub enum AppError {
     Git(#[from] GitError),
 }
 
-fn suggest_similar<'a>(id: &str, rules: &'a [Rule]) -> Option<&'a str> {
+/// The closest rule id to `id` by normalized edit distance, if one clears the
+/// 0.6 similarity bar. Powers the "did you mean" hint for unknown rule ids.
+pub(crate) fn suggest_similar<'a>(id: &str, rules: &'a [Rule]) -> Option<&'a str> {
     rules
         .iter()
         .map(|r| (r.id.as_str(), normalized_levenshtein(id, r.id.as_str())))
@@ -88,354 +66,34 @@ fn suggest_similar<'a>(id: &str, rules: &'a [Rule]) -> Option<&'a str> {
         .map(|(id, _)| id)
 }
 
-struct ScanOpts {
-    paths: Vec<PathBuf>,
-    format: Option<Format>,
-    output: Option<PathBuf>,
-    severity_threshold: SeverityThreshold,
-    config_path: Option<PathBuf>,
-    no_colors: bool,
-    cli_disable: Vec<String>,
-    cli_enable: Vec<String>,
-    rule_filter: Option<String>,
-    no_cache: bool,
-    cache_dir: Option<PathBuf>,
-    no_ai: bool,
-    no_baseline: bool,
-    baseline_path: Option<PathBuf>,
-    no_escalation: bool,
-    diff: bool,
-    base: Option<String>,
-}
-
-/// Options shared by `scan` and `baseline`, which collect findings the same
-/// way and only differ in what they do with them.
-pub struct CollectOpts {
-    pub paths: Vec<PathBuf>,
-    pub config_path: Option<PathBuf>,
-    pub cli_disable: Vec<String>,
-    pub cli_enable: Vec<String>,
-    pub rule_filter: Option<String>,
-    pub no_cache: bool,
-    pub cache_dir: Option<PathBuf>,
-    pub no_ai: bool,
-    pub diff: bool,
-    pub diff_base: Option<String>,
-}
-
-/// Where the AST pass looks: directory roots to walk (normal scan), or the
-/// exact list of files git reported as changed (`--diff`).
-enum ScanTargets {
-    Walk(Vec<PathBuf>),
-    Files(Vec<PathBuf>),
-}
-
-impl ScanTargets {
-    fn run(
-        &self,
-        rules: &[Rule],
-        config: &Config,
-        no_cache: bool,
-        cache_dir: &Path,
-    ) -> Result<ScanResult, ScanError> {
-        match (self, no_cache) {
-            (ScanTargets::Walk(p), true) => scan(p, rules, config),
-            (ScanTargets::Walk(p), false) => scan_cached(p, rules, config, cache_dir),
-            (ScanTargets::Files(f), true) => scan_files(f, rules, config),
-            (ScanTargets::Files(f), false) => scan_files_cached(f, rules, config, cache_dir),
-        }
-    }
-}
-
-/// Keep the changed files that live under one of the requested paths, so
-/// `slopguard scan src/ --diff` stays scoped to `src/`.
-///
-/// Paths that cannot be canonicalized are compared as given.
-fn under_requested_paths(files: Vec<PathBuf>, paths: &[PathBuf]) -> Vec<PathBuf> {
-    let roots: Vec<PathBuf> = paths
-        .iter()
-        .map(|p| p.canonicalize().unwrap_or_else(|_| p.clone()))
-        .collect();
-    files
-        .into_iter()
-        .filter(|file| {
-            let resolved = file.canonicalize().unwrap_or_else(|_| file.clone());
-            roots.iter().any(|root| resolved.starts_with(root))
+pub(crate) fn resolve_cache_dir(cli_flag: Option<PathBuf>, config: &Config) -> PathBuf {
+    cli_flag
+        .or_else(|| {
+            env::var("SLOPGUARD_CACHE_DIR")
+                .ok()
+                .filter(|s| !s.is_empty())
+                .map(PathBuf::from)
         })
-        .collect()
+        .or_else(|| config.scan.cache_dir.clone())
+        .unwrap_or_else(|| {
+            let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+            cwd.join(".slopguard-cache")
+        })
 }
 
-/// Resolve the config, load the active rules, run the AST pass (cached or
-/// not) then the AI pass, and return the raw unfiltered result along with the
-/// resolved config.
-pub fn collect_findings(opts: CollectOpts) -> Result<(ScanResult, Config), AppError> {
-    let CollectOpts {
-        paths,
-        config_path,
-        cli_disable,
-        cli_enable,
-        rule_filter,
-        no_cache,
-        cache_dir,
-        no_ai,
-        diff,
-        diff_base,
-    } = opts;
-
-    let mut config = resolve_config(config_path.as_deref())?;
-    config.rules.disable.extend(cli_disable);
-    config.rules.enable.extend(cli_enable);
-
-    let mut rules = load_effective_rules(&config)?;
-
-    if let Some(ref filter_id) = rule_filter {
-        let found = rules.iter().any(|r| r.id.as_str() == filter_id);
-        if !found {
-            let suggestion = suggest_similar(filter_id, &rules);
-            if let Some(suggested) = suggestion {
-                eprintln!("error: unknown rule '{filter_id}'. Did you mean '{suggested}'?");
-            } else {
-                eprintln!("error: unknown rule '{filter_id}'");
-            }
-            return Err(AppError::Io(io::Error::new(
-                io::ErrorKind::NotFound,
-                format!("unknown rule '{filter_id}'"),
-            )));
-        }
-        rules.retain(|r| r.id.as_str() == filter_id);
-    }
-
-    // --no-ai: exclude AI rules entirely so their AST pre-filter matches
-    // never appear as unconfirmed findings.
-    if no_ai {
-        rules.retain(|r| r.ai_check.is_none());
-    }
-
-    let (ai_rules, ast_rules): (Vec<Rule>, Vec<Rule>) =
-        rules.into_iter().partition(|r| r.ai_check.is_some());
-
-    let targets = if diff {
-        let cwd = env::current_dir().map_err(AppError::Io)?;
-        let changed = under_requested_paths(changed_files(&cwd, diff_base.as_deref())?, &paths);
-        ScanTargets::Files(changed)
-    } else {
-        ScanTargets::Walk(paths)
-    };
-
-    let resolved_cache_dir = resolve_cache_dir(cache_dir, &config);
-    let mut result = targets.run(&ast_rules, &config, no_cache, &resolved_cache_dir)?;
-
-    if !ai_rules.is_empty() {
-        let ai_findings =
-            run_ai_phase(&targets, &ai_rules, &config, no_cache, &resolved_cache_dir)?;
-        if !ai_findings.is_empty() {
-            merge_ai_findings(&mut result, ai_findings);
-        }
-    }
-
-    // Set last, so the AI merge cannot drop the diff metadata.
-    if let ScanTargets::Files(ref files) = targets {
-        result.stats.diff_base = Some(diff_base.unwrap_or_else(|| "HEAD".to_string()));
-        result.stats.files_changed = Some(files.len());
-    }
-
-    Ok((result, config))
-}
-
-fn run_scan(opts: ScanOpts) -> Result<bool, AppError> {
-    let ScanOpts {
-        paths,
-        format,
-        output,
-        severity_threshold,
-        config_path,
-        no_colors,
-        cli_disable,
-        cli_enable,
-        rule_filter,
-        no_cache,
-        cache_dir,
-        no_ai,
-        no_baseline,
-        baseline_path,
-        no_escalation,
-        diff,
-        base,
-    } = opts;
-    let use_colors = !no_colors && env::var_os("NO_COLOR").is_none();
-    // `paths` is moved into CollectOpts below, so derive the title first.
-    let project = project_name(&paths);
-
-    let (mut result, config) = collect_findings(CollectOpts {
-        paths,
-        config_path,
-        cli_disable,
-        cli_enable,
-        rule_filter,
-        no_cache,
-        cache_dir,
-        no_ai,
-        diff,
-        diff_base: base,
-    })?;
-
-    let baseline_active = apply_baseline(&mut result, no_baseline, baseline_path)?;
-
-    // After the baseline (suppressed findings must not inflate the per-file
-    // count) and before the severity threshold, so an escalated finding can
-    // fail a `--severity-threshold error` run.
-    if !no_escalation {
-        apply_escalation(&mut result, &config.escalation);
-    }
-
-    let format = format.unwrap_or(match config.output.format {
-        OutputFormat::Text => Format::Text,
-        OutputFormat::Json => Format::Json,
-        OutputFormat::Sarif => Format::Sarif,
-        OutputFormat::Html => Format::Html,
-    });
-
-    let has_findings = has_findings_above_threshold(&result, &severity_threshold);
-
-    let html_meta = HtmlMeta {
-        project_name: project,
-        generated_at_secs: SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0),
-        baseline_active,
-    };
-
-    match output {
-        Some(path) => {
-            let file = fs::File::create(&path)?;
-            let mut w = BufWriter::new(file);
-            // A file is never a terminal: never emit ANSI escapes into it.
-            write_output(&result, &format, &mut w, false, &html_meta)?;
-            w.flush()?;
-        }
+pub(crate) fn resolve_config(config_path: Option<&Path>) -> Result<Config, AppError> {
+    match config_path {
+        Some(path) => Ok(load_config_file(path)?),
         None => {
-            let stdout = io::stdout();
-            let mut out = stdout.lock();
-            write_output(&result, &format, &mut out, use_colors, &html_meta)?;
+            let cwd = env::current_dir().map_err(|e| {
+                AppError::Config(ConfigError::Io {
+                    path: ".".to_string(),
+                    source: e,
+                })
+            })?;
+            Ok(load_config(&cwd)?)
         }
     }
-
-    Ok(has_findings)
-}
-
-/// Map a file path to the rule language it is scanned as.
-pub(crate) fn language_for_path(path: &Path) -> Option<Language> {
-    match path.extension().and_then(|e| e.to_str()) {
-        Some("rs") => Some(Language::Rust),
-        Some("ts" | "tsx") => Some(Language::TypeScript),
-        _ => None,
-    }
-}
-
-/// Find the `ai_check` rule that produced a candidate finding, matching on id
-/// and (when possible) the file's language, so a shared id across Rust and
-/// TypeScript resolves to the right variant.
-fn find_ai_rule<'a>(ai_rules: &'a [Rule], finding: &Finding) -> Option<&'a Rule> {
-    let lang = language_for_path(&finding.file);
-    ai_rules
-        .iter()
-        .find(|r| r.id == finding.rule_id && Some(&r.language) == lang.as_ref())
-        .or_else(|| ai_rules.iter().find(|r| r.id == finding.rule_id))
-}
-
-/// Turn AST candidate findings into AI candidates: attach each rule's prompt,
-/// resolved model, and the file content used for context and cache keys. Files
-/// are read once each; unreadable files or unmatched findings are skipped.
-fn build_candidates(
-    findings: Vec<Finding>,
-    ai_rules: &[Rule],
-    config: &Config,
-) -> Vec<AiCandidate> {
-    let mut contents: HashMap<PathBuf, Option<String>> = HashMap::new();
-    let mut candidates = Vec::new();
-    for finding in findings {
-        let Some(rule) = find_ai_rule(ai_rules, &finding) else {
-            continue;
-        };
-        let Some(ai_check) = rule.ai_check.as_ref() else {
-            continue;
-        };
-        let content = contents
-            .entry(finding.file.clone())
-            .or_insert_with(|| fs::read_to_string(&finding.file).ok());
-        let Some(file_content) = content.clone() else {
-            continue;
-        };
-        let model = ai_check
-            .model
-            .clone()
-            .or_else(|| config.ai.model.clone())
-            .unwrap_or_else(|| DEFAULT_MODEL.to_string());
-        let rule_context = rule.note.clone().unwrap_or_else(|| rule.message.clone());
-        candidates.push(AiCandidate {
-            finding,
-            file_content,
-            prompt_template: ai_check.prompt.clone(),
-            model,
-            rule_context,
-        });
-    }
-    candidates
-}
-
-/// Merge AI-confirmed findings into the AST result, keeping ordering, dedup,
-/// and severity counts consistent (`files_scanned` is preserved).
-fn merge_ai_findings(result: &mut ScanResult, ai_findings: Vec<Finding>) {
-    result.findings.extend(ai_findings);
-    result
-        .findings
-        .sort_by(|a, b| (&a.file, a.line, a.column).cmp(&(&b.file, b.line, b.column)));
-    result.findings.dedup_by(|a, b| {
-        a.rule_id == b.rule_id && a.file == b.file && a.line == b.line && a.column == b.column
-    });
-    let (errors, warnings) = count_severities(&result.findings);
-    result.stats.errors = errors;
-    result.stats.warnings = warnings;
-    result.stats.total = errors + warnings;
-}
-
-/// Run the AI confirmation phase for `ai_rules`.
-///
-/// When the provider cannot be built (disabled, missing credentials), a single
-/// warning is emitted and no LLM call is made. Otherwise the AST pre-filter
-/// produces candidates that the LLM confirms.
-fn run_ai_phase(
-    targets: &ScanTargets,
-    ai_rules: &[Rule],
-    config: &Config,
-    no_cache: bool,
-    cache_dir: &Path,
-) -> Result<Vec<Finding>, AppError> {
-    let provider = match build_provider(&config.ai) {
-        Ok(provider) => provider,
-        Err(err) => {
-            // Clear, credential-specific reason (disabled, missing API key,
-            // missing claude binary, missing OAuth token). Non-fatal: the AST
-            // findings still stand.
-            eprintln!("warning: {} AI rules skipped ({err})", ai_rules.len());
-            return Ok(Vec::new());
-        }
-    };
-
-    // Pre-filter: run the AST patterns of the AI rules to collect candidates.
-    let candidate_result = targets.run(ai_rules, config, true, cache_dir)?;
-    if candidate_result.findings.is_empty() {
-        return Ok(Vec::new());
-    }
-    let candidates = build_candidates(candidate_result.findings, ai_rules, config);
-    let cache = (!no_cache).then(|| AiCache::new(cache_dir));
-    Ok(run_ai_pass(
-        &*provider,
-        candidates,
-        config.ai.concurrency,
-        cache.as_ref(),
-    ))
 }
 
 fn run_explain(
@@ -482,36 +140,6 @@ fn run_explain(
                 io::ErrorKind::NotFound,
                 format!("unknown rule '{rule_id}'"),
             )))
-        }
-    }
-}
-
-fn resolve_cache_dir(cli_flag: Option<PathBuf>, config: &Config) -> PathBuf {
-    cli_flag
-        .or_else(|| {
-            env::var("SLOPGUARD_CACHE_DIR")
-                .ok()
-                .filter(|s| !s.is_empty())
-                .map(PathBuf::from)
-        })
-        .or_else(|| config.scan.cache_dir.clone())
-        .unwrap_or_else(|| {
-            let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-            cwd.join(".slopguard-cache")
-        })
-}
-
-fn resolve_config(config_path: Option<&Path>) -> Result<Config, AppError> {
-    match config_path {
-        Some(path) => Ok(load_config_file(path)?),
-        None => {
-            let cwd = env::current_dir().map_err(|e| {
-                AppError::Config(ConfigError::Io {
-                    path: ".".to_string(),
-                    source: e,
-                })
-            })?;
-            Ok(load_config(&cwd)?)
         }
     }
 }
@@ -712,6 +340,7 @@ fn main() -> ExitCode {
             no_colors,
             cli_disable,
             cli_enable,
+            cli_test_paths,
             rule_filter,
             no_cache,
             cache_dir,
@@ -730,6 +359,7 @@ fn main() -> ExitCode {
             no_colors,
             cli_disable,
             cli_enable,
+            cli_test_paths,
             rule_filter,
             no_cache,
             cache_dir,

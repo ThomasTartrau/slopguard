@@ -43,6 +43,8 @@ impl AiCache {
         &self.dir
     }
 
+    // Names the intent and binds self.dir for two callers.
+    // slopguard-disable-next-line no-trivial-function
     fn ensure_dir(&self) -> io::Result<()> {
         ensure_gitignored_dir(&self.dir)
     }

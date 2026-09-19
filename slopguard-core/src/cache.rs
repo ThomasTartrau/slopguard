@@ -54,23 +54,37 @@ pub enum CacheError {
     Io(#[from] io::Error),
 }
 
-/// Compute a stable hash of the active rules by sorting their ids and hashing
-/// the concatenated id list together with each rule's YAML-serialized body.
+/// Compute a stable hash of the active rules by sorting them by id and hashing
+/// each rule's serialized body along with the scanner's own version.
+///
+/// The body is mixed in so editing a rule (custom or builtin) invalidates the
+/// cache even when its id is unchanged. `CARGO_PKG_VERSION` is mixed in because
+/// findings also depend on the scanner's built-in logic (metric computation,
+/// test-path detection, cross-file passes): a new binary must drop stale
+/// entries even when the rules are byte-for-byte identical.
 pub fn rules_hash(rules: &[Rule]) -> String {
-    let mut ids: Vec<&str> = rules.iter().map(|r| r.id.as_str()).collect();
-    ids.sort();
+    let mut sorted: Vec<&Rule> = rules.iter().collect();
+    sorted.sort_by(|a, b| a.id.as_str().cmp(b.id.as_str()));
 
     let mut hasher = Sha256::new();
     hasher.update(CACHE_SCHEMA_VERSION.as_bytes());
     hasher.update(b"\0");
-    for id in &ids {
-        hasher.update(id.as_bytes());
+    hasher.update(env!("CARGO_PKG_VERSION").as_bytes());
+    hasher.update(b"\0");
+    for rule in &sorted {
+        hasher.update(rule.id.as_str().as_bytes());
+        hasher.update(b"\0");
+        if let Ok(body) = serde_json::to_vec(rule) {
+            hasher.update(&body);
+        }
         hasher.update(b"\0");
     }
     format!("{:x}", hasher.finalize())
 }
 
 /// Compute the SHA256 hash of a file's content.
+// Domain name over the generic sha256_hex, used across the scanner.
+// slopguard-disable-next-line no-trivial-function
 pub fn file_content_hash(content: &[u8]) -> String {
     sha256_hex(content)
 }

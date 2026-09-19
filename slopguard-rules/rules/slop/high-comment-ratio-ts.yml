@@ -4,14 +4,19 @@ severity: warning
 category: slop
 metric: comment_ratio
 threshold: 0.4
+min_lines: 25
+skip_test_code: true
 message: "More than 40 percent of this file is comments (ratio $value). Delete the ones that restate the code."
 note: "Generated code tends to narrate every line. Comments should explain why, not repeat what the next line already says."
 ignores:
   - "**/fixtures/**"
 tests:
   should_match:
-    - "// step one\n// step two\n// step three\n// step four\nexport function run(): number {\n  return 1;\n}\n"
-    - "/** Adds two numbers. */\n/* Returns the sum. */\n// Never throws.\nexport function add(a: number, b: number): number {\n  return a + b;\n}\n"
+    # 26 lines, 14 of them comments (ratio ~0.54): above the floor and narrated.
+    - "// narration one\n// narration two\n// narration three\n// narration four\n// narration five\n// narration six\n// narration seven\n// narration eight\n// narration nine\n// narration ten\n// narration eleven\n// narration twelve\n// narration thirteen\n// narration fourteen\nexport function run(): number {\n  const a = 1;\n  const b = 2;\n  const c = 3;\n  const d = 4;\n  const e = 5;\n  const f = 6;\n  const g = 7;\n  const h = 8;\n  const i = 9;\n  return a;\n}\n"
   should_not_match:
     - "export function run(): number {\n  const x = 1;\n  const y = 2;\n  return x + y;\n}\n"
-    - "// Overflow is impossible for the caller's range.\nexport function add(a: number, b: number): number {\n  return a + b;\n}\n"
+    # Small file with a high comment ratio: the min_lines floor suppresses it.
+    - "/** Adds two numbers. */\n/* Returns the sum. */\n// Never throws.\nexport function add(a: number, b: number): number {\n  return a + b;\n}\n"
+    # 26 lines but only one comment (ratio ~0.04): above the floor, below the threshold.
+    - "// one comment\nexport function run(): number {\n  const a = 1;\n  const b = 2;\n  const c = 3;\n  const d = 4;\n  const e = 5;\n  const f = 6;\n  const g = 7;\n  const h = 8;\n  const i = 9;\n  const j = 10;\n  const k = 11;\n  const l = 12;\n  const m = 13;\n  const n = 14;\n  const o = 15;\n  const p = 16;\n  const q = 17;\n  const r = 18;\n  const s = 19;\n  const t = 20;\n  return a;\n}\n"

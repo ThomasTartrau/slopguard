@@ -2,31 +2,73 @@ use std::ops::Range;
 use std::path::Path;
 
 use ast_grep_core::{AstGrep, Doc, Node};
+use globset::{Error as GlobError, Glob, GlobSet, GlobSetBuilder};
 
-/// Whether `path` lives in a conventional test, bench, or example tree.
+/// Whether `path` lives in a conventional test, bench, or example tree, using
+/// the built-in layout heuristic.
 ///
 /// Rust integration tests, benchmarks, and examples are not `#[cfg(test)]`
 /// modules, so `CfgTestRanges` cannot see them. Rules with `skip_test_code`
 /// should treat these whole files as test code.
 ///
-/// Matches exact directory names (`tests`, `benches`, `examples`) and also
-/// crate-level test directories whose name ends with `_test` or `_tests`
-/// (e.g. `integrations_tests`, `e2e_tests`).
-pub(crate) fn is_test_path(path: &Path) -> bool {
+/// Matches exact directory names (`tests`, `benches`, `examples`, `fixtures`,
+/// `__tests__`) and also crate-level test directories whose name ends with
+/// `_test` or `_tests` (e.g. `integrations_tests`, `e2e_tests`). For single-file
+/// test modules it matches a file stem of `tests` or `test` (the idiomatic
+/// out-of-line `#[cfg(test)] mod tests;` target), one ending in `_test` /
+/// `_tests`, and the TypeScript/JavaScript `*.spec.*` / `*.test.*` conventions
+/// (whose stem ends in `.spec` / `.test`).
+pub(crate) fn is_default_test_path(path: &Path) -> bool {
     let in_test_dir = path.components().any(|c| {
         let Some(name) = c.as_os_str().to_str() else {
             return false;
         };
-        matches!(name, "tests" | "benches" | "examples")
-            || name.ends_with("_tests")
+        matches!(
+            name,
+            "tests" | "benches" | "examples" | "fixtures" | "__tests__"
+        ) || name.ends_with("_tests")
             || name.ends_with("_test")
             || name.starts_with("test_")
     });
-    let test_file_name = path
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .is_some_and(|s| s.ends_with("_test") || s.ends_with("_tests"));
+    let test_file_name = path.file_stem().and_then(|s| s.to_str()).is_some_and(|s| {
+        matches!(s, "tests" | "test")
+            || s.ends_with("_test")
+            || s.ends_with("_tests")
+            || s.ends_with(".spec")
+            || s.ends_with(".test")
+    });
     in_test_dir || test_file_name
+}
+
+/// Which paths count as test code for `skip_test_code` rules: the built-in
+/// [`is_default_test_path`] heuristic plus any extra glob patterns supplied via
+/// `scan.test_paths` in config or `--test-path` on the CLI.
+#[derive(Clone, Default)]
+pub(crate) struct TestPaths {
+    extra: Option<GlobSet>,
+}
+
+impl TestPaths {
+    /// Compile the user-supplied glob patterns. An empty list keeps only the
+    /// built-in heuristic.
+    pub(crate) fn new(patterns: &[String]) -> Result<Self, GlobError> {
+        if patterns.is_empty() {
+            return Ok(Self::default());
+        }
+        let mut builder = GlobSetBuilder::new();
+        for pattern in patterns {
+            builder.add(Glob::new(pattern)?);
+        }
+        Ok(Self {
+            extra: Some(builder.build()?),
+        })
+    }
+
+    /// Whether `path` should be treated as test code: it matches the built-in
+    /// layout heuristic, or one of the configured patterns.
+    pub(crate) fn is_test(&self, path: &Path) -> bool {
+        is_default_test_path(path) || self.extra.as_ref().is_some_and(|g| g.is_match(path))
+    }
 }
 
 /// Line ranges covered by `#[cfg(test)]` items in a parsed Rust file.
@@ -233,5 +275,64 @@ impl S {
         assert!(ranges.contains_line(7));
         assert!(ranges.contains_line(8));
         assert!(!ranges.contains_line(9));
+    }
+
+    #[test]
+    fn out_of_line_test_module_file_is_test_code() {
+        // `#[cfg(test)] mod tests;` points at a bare `tests.rs` next to its
+        // parent module; CfgTestRanges cannot see it, so the path heuristic must.
+        assert!(is_default_test_path(Path::new("src/baseline/tests.rs")));
+        assert!(is_default_test_path(Path::new("src/test.rs")));
+        assert!(is_default_test_path(Path::new("src/foo_tests.rs")));
+        assert!(is_default_test_path(Path::new(
+            "crate/tests/integration.rs"
+        )));
+    }
+
+    #[test]
+    fn fixtures_and_ts_test_conventions_are_test_code() {
+        assert!(is_default_test_path(Path::new(
+            "tests/fixtures/rust_violations.rs"
+        )));
+        assert!(is_default_test_path(Path::new("crate/fixtures/data.rs")));
+        assert!(is_default_test_path(Path::new("src/__tests__/foo.ts")));
+        assert!(is_default_test_path(Path::new("src/button.spec.ts")));
+        assert!(is_default_test_path(Path::new("src/button.test.tsx")));
+        assert!(is_default_test_path(Path::new("src/api.spec.js")));
+    }
+
+    #[test]
+    fn production_files_are_not_test_code() {
+        assert!(!is_default_test_path(Path::new("src/scanner.rs")));
+        assert!(!is_default_test_path(Path::new("src/testing.rs")));
+        assert!(!is_default_test_path(Path::new("src/latest.rs")));
+        assert!(!is_default_test_path(Path::new("src/mod.rs")));
+        assert!(!is_default_test_path(Path::new("src/spec.ts")));
+        assert!(!is_default_test_path(Path::new("src/inspector.ts")));
+    }
+
+    #[test]
+    fn custom_patterns_extend_the_default_heuristic() {
+        let tp =
+            TestPaths::new(&["**/fixtures/**".to_string(), "**/*.spec.ts".to_string()]).unwrap();
+        // custom patterns match
+        assert!(tp.is_test(Path::new("src/fixtures/sample.rs")));
+        assert!(tp.is_test(Path::new("src/foo.spec.ts")));
+        // the built-in heuristic still applies
+        assert!(tp.is_test(Path::new("src/baseline/tests.rs")));
+        // unrelated production code stays production
+        assert!(!tp.is_test(Path::new("src/scanner.rs")));
+    }
+
+    #[test]
+    fn empty_patterns_keep_only_the_default_heuristic() {
+        let tp = TestPaths::new(&[]).unwrap();
+        assert!(tp.is_test(Path::new("tests/integration.rs")));
+        assert!(!tp.is_test(Path::new("src/scanner.rs")));
+    }
+
+    #[test]
+    fn invalid_pattern_is_an_error() {
+        assert!(TestPaths::new(&["[unterminated".to_string()]).is_err());
     }
 }

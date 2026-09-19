@@ -78,6 +78,11 @@ pub enum Command {
         #[arg(long = "enable", value_name = "RULE_ID")]
         cli_enable: Vec<String>,
 
+        /// Extra glob patterns marking files as test code, suppressing
+        /// `skip_test_code` rules there (adds to config `scan.test_paths`, repeatable)
+        #[arg(long = "test-path", value_name = "GLOB")]
+        cli_test_paths: Vec<String>,
+
         /// Scan with only this rule
         #[arg(long = "rule", value_name = "RULE_ID")]
         rule_filter: Option<String>,

@@ -4,14 +4,22 @@ severity: warning
 category: slop
 metric: comment_ratio
 threshold: 0.4
+min_lines: 25
+skip_test_code: true
 message: "More than 40 percent of this file is comments (ratio $value). Delete the ones that restate the code."
 note: "Generated code tends to narrate every line. Comments should explain why, not repeat what the next line already says."
 ignores:
   - "**/fixtures/**"
 tests:
   should_match:
-    - "// step one\n// step two\n// step three\n// step four\nfn run() {\n    let x = 1;\n}\n"
-    - "/// Adds two numbers.\n/// Returns the sum.\n/// Never panics.\nfn add(a: u8, b: u8) -> u8 {\n    a + b\n}\n"
+    # 26 lines, 14 of them comments (ratio ~0.54): above the floor and narrated.
+    - "// narration one\n// narration two\n// narration three\n// narration four\n// narration five\n// narration six\n// narration seven\n// narration eight\n// narration nine\n// narration ten\n// narration eleven\n// narration twelve\n// narration thirteen\n// narration fourteen\nfn run() {\n    let a = 1;\n    let b = 2;\n    let c = 3;\n    let d = 4;\n    let e = 5;\n    let f = 6;\n    let g = 7;\n    let h = 8;\n    let i = 9;\n    let _ = a;\n}\n"
   should_not_match:
     - "fn run() {\n    let x = 1;\n    let y = 2;\n    x + y\n}\n"
-    - "// Overflow is impossible for the caller's range.\nfn add(a: u8, b: u8) -> u8 {\n    let sum = a + b;\n    sum\n}\n"
+    # 26 lines dominated by `///` doc comments: docs are not narration, so the
+    # narration ratio stays near zero and the rule does not fire.
+    - "/// doc one\n/// doc two\n/// doc three\n/// doc four\n/// doc five\n/// doc six\n/// doc seven\n/// doc eight\n/// doc nine\n/// doc ten\n/// doc eleven\n/// doc twelve\n/// doc thirteen\n/// doc fourteen\nfn run() {\n    let a = 1;\n    let b = 2;\n    let c = 3;\n    let d = 4;\n    let e = 5;\n    let f = 6;\n    let g = 7;\n    let h = 8;\n    let i = 9;\n    let _ = a;\n}\n"
+    # Small file with a high comment ratio: the min_lines floor suppresses it.
+    - "/// Adds two numbers.\n/// Returns the sum.\n/// Never panics.\nfn add(a: u8, b: u8) -> u8 {\n    a + b\n}\n"
+    # 27 lines but only one comment (ratio ~0.04): above the floor, below the threshold.
+    - "// one comment\nfn run() {\n    let a = 1;\n    let b = 2;\n    let c = 3;\n    let d = 4;\n    let e = 5;\n    let f = 6;\n    let g = 7;\n    let h = 8;\n    let i = 9;\n    let j = 10;\n    let k = 11;\n    let l = 12;\n    let m = 13;\n    let n = 14;\n    let o = 15;\n    let p = 16;\n    let q = 17;\n    let r = 18;\n    let s = 19;\n    let t = 20;\n    let u = 21;\n    let v = 22;\n    let _ = a;\n}\n"

@@ -106,6 +106,7 @@ pub fn run_baseline(opts: BaselineOpts) -> Result<(), AppError> {
         config_path,
         cli_disable,
         cli_enable,
+        cli_test_paths: Vec::new(),
         rule_filter: None,
         no_cache,
         cache_dir,
@@ -129,6 +130,8 @@ pub fn run_baseline(opts: BaselineOpts) -> Result<(), AppError> {
     let baseline = baseline::build(&result.findings, &root);
     baseline::write(&baseline, &out_path)?;
 
+    // CLI user-facing output: stdout is the command's result, not a log line.
+    // slopguard-disable-next-line no-println-in-prod
     println!(
         "Wrote {} findings to {}",
         result.findings.len(),
