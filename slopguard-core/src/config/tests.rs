@@ -358,4 +358,74 @@ fn enum_string_roundtrip() {
     assert_eq!("openai".parse::<AiVendor>().unwrap(), AiVendor::OpenAI);
     assert_eq!(AiTransport::Cli.to_string(), "cli");
     assert_eq!("api".parse::<AiTransport>().unwrap(), AiTransport::Api);
+    assert_eq!(ClassifierTransport::Openrouter.to_string(), "openrouter");
+    assert_eq!(
+        "direct".parse::<ClassifierTransport>().unwrap(),
+        ClassifierTransport::Direct
+    );
+}
+
+#[test]
+fn parse_classifier_config() {
+    let dir = tempdir().unwrap();
+    let toml = r#"
+[ai.classifier]
+enabled = true
+transport = "openrouter"
+model = "typesafe/jev-1.13"
+threshold = 0.85
+"#;
+    write(dir.path().join("slopguard.toml"), toml).unwrap();
+
+    let cfg = load_config_from(None, dir.path()).unwrap();
+    assert!(cfg.ai.classifier.enabled);
+    assert_eq!(cfg.ai.classifier.transport, ClassifierTransport::Openrouter);
+    assert_eq!(
+        cfg.ai.classifier.model.as_deref(),
+        Some("typesafe/jev-1.13")
+    );
+    assert!((cfg.ai.classifier.threshold - 0.85).abs() < f64::EPSILON);
+}
+
+#[test]
+fn classifier_defaults_when_absent() {
+    // The classifier must be off with a 0.7 threshold when [ai.classifier] is
+    // not present: opt-in strict, so a bare config never reaches Jev.
+    let cfg = Config::default();
+    assert!(!cfg.ai.classifier.enabled);
+    assert_eq!(cfg.ai.classifier.transport, ClassifierTransport::Direct);
+    assert!(cfg.ai.classifier.model.is_none());
+    assert!((cfg.ai.classifier.threshold - 0.7).abs() < f64::EPSILON);
+}
+
+#[test]
+fn classifier_partial_keeps_defaults() {
+    // Setting only `enabled` must leave transport/threshold at their defaults.
+    let dir = tempdir().unwrap();
+    write(
+        dir.path().join("slopguard.toml"),
+        "[ai.classifier]\nenabled = true\n",
+    )
+    .unwrap();
+
+    let cfg = load_config_from(None, dir.path()).unwrap();
+    assert!(cfg.ai.classifier.enabled);
+    assert_eq!(cfg.ai.classifier.transport, ClassifierTransport::Direct);
+    assert!((cfg.ai.classifier.threshold - 0.7).abs() < f64::EPSILON);
+}
+
+#[test]
+fn invalid_classifier_transport_is_an_error() {
+    let dir = tempdir().unwrap();
+    write(
+        dir.path().join("slopguard.toml"),
+        "[ai.classifier]\ntransport = \"grpc\"\n",
+    )
+    .unwrap();
+
+    let err = load_config_from(None, dir.path()).unwrap_err();
+    assert!(
+        matches!(err, ConfigError::Parse { .. }),
+        "expected Parse error for an unknown transport, got: {err:?}"
+    );
 }

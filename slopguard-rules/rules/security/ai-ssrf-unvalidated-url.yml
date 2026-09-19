@@ -41,6 +41,7 @@ rule:
             kind: scoped_identifier
             regex: '::(get|post|put|patch|delete|head)$'
 ai_check:
+  reason: generated
   prompt: |
     You are auditing a Rust outbound HTTP call in {{filename}} for SSRF.
 

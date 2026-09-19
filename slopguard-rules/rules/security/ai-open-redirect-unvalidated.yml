@@ -26,6 +26,7 @@ rule:
           regex: '^(req|request|ctx)\.(query|body|params)\b'
           stopBy: end
 ai_check:
+  reason: generated
   prompt: |
     You are auditing a redirect in {{filename}} for an open-redirect flaw.
 

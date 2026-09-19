@@ -9,9 +9,14 @@ categories.workspace = true
 description = "AI analysis pipeline for slopguard (LLM provider, prompt, cache)"
 readme = "README.md"
 
+[features]
+# The System One classifier (Jev / TypeSafe). Off by default: opt-in strict,
+# since Jev is a proprietary SaaS and the deterministic AST mode is the socle.
+provider-typesafe = ["ironflow-core/provider-typesafe"]
+
 [dependencies]
 slopguard-core = { path = "../slopguard-core", version = "0.1.18" }
-ironflow-core = { version = "3.15.1", features = [
+ironflow-core = { version = "3.18.0", features = [
     "provider-anthropic-api",
     "provider-openai",
 ] }
