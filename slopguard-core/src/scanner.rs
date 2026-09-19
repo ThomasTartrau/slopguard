@@ -25,7 +25,7 @@ use crate::disable::filter_disabled;
 use crate::finding::{CacheStats, Finding, ScanResult, ScanStats};
 use crate::metric::{self, Metric};
 use crate::rule::{Language, Rule, RuleId, Severity};
-use crate::test_filter::CfgTestRanges;
+use crate::test_filter::{is_test_path, CfgTestRanges};
 
 #[derive(Debug, Error)]
 pub enum ScanError {
@@ -150,15 +150,11 @@ fn build_metric_rule(rule: &Rule) -> Result<MetricRule<'_>, ScanError> {
     })
 }
 
-/// Resolve a cross-file rule's kind and compile the globs that bound which
-/// declarations it may report.
-fn build_cross_file_rule(rule: &Rule) -> Result<Option<CrossFileRule<'_>>, ScanError> {
-    // A cross-file rule without a kind cannot exist: `parse_rule` only marks a
-    // rule cross-file when the discriminant parsed.
-    let Some(kind) = rule.cross_file_kind() else {
-        return Ok(None);
-    };
-    Ok(Some(CrossFileRule {
+/// Compile the globs that bound which declarations a cross-file rule may
+/// report. The `kind` is resolved by the caller, which already partitioned the
+/// rules on `is_cross_file()`.
+fn build_cross_file_rule(rule: &Rule, kind: CrossFileKind) -> Result<CrossFileRule<'_>, ScanError> {
+    Ok(CrossFileRule {
         rule,
         kind,
         decl_filter: DeclFilter {
@@ -166,7 +162,7 @@ fn build_cross_file_rule(rule: &Rule) -> Result<Option<CrossFileRule<'_>>, ScanE
             ignores: rule.ignores.as_deref().map(build_glob_set).transpose()?,
             skip_test_code: rule.skip_test_code,
         },
-    }))
+    })
 }
 
 fn compile_rules(rules: &[Rule]) -> Result<CompiledRules<'_>, ScanError> {
@@ -200,11 +196,9 @@ fn compile_rules(rules: &[Rule]) -> Result<CompiledRules<'_>, ScanError> {
             .collect::<Result<Vec<_>, _>>()?,
         cross_file: cross_rules
             .into_iter()
-            .map(build_cross_file_rule)
-            .collect::<Result<Vec<_>, _>>()?
-            .into_iter()
-            .flatten()
-            .collect(),
+            .filter_map(|rule| rule.cross_file_kind().map(|kind| (rule, kind)))
+            .map(|(rule, kind)| build_cross_file_rule(rule, kind))
+            .collect::<Result<Vec<_>, _>>()?,
     })
 }
 
@@ -214,32 +208,6 @@ fn build_glob_set(patterns: &[String]) -> Result<GlobSet, GlobError> {
         builder.add(Glob::new(pattern)?);
     }
     builder.build()
-}
-
-/// Whether `path` lives in a conventional test, bench, or example tree.
-///
-/// Rust integration tests, benchmarks, and examples are not `#[cfg(test)]`
-/// modules, so `CfgTestRanges` cannot see them. Rules with `skip_test_code`
-/// should treat these whole files as test code.
-///
-/// Matches exact directory names (`tests`, `benches`, `examples`) and also
-/// crate-level test directories whose name ends with `_test` or `_tests`
-/// (e.g. `integrations_tests`, `e2e_tests`).
-pub(crate) fn is_test_path(path: &Path) -> bool {
-    let in_test_dir = path.components().any(|c| {
-        let Some(name) = c.as_os_str().to_str() else {
-            return false;
-        };
-        matches!(name, "tests" | "benches" | "examples")
-            || name.ends_with("_tests")
-            || name.ends_with("_test")
-            || name.starts_with("test_")
-    });
-    let test_file_name = path
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .is_some_and(|s| s.ends_with("_test") || s.ends_with("_tests"));
-    in_test_dir || test_file_name
 }
 
 /// One finding per metric rule whose measured value exceeds its threshold.
@@ -415,6 +383,22 @@ fn cross_file_findings(
         .collect()
 }
 
+/// Run the cross-file pass and append its findings, if it is due. A full scan
+/// asks for it via `run_cross_file`; a partial scan (`--diff`, explicit files)
+/// collects contributions to warm the cache but leaves the index incomplete, so
+/// it must not evaluate. Centralises the `run_cross_file && has cross-file
+/// rules` invariant shared by both scan paths.
+fn append_cross_file(
+    findings: &mut Vec<Finding>,
+    compiled: &CompiledRules,
+    run_cross_file: bool,
+    contributions: &[(PathBuf, FileSymbols)],
+) {
+    if run_cross_file && !compiled.cross_file.is_empty() {
+        findings.extend(cross_file_findings(&compiled.cross_file, contributions));
+    }
+}
+
 /// Walk `paths` (gitignore-aware) and keep the source files slopguard can parse.
 fn walk_files(paths: &[PathBuf], ignores: &GlobSet) -> Vec<(PathBuf, SupportLang)> {
     paths
@@ -488,9 +472,7 @@ fn scan_collected(
             contributions.push((path, scan.symbols));
         }
     }
-    if run_cross_file && collect_symbols {
-        findings.extend(cross_file_findings(&compiled.cross_file, &contributions));
-    }
+    append_cross_file(&mut findings, compiled, run_cross_file, &contributions);
     normalize_findings(&mut findings);
 
     let (errors, warnings) = count_severities(&findings);
@@ -594,9 +576,7 @@ fn scan_collected_cached(
 
     // Cross-file evaluation itself is never cached: it re-runs on every scan
     // from the assembled index.
-    if run_cross_file && collect_symbols {
-        all_findings.extend(cross_file_findings(&compiled.cross_file, &contributions));
-    }
+    append_cross_file(&mut all_findings, compiled, run_cross_file, &contributions);
 
     if prune {
         let current_hashes: Vec<String> =

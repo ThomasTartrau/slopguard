@@ -14,7 +14,7 @@ use strum::Display;
 
 use crate::finding::Finding;
 use crate::rule::Rule;
-use crate::test_filter::CfgTestRanges;
+use crate::test_filter::{is_test_path, CfgTestRanges};
 
 /// Cross-file analyses a rule can request. Builtin only: a custom YAML may
 /// tune an existing kind's severity or message, never invent a new one, so an
@@ -224,7 +224,7 @@ impl DeclFilter {
         if self.ignores.as_ref().is_some_and(|g| g.is_match(path)) {
             return false;
         }
-        if self.skip_test_code && (crate::scanner::is_test_path(path) || decl.in_cfg_test) {
+        if self.skip_test_code && (is_test_path(path) || decl.in_cfg_test) {
             return false;
         }
         true
@@ -238,13 +238,16 @@ impl DeclFilter {
 /// probably implemented outside this crate. Two or more is a legitimate
 /// abstraction. A blanket impl covers a whole family of types, so it is never
 /// an over-abstraction. A name declared twice is ambiguous and abstains.
+///
+/// The returned order follows `HashMap` iteration and is not stable; the caller
+/// (`normalize_findings`) sorts and dedups before the result is reported.
 pub fn evaluate(
     rule: &Rule,
     kind: CrossFileKind,
     index: &SymbolIndex,
     filter: &DeclFilter,
 ) -> Vec<Finding> {
-    let mut findings: Vec<Finding> = match kind {
+    match kind {
         CrossFileKind::SingleImplTrait => index
             .traits
             .values()
@@ -270,10 +273,7 @@ pub fn evaluate(
                 escalated: false,
             })
             .collect(),
-    };
-    // `HashMap` iteration order is not stable, so sort before returning.
-    findings.sort_by(|a, b| (&a.file, a.line).cmp(&(&b.file, b.line)));
-    findings
+    }
 }
 
 #[cfg(test)]
