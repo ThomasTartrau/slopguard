@@ -6,12 +6,15 @@
 //! ([`prompt`]), and the LLM is asked to confirm the issue with a structured
 //! [`AiVerdict`] ([`verdict`]). Only confirmed candidates become findings.
 
+#[cfg(feature = "provider-typesafe")]
+pub mod classifier;
 mod context;
 mod prompt;
 mod verdict;
 
 pub use verdict::AiVerdict;
 
+use std::future::Future;
 use std::sync::Arc;
 
 use tokio::runtime::Builder;
@@ -20,6 +23,7 @@ use futures::future::join_all;
 use ironflow_core::operations::agent::Agent;
 use ironflow_core::provider::AgentProvider;
 use slopguard_core::finding::Finding;
+use slopguard_core::rule::ReasonMode;
 use tokio::sync::Semaphore;
 
 use crate::cache::{cache_key, AiCache};
@@ -39,9 +43,22 @@ pub struct AiCandidate {
     /// The `ai_check.prompt` template.
     pub prompt_template: String,
     /// Resolved model (rule override, else config, else [`DEFAULT_MODEL`]).
+    /// For the classifier path this is the LLM model used to write a
+    /// `generated` reason, not the Jev classification route.
     pub model: String,
     /// Value substituted for `{{rule_context}}` (typically the rule message).
+    /// Doubles as the static reason for a `static` classifier rule.
     pub rule_context: String,
+    /// How the finding's reason is produced (classifier path only): a static
+    /// note or an LLM-generated per-instance note.
+    pub reason_mode: ReasonMode,
+    /// Per-rule classifier threshold override (classifier path only). `None`
+    /// falls back to `[ai.classifier].threshold`.
+    pub threshold: Option<f64>,
+    /// Classifier noul calibration: what a "yes" looks like (classifier path).
+    pub if_true: Option<String>,
+    /// Classifier noul calibration: what a "no" looks like (classifier path).
+    pub if_false: Option<String>,
 }
 
 /// Call the LLM for one rendered prompt. Returns `None` on any provider or
@@ -50,7 +67,11 @@ pub struct AiCandidate {
 ///
 /// The output schema is derived from [`AiVerdict`] via `output::<T>()`, so the
 /// schema and the Rust type stay in sync.
-async fn call_llm(provider: &dyn AgentProvider, model: &str, prompt: &str) -> Option<AiVerdict> {
+pub(crate) async fn call_llm(
+    provider: &dyn AgentProvider,
+    model: &str,
+    prompt: &str,
+) -> Option<AiVerdict> {
     let result = Agent::new()
         .prompt(prompt)
         .model(model)
@@ -81,7 +102,7 @@ async fn confirm(
         &filename,
         &candidate.rule_context,
     );
-    let key = cache_key(&candidate.file_content, &prompt, &candidate.model);
+    let key = cache_key(&[&candidate.file_content, &prompt, &candidate.model]);
 
     let verdict = match cache.and_then(|c| c.get(&key)) {
         Some(cached) => cached,
@@ -105,17 +126,20 @@ async fn confirm(
     Some(finding)
 }
 
-/// Run the AI confirmation pass over `candidates`, bounded to `concurrency`
-/// simultaneous LLM calls. Returns only confirmed findings.
+/// Drive `check` over every candidate, at most `concurrency` at a time, and
+/// keep the findings it returns. Shared by the LLM and classifier passes.
 ///
 /// This blocks the calling thread on a private multi-thread Tokio runtime, so
 /// callers stay synchronous (the AST scanner and CLI are sync).
-pub fn run_ai_pass(
-    provider: &dyn AgentProvider,
-    candidates: Vec<AiCandidate>,
+pub(crate) fn run_bounded<'a, F, Fut>(
+    candidates: &'a [AiCandidate],
     concurrency: usize,
-    cache: Option<&AiCache>,
-) -> Vec<Finding> {
+    check: F,
+) -> Vec<Finding>
+where
+    F: Fn(&'a AiCandidate) -> Fut,
+    Fut: Future<Output = Option<Finding>>,
+{
     if candidates.is_empty() {
         return Vec::new();
     }
@@ -127,15 +151,29 @@ pub fn run_ai_pass(
 
     runtime.block_on(async {
         let permits = Arc::new(Semaphore::new(concurrency.max(1)));
+        let check = &check;
         let tasks = candidates.iter().map(|candidate| {
-            let permits = permits.clone();
+            let permits = Arc::clone(&permits);
             async move {
                 // Closed only on shutdown; if acquisition fails, skip.
                 let _permit = permits.acquire().await.ok()?;
-                confirm(provider, candidate, cache).await
+                check(candidate).await
             }
         });
         join_all(tasks).await.into_iter().flatten().collect()
+    })
+}
+
+/// Run the AI confirmation pass over `candidates`, bounded to `concurrency`
+/// simultaneous LLM calls. Returns only confirmed findings.
+pub fn run_ai_pass(
+    provider: &dyn AgentProvider,
+    candidates: Vec<AiCandidate>,
+    concurrency: usize,
+    cache: Option<&AiCache>,
+) -> Vec<Finding> {
+    run_bounded(&candidates, concurrency, |candidate| {
+        confirm(provider, candidate, cache)
     })
 }
 
@@ -213,6 +251,10 @@ mod tests {
                 .to_string(),
             model: DEFAULT_MODEL.to_string(),
             rule_context: "no meaningful SAFETY comment".to_string(),
+            reason_mode: ReasonMode::Static,
+            threshold: None,
+            if_true: None,
+            if_false: None,
         }
     }
 

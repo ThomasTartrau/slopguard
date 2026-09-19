@@ -4,17 +4,21 @@
 
 use std::collections::HashMap;
 use std::env;
+use std::fmt::Display;
 use std::fs;
 use std::io::{self, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use slopguard_ai::{build_provider, run_ai_pass, AiCache, AiCandidate, DEFAULT_MODEL};
+use slopguard_ai::{
+    build_classifier, build_provider, resolve_jev_model, run_ai_pass, run_classifier_pass, AiCache,
+    AiCandidate, DEFAULT_MODEL,
+};
 use slopguard_core::config::{Config, OutputFormat};
 use slopguard_core::escalation::apply_escalation;
 use slopguard_core::finding::{Finding, ScanResult};
 use slopguard_core::git::changed_files;
-use slopguard_core::rule::{load_effective_rules, Language, Rule, Severity};
+use slopguard_core::rule::{load_effective_rules, Language, ReasonMode, Rule, Severity};
 use slopguard_core::scanner::{
     count_severities, scan, scan_cached, scan_files, scan_files_cached, ScanError,
 };
@@ -348,6 +352,10 @@ fn build_candidates(
             prompt_template: ai_check.prompt.clone(),
             model,
             rule_context,
+            reason_mode: ai_check.reason,
+            threshold: ai_check.threshold,
+            if_true: ai_check.if_true.clone(),
+            if_false: ai_check.if_false.clone(),
         });
     }
     candidates
@@ -369,12 +377,97 @@ fn merge_ai_findings(result: &mut ScanResult, ai_findings: Vec<Finding>) {
     result.stats.total = errors + warnings;
 }
 
-/// Run the AI confirmation phase for `ai_rules`.
+/// Run the AI phase for `ai_rules`: the System One classifier when
+/// `[ai.classifier].enabled`, otherwise the generative LLM confirmation.
+fn run_ai_phase(
+    targets: &ScanTargets,
+    ai_rules: &[Rule],
+    config: &Config,
+    no_cache: bool,
+    cache_dir: &Path,
+) -> Result<Vec<Finding>, AppError> {
+    if config.ai.classifier.enabled {
+        return run_classifier_phase(targets, ai_rules, config, no_cache, cache_dir);
+    }
+    run_llm_phase(targets, ai_rules, config, no_cache, cache_dir)
+}
+
+/// Collect the AST pre-filter candidates for `ai_rules`, reading each matched
+/// file once. Shared by the LLM and classifier phases.
+fn collect_ai_candidates(
+    targets: &ScanTargets,
+    ai_rules: &[Rule],
+    config: &Config,
+    cache_dir: &Path,
+) -> Result<Vec<AiCandidate>, AppError> {
+    let candidate_result = targets.run(ai_rules, config, true, cache_dir)?;
+    Ok(build_candidates(
+        candidate_result.findings,
+        ai_rules,
+        config,
+    ))
+}
+
+/// The single non-fatal warning for AI rules skipped because no provider could
+/// be built: a clear, credential-specific reason (disabled, missing API key,
+/// missing claude binary, missing OAuth token). The AST findings still stand.
+fn warn_ai_skipped(ai_rules: &[Rule], err: &dyn Display) {
+    // CLI diagnostic to stderr, not application logging.
+    // slopguard-disable-next-line no-println-in-prod
+    eprintln!("warning: {} AI rules skipped ({err})", ai_rules.len());
+}
+
+/// Classify candidates with the System One provider (Jev).
+///
+/// When the classifier cannot be built (disabled, missing key), a single
+/// warning is emitted and no call is made. `generated` rules escalate to the
+/// LLM for a per-instance reason when one is available.
+fn run_classifier_phase(
+    targets: &ScanTargets,
+    ai_rules: &[Rule],
+    config: &Config,
+    no_cache: bool,
+    cache_dir: &Path,
+) -> Result<Vec<Finding>, AppError> {
+    let decider = match build_classifier(&config.ai.classifier) {
+        Ok(decider) => decider,
+        Err(err) => {
+            warn_ai_skipped(ai_rules, &err);
+            return Ok(Vec::new());
+        }
+    };
+
+    let candidates = collect_ai_candidates(targets, ai_rules, config, cache_dir)?;
+    if candidates.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // The LLM writes reasons for `generated` rules, so it is only built when
+    // one is present. Optional: without it, those rules fall back to their
+    // static note (handled inside the pass).
+    let needs_llm = candidates
+        .iter()
+        .any(|c| c.reason_mode == ReasonMode::Generated);
+    let llm = needs_llm.then(|| build_provider(&config.ai).ok()).flatten();
+    let cache = (!no_cache).then(|| AiCache::new(cache_dir));
+    let jev_model = resolve_jev_model(&config.ai.classifier);
+    Ok(run_classifier_pass(
+        &*decider,
+        llm.as_deref(),
+        candidates,
+        &jev_model,
+        config.ai.classifier.threshold,
+        config.ai.concurrency,
+        cache.as_ref(),
+    ))
+}
+
+/// Run the generative LLM confirmation phase for `ai_rules`.
 ///
 /// When the provider cannot be built (disabled, missing credentials), a single
 /// warning is emitted and no LLM call is made. Otherwise the AST pre-filter
 /// produces candidates that the LLM confirms.
-fn run_ai_phase(
+fn run_llm_phase(
     targets: &ScanTargets,
     ai_rules: &[Rule],
     config: &Config,
@@ -384,21 +477,15 @@ fn run_ai_phase(
     let provider = match build_provider(&config.ai) {
         Ok(provider) => provider,
         Err(err) => {
-            // Clear, credential-specific reason (disabled, missing API key,
-            // missing claude binary, missing OAuth token). Non-fatal: the AST
-            // findings still stand. CLI diagnostic to stderr, not app logging.
-            // slopguard-disable-next-line no-println-in-prod
-            eprintln!("warning: {} AI rules skipped ({err})", ai_rules.len());
+            warn_ai_skipped(ai_rules, &err);
             return Ok(Vec::new());
         }
     };
 
-    // Pre-filter: run the AST patterns of the AI rules to collect candidates.
-    let candidate_result = targets.run(ai_rules, config, true, cache_dir)?;
-    if candidate_result.findings.is_empty() {
+    let candidates = collect_ai_candidates(targets, ai_rules, config, cache_dir)?;
+    if candidates.is_empty() {
         return Ok(Vec::new());
     }
-    let candidates = build_candidates(candidate_result.findings, ai_rules, config);
     let cache = (!no_cache).then(|| AiCache::new(cache_dir));
     Ok(run_ai_pass(
         &*provider,

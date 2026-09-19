@@ -58,6 +58,99 @@ ai_check:
     (proj, config_path)
 }
 
+/// Like [`ai_fixture`] but enables the System One classifier instead of the
+/// LLM. `[ai]` is left disabled so the classifier path is the one under test.
+fn classifier_fixture() -> (TempDir, PathBuf) {
+    let proj = tempdir().unwrap();
+    write(
+        proj.path().join("main.rs"),
+        "fn main() {\n    // SAFETY: trust me\n    let _x = 1;\n}\n",
+    )
+    .unwrap();
+
+    let rules_dir = proj.path().join("custom-rules");
+    create_dir(&rules_dir).unwrap();
+    write(
+        rules_dir.join("ai.yml"),
+        r#"
+id: ai-safety-demo
+language: rust
+severity: warning
+category: slop
+message: "AI: SAFETY comment may be meaningless"
+rule:
+  kind: line_comment
+  regex: 'SAFETY'
+ai_check:
+  prompt: "Is this SAFETY comment meaningful?\n{{code}}"
+"#,
+    )
+    .unwrap();
+
+    let config_path = proj.path().join("slopguard.toml");
+    let custom_dir = rules_dir.to_str().unwrap().replace('\\', "/");
+    write(
+        &config_path,
+        format!(
+            "[rulesets]\nslop = false\nsecurity = false\ncorrectness = false\n\n\
+             [rules]\ncustom_dirs = [\"{custom_dir}\"]\n\n\
+             [ai]\nenabled = false\n\n\
+             [ai.classifier]\nenabled = true\ntransport = \"direct\"\n"
+        ),
+    )
+    .unwrap();
+
+    (proj, config_path)
+}
+
+#[test]
+fn scan_classifier_without_key_warns_and_skips() {
+    // WHY: the classifier is opt-in strict. With [ai.classifier].enabled = true
+    // but no TYPESAFE_API_KEY, the scan must fail fast (before any network call)
+    // with a single warning naming the missing credential, and still succeed.
+    let (proj, config) = classifier_fixture();
+
+    slopguard()
+        // Ensure a locally-set key does not turn this into a real network call.
+        .env_remove("TYPESAFE_API_KEY")
+        .args([
+            "scan",
+            "--no-colors",
+            "--config",
+            config.to_str().unwrap(),
+            proj.path().to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("0 errors, 0 warnings"))
+        .stderr(predicate::str::contains("AI rules skipped"))
+        // Names the exact missing credential, not a generic message.
+        .stderr(predicate::str::contains("TYPESAFE_API_KEY"));
+}
+
+#[test]
+fn scan_no_ai_skips_classifier_too() {
+    // WHY (gate 5): --no-ai must skip Jev as well, not just the LLM. With the
+    // classifier enabled but --no-ai passed, ai_check rules are dropped before
+    // the classifier phase, so there is no call and no warning.
+    let (proj, config) = classifier_fixture();
+
+    slopguard()
+        .env_remove("TYPESAFE_API_KEY")
+        .args([
+            "scan",
+            "--no-ai",
+            "--no-colors",
+            "--config",
+            config.to_str().unwrap(),
+            proj.path().to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("0 errors, 0 warnings"))
+        .stderr(predicate::str::is_empty());
+}
+
 #[test]
 fn scan_no_ai_makes_no_llm_call_and_is_silent() {
     // WHY: --no-ai must skip AI rules entirely without any network call, error,

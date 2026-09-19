@@ -85,6 +85,72 @@ ai_check:
 }
 
 #[test]
+fn ai_check_reason_defaults_to_static() {
+    // A rule that does not set `reason` classifies with a static note: the
+    // default must never escalate to the generative LLM.
+    let yaml = r#"
+id: ai-rule
+language: rust
+severity: warning
+message: "m"
+rule:
+  kind: line_comment
+ai_check:
+  prompt: "check {{code}}"
+"#;
+    let ai = parse_rule(yaml).unwrap().ai_check.unwrap();
+    assert_eq!(ai.reason, ReasonMode::Static);
+    assert!(ai.threshold.is_none());
+    assert!(ai.if_true.is_none());
+    assert!(ai.if_false.is_none());
+}
+
+#[test]
+fn ai_check_reason_generated_with_threshold_and_criteria() {
+    let yaml = r#"
+id: ai-rel
+language: rust
+severity: error
+message: "m"
+rule:
+  kind: call_expression
+ai_check:
+  prompt: "audit {{code}}"
+  reason: generated
+  threshold: 0.6
+  if_true: "external input reaches the call"
+  if_false: "a constant or config value"
+"#;
+    let ai = parse_rule(yaml).unwrap().ai_check.unwrap();
+    assert_eq!(ai.reason, ReasonMode::Generated);
+    assert_eq!(ai.threshold, Some(0.6));
+    assert_eq!(
+        ai.if_true.as_deref(),
+        Some("external input reaches the call")
+    );
+    assert_eq!(ai.if_false.as_deref(), Some("a constant or config value"));
+}
+
+#[test]
+fn ai_check_unknown_reason_is_an_error() {
+    let yaml = r#"
+id: ai-bad
+language: rust
+severity: warning
+message: "m"
+rule:
+  kind: line_comment
+ai_check:
+  prompt: "p"
+  reason: sometimes
+"#;
+    assert!(
+        parse_rule(yaml).is_err(),
+        "an unknown reason mode must be rejected, not silently defaulted"
+    );
+}
+
+#[test]
 fn parse_minimal_rule() {
     let yaml = r#"
 id: minimal-rule

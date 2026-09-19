@@ -43,6 +43,20 @@ pub enum AiVendor {
     OpenAI,
 }
 
+/// How the System One classifier (Jev) reaches the TypeSafe API.
+#[derive(
+    Debug, Display, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, EnumString, Default,
+)]
+#[serde(rename_all = "lowercase")]
+#[strum(serialize_all = "lowercase")]
+pub enum ClassifierTransport {
+    /// Native TypeSafe endpoint, authenticated with `TYPESAFE_API_KEY`.
+    #[default]
+    Direct,
+    /// OpenRouter's Decisions endpoint, authenticated with `OPENROUTER_API_KEY`.
+    Openrouter,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, SmartDefault)]
 #[serde(default)]
 pub struct RulesetsConfig {
@@ -84,11 +98,26 @@ pub struct OutputConfig {
     pub colors: bool,
 }
 
-fn default_concurrency() -> usize {
-    4
+/// The optional System One classifier (Jev / TypeSafe), on a separate axis from
+/// the generative LLM. Off by default: opt-in strict, since Jev is a proprietary
+/// SaaS and slopguard's deterministic AST mode stays the offline socle.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, SmartDefault)]
+#[serde(default)]
+pub struct ClassifierConfig {
+    /// Whether the classifier is active. Never on by default.
+    pub enabled: bool,
+    /// How to reach TypeSafe: `direct` or `openrouter`.
+    pub transport: ClassifierTransport,
+    /// Model route (e.g. `jev-latest` direct, `typesafe/jev-1.13` on OpenRouter).
+    /// When omitted, the transport's default slug is used.
+    pub model: Option<String>,
+    /// Global probability threshold: a candidate fires when `p >= threshold`.
+    /// Overridden per rule by `ai_check.threshold`.
+    #[default = 0.7]
+    pub threshold: f64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, SmartDefault)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, SmartDefault)]
 #[serde(default)]
 pub struct AiConfig {
     pub enabled: bool,
@@ -99,11 +128,12 @@ pub struct AiConfig {
     pub model: Option<String>,
     /// Maximum number of concurrent LLM calls.
     #[default = 4]
-    #[serde(default = "default_concurrency")]
     pub concurrency: usize,
     /// API key. When omitted, read from the vendor's env var
     /// (`ANTHROPIC_API_KEY` / `OPENAI_API_KEY`).
     pub api_key: Option<String>,
+    /// Optional System One classifier (Jev), on a separate axis from the LLM.
+    pub classifier: ClassifierConfig,
 }
 
 /// Severity escalation: when one rule fires repeatedly in a single file, its
@@ -120,7 +150,7 @@ pub struct EscalationConfig {
     pub rules: HashMap<String, usize>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct Config {
     pub rulesets: RulesetsConfig,

@@ -15,7 +15,11 @@ path = "src/main.rs"
 
 [dependencies]
 slopguard-core = { path = "../slopguard-core", version = "0.1.18" }
-slopguard-ai = { path = "../slopguard-ai", version = "0.1.17" }
+# The classifier ships in the binary but stays inert until
+# [ai.classifier].enabled = true and TYPESAFE_API_KEY are both set.
+slopguard-ai = { path = "../slopguard-ai", version = "0.1.17", features = [
+    "provider-typesafe",
+] }
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
