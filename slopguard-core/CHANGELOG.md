@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.1.17](https://gitlab.com/ThomasTartrau/slopguard/compare/slopguard-core-v0.1.16...slopguard-core-v0.1.17) - 2026-09-19
+
+### Added
+
+- #32 add cross-file rule pass and no-single-impl-trait
+
+
+### Changed
+
+- #32 move is_test_path to test_filter module and simplify cross-file compilation
+
 ## [0.1.16](https://gitlab.com/ThomasTartrau/slopguard/compare/slopguard-core-v0.1.15...slopguard-core-v0.1.16) - 2026-09-18
 
 ### Added
