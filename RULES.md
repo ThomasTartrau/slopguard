@@ -101,6 +101,22 @@ greater than the threshold.
 | `high-comment-ratio` | rust | `comment_ratio` | 0.4 | Code narrated line by line instead of explained |
 | `high-comment-ratio-ts` | typescript | `comment_ratio` | 0.4 | Same, for TypeScript |
 
+## Cross-file rules (1 rule)
+
+These carry a `cross_file` kind instead of an AST `rule` or a `metric`. They are
+evaluated once per scan, against a project-wide index built from every scanned
+file, so they see facts no single file can show.
+
+| Rule | Language | Kind | What it catches |
+| ---- | -------- | ---- | --------------- |
+| `no-single-impl-trait` | rust | `single_impl_trait` | A trait with exactly one implementor: an indirection that adds no choice |
+
+`no-single-impl-trait` stays silent when the trait has no local impl (it is
+implemented outside the crate), two or more impls, a blanket `impl<T> Foo for T`,
+or a name declared more than once in the project. A `#[cfg(test)]` mock counts
+as a second implementation, which is the point: a trait that exists to be mocked
+is not an over-abstraction.
+
 ## Rule anatomy
 
 Each rule follows this structure:
@@ -125,6 +141,10 @@ rule:
 metric: file_lines                 # file_lines | import_count | function_count | comment_ratio
 threshold: 500                     # required with `metric`; fires only above it, never at it
                                    # `$value` in `message` becomes the measured value
+
+# ...or a project-wide analysis, mutually exclusive with both `rule` and `metric`
+cross_file: single_impl_trait      # builtin kind; an unknown value is a parse error
+                                   # no `tests` block: a snippet cannot exercise it
 
 # Scope
 files: ["**/src/**/*.rs"]          # only scan these

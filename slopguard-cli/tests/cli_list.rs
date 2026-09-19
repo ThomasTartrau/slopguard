@@ -165,3 +165,30 @@ fn list_rejects_sarif_format() {
         .assert()
         .failure();
 }
+
+#[test]
+fn list_shows_cross_file_rule() {
+    let text = slopguard().args(["list"]).output().unwrap();
+    assert!(text.status.success());
+    let stdout = String::from_utf8(text.stdout).unwrap();
+    assert!(
+        stdout.contains("no-single-impl-trait"),
+        "should list no-single-impl-trait, got:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("cross-file"),
+        "should show the cross-file type column value, got:\n{stdout}"
+    );
+
+    let json_out = slopguard()
+        .args(["list", "--format", "json"])
+        .output()
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&json_out.stdout).unwrap();
+    let entries = json.as_array().unwrap();
+    let entry = entries
+        .iter()
+        .find(|e| e["id"] == "no-single-impl-trait")
+        .expect("no-single-impl-trait should be listed");
+    assert_eq!(entry["type"], "cross-file");
+}

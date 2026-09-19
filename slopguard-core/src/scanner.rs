@@ -18,8 +18,9 @@ use serde_yaml::{to_value, Value};
 use strum::IntoEnumIterator;
 use thiserror::Error;
 
-use crate::cache::{file_content_hash, rules_hash, CacheStore};
+use crate::cache::{file_content_hash, rules_hash, CacheEntry, CacheStore};
 use crate::config::Config;
+use crate::cross_file::{self, CrossFileKind, DeclFilter, FileSymbols, SymbolIndex};
 use crate::disable::filter_disabled;
 use crate::finding::{CacheStats, Finding, ScanResult, ScanStats};
 use crate::metric::{self, Metric};
@@ -65,6 +66,15 @@ struct CompiledRules<'a> {
     collection: RuleCollection<SupportLang>,
     by_id: HashMap<(&'a str, Language), &'a Rule>,
     metrics: Vec<MetricRule<'a>>,
+    cross_file: Vec<CrossFileRule<'a>>,
+}
+
+/// A cross-file rule prepared for scanning: kind resolved and the declaration
+/// filter compiled once.
+struct CrossFileRule<'a> {
+    rule: &'a Rule,
+    kind: CrossFileKind,
+    decl_filter: DeclFilter,
 }
 
 /// A metric rule prepared for scanning: threshold resolved and `files` /
@@ -140,11 +150,32 @@ fn build_metric_rule(rule: &Rule) -> Result<MetricRule<'_>, ScanError> {
     })
 }
 
+/// Resolve a cross-file rule's kind and compile the globs that bound which
+/// declarations it may report.
+fn build_cross_file_rule(rule: &Rule) -> Result<Option<CrossFileRule<'_>>, ScanError> {
+    // A cross-file rule without a kind cannot exist: `parse_rule` only marks a
+    // rule cross-file when the discriminant parsed.
+    let Some(kind) = rule.cross_file_kind() else {
+        return Ok(None);
+    };
+    Ok(Some(CrossFileRule {
+        rule,
+        kind,
+        decl_filter: DeclFilter {
+            files: rule.files.as_deref().map(build_glob_set).transpose()?,
+            ignores: rule.ignores.as_deref().map(build_glob_set).transpose()?,
+            skip_test_code: rule.skip_test_code,
+        },
+    }))
+}
+
 fn compile_rules(rules: &[Rule]) -> Result<CompiledRules<'_>, ScanError> {
-    // Metric rules must never reach ast-grep: their `rule` field is null and
-    // would fail to compile.
+    // Neither cross-file nor metric rules may reach ast-grep: their `rule`
+    // field is null and would fail to compile.
+    let (cross_rules, rest): (Vec<&Rule>, Vec<&Rule>) =
+        rules.iter().partition(|r| r.is_cross_file());
     let (metric_rules, ast_rules): (Vec<&Rule>, Vec<&Rule>) =
-        rules.iter().partition(|r| r.is_metric());
+        rest.into_iter().partition(|r| r.is_metric());
 
     let configs = ast_rules
         .iter()
@@ -167,6 +198,13 @@ fn compile_rules(rules: &[Rule]) -> Result<CompiledRules<'_>, ScanError> {
             .into_iter()
             .map(build_metric_rule)
             .collect::<Result<Vec<_>, _>>()?,
+        cross_file: cross_rules
+            .into_iter()
+            .map(build_cross_file_rule)
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .flatten()
+            .collect(),
     })
 }
 
@@ -187,7 +225,7 @@ fn build_glob_set(patterns: &[String]) -> Result<GlobSet, GlobError> {
 /// Matches exact directory names (`tests`, `benches`, `examples`) and also
 /// crate-level test directories whose name ends with `_test` or `_tests`
 /// (e.g. `integrations_tests`, `e2e_tests`).
-fn is_test_path(path: &Path) -> bool {
+pub(crate) fn is_test_path(path: &Path) -> bool {
     let in_test_dir = path.components().any(|c| {
         let Some(name) = c.as_os_str().to_str() else {
             return false;
@@ -245,7 +283,21 @@ fn metric_findings<D: Doc>(
         .collect()
 }
 
-fn scan_file(path: &Path, lang: SupportLang, rules: &CompiledRules) -> Vec<Finding> {
+/// One file's contribution to a scan: its findings plus, when a cross-file
+/// rule is active, the symbols it adds to the project index. Both come out of
+/// a single parse.
+#[derive(Default)]
+struct FileScan {
+    findings: Vec<Finding>,
+    symbols: FileSymbols,
+}
+
+fn scan_file(
+    path: &Path,
+    lang: SupportLang,
+    rules: &CompiledRules,
+    collect_symbols: bool,
+) -> FileScan {
     let rule_lang = support_lang_to_language(lang);
     let applicable = rules.collection.get_rule_from_lang(path, lang);
     let metrics: Vec<&MetricRule> = rules
@@ -253,14 +305,19 @@ fn scan_file(path: &Path, lang: SupportLang, rules: &CompiledRules) -> Vec<Findi
         .iter()
         .filter(|m| m.applies_to(path, &rule_lang))
         .collect();
-    if applicable.is_empty() && metrics.is_empty() {
-        return Vec::new();
+    // A run scoped to a single cross-file rule has no ast-grep and no metric
+    // rule, yet the file still has to be parsed for its symbols.
+    let want_symbols = collect_symbols && lang == SupportLang::Rust;
+    if applicable.is_empty() && metrics.is_empty() && !want_symbols {
+        return FileScan::default();
     }
     let Ok(source) = read_to_string(path) else {
-        return Vec::new();
+        return FileScan::default();
     };
 
     let root = lang.ast_grep(&source);
+    // Built once and shared by the finding filter and the symbol extractor.
+    let cfg_test = (lang == SupportLang::Rust).then(|| CfgTestRanges::from_root(&root));
 
     let mut findings: Vec<Finding> = if applicable.is_empty() {
         Vec::new()
@@ -268,8 +325,6 @@ fn scan_file(path: &Path, lang: SupportLang, rules: &CompiledRules) -> Vec<Findi
         let combined = CombinedScan::new(applicable);
         let result = combined.scan(&root, false);
 
-        let cfg_test = (lang == SupportLang::Rust && !result.matches.is_empty())
-            .then(|| CfgTestRanges::from_root(&root));
         let cfg_test = cfg_test.as_ref();
         let is_test_file = is_test_path(path);
 
@@ -317,7 +372,47 @@ fn scan_file(path: &Path, lang: SupportLang, rules: &CompiledRules) -> Vec<Findi
     };
 
     findings.extend(metric_findings(&metrics, path, &root, &source, &rule_lang));
-    filter_disabled(findings, &source)
+
+    // Symbols are not run through `filter_disabled`: suppression applies to the
+    // cross-file findings emitted later, against the declaration file's source.
+    let symbols = match (want_symbols, cfg_test.as_ref()) {
+        (true, Some(ranges)) => cross_file::extract_rust_symbols(&root, ranges),
+        _ => FileSymbols::default(),
+    };
+
+    FileScan {
+        findings: filter_disabled(findings, &source),
+        symbols,
+    }
+}
+
+/// Assemble the project index from every file's contribution, evaluate each
+/// active cross-file rule, then drop the findings a disable comment suppresses
+/// in the file that declares the symbol.
+fn cross_file_findings(
+    rules: &[CrossFileRule<'_>],
+    contributions: &[(PathBuf, FileSymbols)],
+) -> Vec<Finding> {
+    let index = SymbolIndex::build(contributions.iter().map(|(p, s)| (p.as_path(), s)));
+    let mut by_file: HashMap<PathBuf, Vec<Finding>> = HashMap::new();
+    for rule in rules {
+        let found = cross_file::evaluate(rule.rule, rule.kind, &index, &rule.decl_filter);
+        for finding in found {
+            by_file
+                .entry(finding.file.clone())
+                .or_default()
+                .push(finding);
+        }
+    }
+    by_file
+        .into_iter()
+        .flat_map(|(path, findings)| match read_to_string(&path) {
+            // A file that can no longer be read keeps its findings unfiltered
+            // rather than losing them.
+            Ok(source) => filter_disabled(findings, &source),
+            Err(_) => findings,
+        })
+        .collect()
 }
 
 /// Walk `paths` (gitignore-aware) and keep the source files slopguard can parse.
@@ -368,11 +463,34 @@ fn normalize_findings(findings: &mut Vec<Finding>) {
 }
 
 /// Scan an already-collected file list without touching the cache.
-fn scan_collected(files: Vec<(PathBuf, SupportLang)>, compiled: &CompiledRules) -> ScanResult {
-    let mut findings: Vec<Finding> = files
+///
+/// Symbol collection is driven by the active rules alone, never by
+/// `run_cross_file`: a partial scan must still cache a complete contribution.
+fn scan_collected(
+    files: Vec<(PathBuf, SupportLang)>,
+    compiled: &CompiledRules,
+    run_cross_file: bool,
+) -> ScanResult {
+    let collect_symbols = !compiled.cross_file.is_empty();
+    let scans: Vec<(PathBuf, FileScan)> = files
         .par_iter()
-        .flat_map_iter(|(path, lang)| scan_file(path, *lang, compiled))
+        .map(|(path, lang)| {
+            let scan = scan_file(path, *lang, compiled, collect_symbols);
+            (path.clone(), scan)
+        })
         .collect();
+
+    let mut findings: Vec<Finding> = Vec::new();
+    let mut contributions: Vec<(PathBuf, FileSymbols)> = Vec::new();
+    for (path, scan) in scans {
+        findings.extend(scan.findings);
+        if collect_symbols {
+            contributions.push((path, scan.symbols));
+        }
+    }
+    if run_cross_file && collect_symbols {
+        findings.extend(cross_file_findings(&compiled.cross_file, &contributions));
+    }
     normalize_findings(&mut findings);
 
     let (errors, warnings) = count_severities(&findings);
@@ -404,7 +522,9 @@ fn scan_collected_cached(
     rules: &[Rule],
     cache_dir: &Path,
     prune: bool,
+    run_cross_file: bool,
 ) -> ScanResult {
+    let collect_symbols = !compiled.cross_file.is_empty();
     let current_rules_hash = rules_hash(rules);
     let store = CacheStore::with_dir(cache_dir.to_path_buf()).scoped_to_rules(&current_rules_hash);
     let rules_changed = store
@@ -423,6 +543,7 @@ fn scan_collected_cached(
     let mut cached_count = 0usize;
     let mut changed_count = 0usize;
     let mut all_findings: Vec<Finding> = Vec::new();
+    let mut contributions: Vec<(PathBuf, FileSymbols)> = Vec::new();
 
     struct FileWork {
         path: PathBuf,
@@ -434,9 +555,12 @@ fn scan_collected_cached(
 
     for (path, lang, _content, hash) in file_contents.iter() {
         if !rules_changed {
-            if let Some(cached_findings) = store.get(hash) {
+            if let Some(entry) = store.get(hash) {
                 cached_count += 1;
-                all_findings.extend(cached_findings);
+                all_findings.extend(entry.findings);
+                if collect_symbols {
+                    contributions.push((path.clone(), entry.symbols));
+                }
                 continue;
             }
         }
@@ -448,17 +572,30 @@ fn scan_collected_cached(
         });
     }
 
-    let scanned_findings: Vec<(String, Vec<Finding>)> = to_scan
+    let scanned: Vec<(PathBuf, String, FileScan)> = to_scan
         .par_iter()
         .map(|work| {
-            let findings = scan_file(&work.path, work.lang, compiled);
-            (work.hash.clone(), findings)
+            let scan = scan_file(&work.path, work.lang, compiled, collect_symbols);
+            (work.path.clone(), work.hash.clone(), scan)
         })
         .collect();
 
-    for (hash, findings) in scanned_findings {
-        store.put(&hash, &findings).ok();
-        all_findings.extend(findings);
+    for (path, hash, scan) in scanned {
+        let entry = CacheEntry {
+            findings: scan.findings,
+            symbols: scan.symbols,
+        };
+        store.put(&hash, &entry).ok();
+        all_findings.extend(entry.findings);
+        if collect_symbols {
+            contributions.push((path, entry.symbols));
+        }
+    }
+
+    // Cross-file evaluation itself is never cached: it re-runs on every scan
+    // from the assembled index.
+    if run_cross_file && collect_symbols {
+        all_findings.extend(cross_file_findings(&compiled.cross_file, &contributions));
     }
 
     if prune {
@@ -495,7 +632,7 @@ fn scan_collected_cached(
 pub fn scan(paths: &[PathBuf], rules: &[Rule], config: &Config) -> Result<ScanResult, ScanError> {
     let compiled = compile_rules(rules)?;
     let ignores = build_glob_set(&config.scan.ignores)?;
-    Ok(scan_collected(walk_files(paths, &ignores), &compiled))
+    Ok(scan_collected(walk_files(paths, &ignores), &compiled, true))
 }
 
 /// Scan with file-level caching. Files whose content hash matches a cached
@@ -520,6 +657,7 @@ pub fn scan_cached(
         rules,
         cache_dir,
         true,
+        true,
     ))
 }
 
@@ -527,6 +665,11 @@ pub fn scan_cached(
 ///
 /// Used by `--diff`, where git already produced the exact file set. Paths that
 /// no longer exist or that slopguard cannot parse are silently skipped.
+///
+/// Cross-file rules are not evaluated here. `--diff` sees only the changed
+/// files, so the project index would be incomplete and its impl counts wrong.
+/// Symbol contributions are still collected and cached, so a later full scan is
+/// not penalised.
 pub fn scan_files(
     files: &[PathBuf],
     rules: &[Rule],
@@ -534,11 +677,20 @@ pub fn scan_files(
 ) -> Result<ScanResult, ScanError> {
     let compiled = compile_rules(rules)?;
     let ignores = build_glob_set(&config.scan.ignores)?;
-    Ok(scan_collected(explicit_files(files, &ignores), &compiled))
+    Ok(scan_collected(
+        explicit_files(files, &ignores),
+        &compiled,
+        false,
+    ))
 }
 
 /// Cached variant of [`scan_files`]. Cache pruning is skipped: a partial scan
 /// must not evict the entries of files it did not look at.
+///
+/// Cross-file rules are not evaluated here. `--diff` sees only the changed
+/// files, so the project index would be incomplete and its impl counts wrong.
+/// Symbol contributions are still collected and cached, so a later full scan is
+/// not penalised.
 pub fn scan_files_cached(
     files: &[PathBuf],
     rules: &[Rule],
@@ -552,6 +704,7 @@ pub fn scan_files_cached(
         &compiled,
         rules,
         cache_dir,
+        false,
         false,
     ))
 }
@@ -966,8 +1119,15 @@ skip_test_code: true
             rules.len()
         );
         let compiled = compile_rules(&rules).expect("all builtin rules should compile");
-        let ast_rule_count = rules.iter().filter(|r| !r.is_metric()).count();
+        let ast_rule_count = rules
+            .iter()
+            .filter(|r| !r.is_metric() && !r.is_cross_file())
+            .count();
         assert_eq!(compiled.by_id.len(), ast_rule_count);
+        assert!(
+            !compiled.cross_file.is_empty(),
+            "builtin rules should include cross-file rules"
+        );
         assert!(
             !compiled.metrics.is_empty(),
             "builtin rules should include metric rules"
@@ -1334,5 +1494,194 @@ message: "too long"
         let cache_stats2 = result2.cache_stats.as_ref().unwrap();
         assert_eq!(cache_stats2.cached, 1, "second scan: one file from cache");
         assert_eq!(cache_stats2.changed, 0, "second scan: nothing changed");
+    }
+
+    fn single_impl_trait_rule() -> Rule {
+        parse_rule(
+            r#"
+id: no-single-impl-trait
+language: rust
+severity: warning
+category: slop
+cross_file: single_impl_trait
+message: "Trait with a single implementation in the project."
+skip_test_code: true
+"#,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn cross_file_single_impl_trait_reported() {
+        let dir = tempdir().unwrap();
+        write(
+            dir.path().join("repo.rs"),
+            "pub trait Repository {\n    fn get(&self);\n}\n",
+        )
+        .unwrap();
+        write(
+            dir.path().join("pg.rs"),
+            "pub struct Pg;\n\nimpl Repository for Pg {\n    fn get(&self) {}\n}\n",
+        )
+        .unwrap();
+
+        let result = scan_dir(dir.path(), &[single_impl_trait_rule()]);
+        assert_eq!(result.findings.len(), 1);
+        let f = &result.findings[0];
+        assert_eq!(f.rule_id, RuleId::from("no-single-impl-trait"));
+        assert!(f.file.to_string_lossy().ends_with("repo.rs"));
+        assert_eq!(f.line, 1);
+        assert_eq!(f.matched_text, "pub trait Repository");
+    }
+
+    #[test]
+    fn cross_file_two_impls_not_reported() {
+        let dir = tempdir().unwrap();
+        write(dir.path().join("repo.rs"), "pub trait Repository {}\n").unwrap();
+        write(dir.path().join("pg.rs"), "impl Repository for Pg {}\n").unwrap();
+        write(dir.path().join("mem.rs"), "impl Repository for Mem {}\n").unwrap();
+
+        let result = scan_dir(dir.path(), &[single_impl_trait_rule()]);
+        assert_eq!(result.findings.len(), 0);
+    }
+
+    #[test]
+    fn cross_file_no_impl_not_reported() {
+        let dir = tempdir().unwrap();
+        write(dir.path().join("repo.rs"), "pub trait Repository {}\n").unwrap();
+
+        let result = scan_dir(dir.path(), &[single_impl_trait_rule()]);
+        assert_eq!(result.findings.len(), 0);
+    }
+
+    #[test]
+    fn cross_file_blanket_impl_not_reported() {
+        let dir = tempdir().unwrap();
+        write(dir.path().join("desc.rs"), "pub trait Describe {}\n").unwrap();
+        write(dir.path().join("all.rs"), "impl<T> Describe for T {}\n").unwrap();
+
+        let result = scan_dir(dir.path(), &[single_impl_trait_rule()]);
+        assert_eq!(result.findings.len(), 0);
+    }
+
+    #[test]
+    fn cross_file_duplicate_trait_name_not_reported() {
+        let dir = tempdir().unwrap();
+        write(dir.path().join("a.rs"), "pub trait Repository {}\n").unwrap();
+        write(dir.path().join("b.rs"), "pub trait Repository {}\n").unwrap();
+        write(dir.path().join("pg.rs"), "impl Repository for Pg {}\n").unwrap();
+
+        let result = scan_dir(dir.path(), &[single_impl_trait_rule()]);
+        assert_eq!(result.findings.len(), 0);
+    }
+
+    #[test]
+    fn cross_file_disable_comment_on_declaration() {
+        let dir = tempdir().unwrap();
+        write(
+            dir.path().join("repo.rs"),
+            "// slopguard-disable-next-line no-single-impl-trait\npub trait Repository {}\n",
+        )
+        .unwrap();
+        write(dir.path().join("pg.rs"), "impl Repository for Pg {}\n").unwrap();
+
+        let result = scan_dir(dir.path(), &[single_impl_trait_rule()]);
+        assert_eq!(
+            result.findings.len(),
+            0,
+            "a disable comment above the declaration must suppress the finding"
+        );
+    }
+
+    #[test]
+    fn cross_file_cfg_test_mock_counts_as_second_impl() {
+        let dir = tempdir().unwrap();
+        write(dir.path().join("repo.rs"), "pub trait Repository {}\n").unwrap();
+        write(dir.path().join("pg.rs"), "impl Repository for Pg {}\n").unwrap();
+        write(
+            dir.path().join("mock.rs"),
+            "#[cfg(test)]\nmod tests {\n    struct MockRepo;\n    impl Repository for MockRepo {}\n}\n",
+        )
+        .unwrap();
+
+        let result = scan_dir(dir.path(), &[single_impl_trait_rule()]);
+        assert_eq!(
+            result.findings.len(),
+            0,
+            "a test mock counts as a second implementation"
+        );
+    }
+
+    #[test]
+    fn cross_file_declaration_in_test_path_not_reported() {
+        let dir = tempdir().unwrap();
+        let tests_dir = dir.path().join("tests");
+        create_dir(&tests_dir).unwrap();
+        write(tests_dir.join("support.rs"), "pub trait Repository {}\n").unwrap();
+        write(tests_dir.join("pg.rs"), "impl Repository for Pg {}\n").unwrap();
+
+        let result = scan_dir(dir.path(), &[single_impl_trait_rule()]);
+        assert_eq!(result.findings.len(), 0);
+    }
+
+    #[test]
+    fn cross_file_not_run_for_scan_files() {
+        let dir = tempdir().unwrap();
+        let repo = dir.path().join("repo.rs");
+        let pg = dir.path().join("pg.rs");
+        write(&repo, "pub trait Repository {}\n").unwrap();
+        write(&pg, "impl Repository for Pg {}\n").unwrap();
+
+        let rules = [single_impl_trait_rule()];
+        let partial = scan_files(&[repo, pg], &rules, &Config::default()).unwrap();
+        assert_eq!(
+            partial.findings.len(),
+            0,
+            "an explicit file list has an incomplete project index"
+        );
+
+        let full = scan_dir(dir.path(), &rules);
+        assert_eq!(full.findings.len(), 1);
+    }
+
+    #[test]
+    fn cross_file_survives_cache_round_trip() {
+        let src_dir = tempdir().unwrap();
+        let cache_dir = tempdir().unwrap();
+        let cache_path = cache_dir.path().join("cache");
+        write(src_dir.path().join("repo.rs"), "pub trait Repository {}\n").unwrap();
+        write(src_dir.path().join("pg.rs"), "impl Repository for Pg {}\n").unwrap();
+
+        let rules = [single_impl_trait_rule()];
+        let config = Config::default();
+        let paths = [src_dir.path().to_path_buf()];
+
+        let first = scan_cached(&paths, &rules, &config, &cache_path).unwrap();
+        assert_eq!(first.findings.len(), 1);
+        assert_eq!(first.cache_stats.as_ref().unwrap().changed, 2);
+
+        let second = scan_cached(&paths, &rules, &config, &cache_path).unwrap();
+        let stats = second.cache_stats.as_ref().unwrap();
+        assert_eq!(stats.cached, 2, "both files should come from the cache");
+        assert_eq!(stats.changed, 0);
+        assert_eq!(
+            second.findings.len(),
+            1,
+            "symbols must survive the cache round trip"
+        );
+    }
+
+    #[test]
+    fn cross_file_rule_with_no_ast_rules_still_parses_files() {
+        let dir = tempdir().unwrap();
+        write(dir.path().join("repo.rs"), "pub trait Repository {}\n").unwrap();
+        write(dir.path().join("pg.rs"), "impl Repository for Pg {}\n").unwrap();
+
+        let result = scan_dir(dir.path(), &[single_impl_trait_rule()]);
+        assert_eq!(
+            result.findings.len(),
+            1,
+            "a cross-file-only ruleset must still parse every file"
+        );
     }
 }

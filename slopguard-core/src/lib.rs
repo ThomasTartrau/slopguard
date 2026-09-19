@@ -1,6 +1,7 @@
 pub mod baseline;
 pub mod cache;
 pub mod config;
+pub mod cross_file;
 pub mod disable;
 pub mod escalation;
 pub mod finding;

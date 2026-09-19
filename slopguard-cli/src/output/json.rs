@@ -46,7 +46,7 @@ pub struct ListEntry {
     pub language: String,
     pub severity: String,
     pub category: String,
-    /// "ast", "ai", or "metric".
+    /// "ast", "ai", "metric", or "cross-file".
     #[serde(rename = "type")]
     pub kind: String,
     pub status: String,
@@ -56,6 +56,8 @@ pub struct ListEntry {
 pub fn rule_kind(rule: &Rule) -> &'static str {
     if rule.is_metric() {
         "metric"
+    } else if rule.is_cross_file() {
+        "cross-file"
     } else if rule.ai_check.is_some() {
         "ai"
     } else {
@@ -80,8 +82,8 @@ struct ExplainOutput<'a> {
     note: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     fix: Option<&'a str>,
-    /// "metric" for file-level rules, "ai" for rules with an `ai_check`,
-    /// "ast" otherwise.
+    /// "metric" for file-level rules, "cross-file" for project-wide rules,
+    /// "ai" for rules with an `ai_check`, "ast" otherwise.
     #[serde(rename = "type")]
     kind: &'a str,
     /// The measured file-level property, present only for metric rules.

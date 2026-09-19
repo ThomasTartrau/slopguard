@@ -151,6 +151,16 @@ fn test_metric_rule(
 }
 
 fn test_one_rule(rule: &Rule) -> Result<RuleTestResult, TestError> {
+    // A cross-file rule needs a whole project to mean anything. A snippet can
+    // never exercise it, and compiling its (null) `rule` to ast-grep would fail,
+    // so `slopguard test` reports it as untested.
+    if rule.is_cross_file() {
+        return Ok(RuleTestResult {
+            rule_id: rule.id.clone(),
+            status: RuleTestStatus::NoTests,
+        });
+    }
+
     let tests = match &rule.tests {
         Some(t) => t,
         None => {
@@ -268,6 +278,24 @@ mod tests {
     use crate::rule::{load_builtin_rules, load_custom_rules, parse_rule};
 
     use super::*;
+
+    #[test]
+    fn cross_file_rule_reports_no_tests() {
+        let rule = parse_rule(
+            r#"
+id: no-single-impl-trait
+language: rust
+severity: warning
+category: slop
+cross_file: single_impl_trait
+message: "Trait with a single implementation in the project."
+"#,
+        )
+        .unwrap();
+
+        let result = test_one_rule(&rule).unwrap();
+        assert_eq!(result.status, RuleTestStatus::NoTests);
+    }
 
     #[test]
     fn test_rule_pass() {
