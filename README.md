@@ -389,6 +389,59 @@ files: paths are relative to the rule's own directory, and `should_match` /
 
 ---
 
+## 🔗 Cross-File Rules
+
+Some problems are not in any single file: a trait defined in `repository.rs`
+with its one and only implementation in `postgres.rs` is an indirection that
+adds no choice, and neither file shows it on its own. slopguard expresses these
+as **cross-file rules**: after the per-file scan, every scanned file's symbols
+are folded into a project-wide index, and each cross-file rule is evaluated
+against it once.
+
+Cross-file rules are marked `cross-file` in the `type` column of
+`slopguard list`, and `slopguard list --format json` emits them with
+`"type": "cross-file"`:
+
+```bash
+slopguard list --format json | jq '[.[] | select(.type == "cross-file")] | length'
+```
+
+### Builtin cross-file rules
+
+| Rule | Language | Kind |
+| ---- | -------- | ---- |
+| `no-single-impl-trait` | rust | `single_impl_trait` |
+
+`no-single-impl-trait` fires only when a trait has **exactly 1 declaration,
+exactly 1 concrete implementation and 0 blanket implementations** in the scanned
+project. It stays silent otherwise:
+
+- **0 impls** - the implementor is probably outside the crate.
+- **2 or more impls** - the abstraction is doing its job. A `#[cfg(test)]` mock
+  counts as a second implementation, so "the trait exists to be mocked" is not
+  reported.
+- **a blanket `impl<T> Foo for T`** - the trait already covers a family of types.
+- **the same trait name declared twice** - matching is by bare name, so a
+  homonym makes the project ambiguous and the rule abstains.
+
+The finding points at the declaration, not the impl, and is reported there:
+
+```rust
+// slopguard-disable-next-line no-single-impl-trait
+pub trait Repository {
+    fn get(&self, id: u64) -> Option<String>;
+}
+```
+
+### One thing to know
+
+- **`--diff` never reports them.** Diff mode scans only the changed files, so
+  the project index would be missing the other implementations and the impl
+  counts would be wrong. The symbols of changed files are still collected and
+  cached, so the next full scan is not slowed down.
+
+---
+
 ## 🚫 Inline Suppression
 
 ```rust

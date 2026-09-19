@@ -1,6 +1,33 @@
 use std::ops::Range;
+use std::path::Path;
 
 use ast_grep_core::{AstGrep, Doc, Node};
+
+/// Whether `path` lives in a conventional test, bench, or example tree.
+///
+/// Rust integration tests, benchmarks, and examples are not `#[cfg(test)]`
+/// modules, so `CfgTestRanges` cannot see them. Rules with `skip_test_code`
+/// should treat these whole files as test code.
+///
+/// Matches exact directory names (`tests`, `benches`, `examples`) and also
+/// crate-level test directories whose name ends with `_test` or `_tests`
+/// (e.g. `integrations_tests`, `e2e_tests`).
+pub(crate) fn is_test_path(path: &Path) -> bool {
+    let in_test_dir = path.components().any(|c| {
+        let Some(name) = c.as_os_str().to_str() else {
+            return false;
+        };
+        matches!(name, "tests" | "benches" | "examples")
+            || name.ends_with("_tests")
+            || name.ends_with("_test")
+            || name.starts_with("test_")
+    });
+    let test_file_name = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .is_some_and(|s| s.ends_with("_test") || s.ends_with("_tests"));
+    in_test_dir || test_file_name
+}
 
 /// Line ranges covered by `#[cfg(test)]` items in a parsed Rust file.
 ///
