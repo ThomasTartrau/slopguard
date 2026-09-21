@@ -150,6 +150,7 @@ pub struct StatsOpts {
     pub no_baseline: bool,
     pub baseline_path: Option<PathBuf>,
     pub no_escalation: bool,
+    pub offline: bool,
 }
 
 /// Run the same pipeline as `scan`, then print the aggregated distribution
@@ -173,6 +174,7 @@ pub fn run_stats(opts: StatsOpts) -> Result<(), AppError> {
         no_baseline,
         baseline_path,
         no_escalation,
+        offline,
     } = opts;
     let use_colors = !no_colors && env::var_os("NO_COLOR").is_none();
 
@@ -205,6 +207,7 @@ pub fn run_stats(opts: StatsOpts) -> Result<(), AppError> {
         no_ai,
         diff: false,
         diff_base: None,
+        offline,
     })?;
 
     let _baseline_active = apply_baseline(&mut result, no_baseline, baseline_path)?;

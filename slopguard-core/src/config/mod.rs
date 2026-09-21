@@ -76,6 +76,47 @@ pub struct RulesConfig {
     /// or the rule's own `enabled: false` (opt-in rules).
     pub enable: Vec<String>,
     pub custom_dirs: Vec<PathBuf>,
+    /// External rule sources: git repositories (cloned and cached) and extra
+    /// local paths. Loaded as custom rules, with their provenance tracked.
+    pub sources: Vec<RuleSource>,
+}
+
+/// One external rule source declared as `[[rules.sources]]`.
+///
+/// A source is either a git repository (`git` set, optional `ref` and `path`
+/// sub-directory) or a local directory (`path` set, no `git`). `ref` is only
+/// meaningful for a git source.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct RuleSource {
+    /// Git URL to clone. `None` for a local source.
+    pub git: Option<String>,
+    /// Tag, branch or sha to check out. Defaults to the repository's default
+    /// branch. Only valid alongside `git`.
+    #[serde(rename = "ref")]
+    pub git_ref: Option<String>,
+    /// For a git source, the sub-directory inside the repository to load rules
+    /// from (defaults to the root). For a local source, the directory to load.
+    pub path: Option<PathBuf>,
+}
+
+impl RuleSource {
+    /// Whether this source is a git repository (as opposed to a local path).
+    pub fn is_git(&self) -> bool {
+        self.git.is_some()
+    }
+
+    /// Reject a source that declares neither `git` nor `path`, or a `ref`
+    /// without a `git` (a ref is meaningless for a local path).
+    fn validate(&self) -> Result<(), String> {
+        match (&self.git, &self.path, &self.git_ref) {
+            (None, None, _) => Err("a rule source needs either 'git' or 'path'".to_string()),
+            (None, Some(_), Some(_)) => {
+                Err("'ref' is only valid on a git source, not a local 'path'".to_string())
+            }
+            _ => Ok(()),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -179,6 +220,17 @@ pub enum ConfigError {
 
     #[error("invalid merged config: {0}")]
     Invalid(#[source] de::Error),
+
+    #[error("invalid rule source: {0}")]
+    InvalidSource(String),
+}
+
+/// Validate every `[[rules.sources]]` entry, returning the first invalid one.
+fn validate_sources(config: &Config) -> Result<(), ConfigError> {
+    for source in &config.rules.sources {
+        source.validate().map_err(ConfigError::InvalidSource)?;
+    }
+    Ok(())
 }
 
 /// Overlay `over` onto `base`: nested tables are merged key by key, every
@@ -233,7 +285,9 @@ pub fn load_config_from(
     }
     let project = load_table(&project_root.join("slopguard.toml"))?;
     merge_tables(&mut merged, project);
-    merged.try_into().map_err(ConfigError::Invalid)
+    let config: Config = merged.try_into().map_err(ConfigError::Invalid)?;
+    validate_sources(&config)?;
+    Ok(config)
 }
 
 /// Load configuration from a single file, skipping hierarchical resolution.
@@ -243,10 +297,12 @@ pub fn load_config_file(path: &Path) -> Result<Config, ConfigError> {
         path: display.clone(),
         source,
     })?;
-    toml::from_str(&content).map_err(|source| ConfigError::Parse {
+    let config: Config = toml::from_str(&content).map_err(|source| ConfigError::Parse {
         path: display,
         source,
-    })
+    })?;
+    validate_sources(&config)?;
+    Ok(config)
 }
 
 /// Load configuration with hierarchical resolution.
