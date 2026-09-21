@@ -31,7 +31,7 @@ use crate::cli::{Format, SeverityThreshold};
 use crate::output::html::{project_name, HtmlMeta};
 use crate::output::{html, json, sarif, text};
 use crate::stats_cmd::compute_report;
-use crate::{resolve_cache_dir, resolve_config, suggest_similar, AppError};
+use crate::{resolve_cache_dir, resolve_config, resolve_config_sources, suggest_similar, AppError};
 
 fn has_findings_above_threshold(result: &ScanResult, threshold: &SeverityThreshold) -> bool {
     result.findings.iter().any(|f| match threshold {
@@ -77,6 +77,7 @@ pub(crate) struct ScanOpts {
     pub fix: bool,
     pub dry_run: bool,
     pub allow_dirty: bool,
+    pub offline: bool,
 }
 
 /// Options shared by `scan` and `baseline`, which collect findings the same
@@ -93,6 +94,7 @@ pub struct CollectOpts {
     pub no_ai: bool,
     pub diff: bool,
     pub diff_base: Option<String>,
+    pub offline: bool,
 }
 
 /// Where the AST pass looks: directory roots to walk (normal scan), or the
@@ -153,6 +155,7 @@ pub fn collect_findings(opts: CollectOpts) -> Result<(ScanResult, Config), AppEr
         no_ai,
         diff,
         diff_base,
+        offline,
     } = opts;
 
     let mut config = resolve_config(config_path.as_deref())?;
@@ -160,7 +163,8 @@ pub fn collect_findings(opts: CollectOpts) -> Result<(ScanResult, Config), AppEr
     config.rules.enable.extend(cli_enable);
     config.scan.test_paths.extend(cli_test_paths);
 
-    let mut rules = load_effective_rules(&config)?;
+    let sources = resolve_config_sources(&config, offline)?;
+    let mut rules = load_effective_rules(&config, &sources)?;
 
     if let Some(ref filter_id) = rule_filter {
         let found = rules.iter().any(|r| r.id.as_str() == filter_id);
@@ -242,6 +246,7 @@ pub(crate) fn run_scan(opts: ScanOpts) -> Result<bool, AppError> {
         fix,
         dry_run,
         allow_dirty,
+        offline,
     } = opts;
     let use_colors = !no_colors && env::var_os("NO_COLOR").is_none();
 
@@ -258,6 +263,7 @@ pub(crate) fn run_scan(opts: ScanOpts) -> Result<bool, AppError> {
             baseline_path,
             dry_run,
             allow_dirty,
+            offline,
         });
     }
 
@@ -276,6 +282,7 @@ pub(crate) fn run_scan(opts: ScanOpts) -> Result<bool, AppError> {
         no_ai,
         diff,
         diff_base: base,
+        offline,
     })?;
 
     let baseline_active = apply_baseline(&mut result, no_baseline, baseline_path)?;
@@ -337,6 +344,7 @@ pub(crate) struct FixOpts {
     pub baseline_path: Option<PathBuf>,
     pub dry_run: bool,
     pub allow_dirty: bool,
+    pub offline: bool,
 }
 
 /// Refuse to rewrite files when the working tree has uncommitted changes under
@@ -400,6 +408,7 @@ fn run_fix(opts: FixOpts) -> Result<bool, AppError> {
         baseline_path,
         dry_run,
         allow_dirty,
+        offline,
     } = opts;
 
     let mut config = resolve_config(config_path.as_deref())?;
@@ -410,7 +419,8 @@ fn run_fix(opts: FixOpts) -> Result<bool, AppError> {
         .test_paths
         .extend(cli_test_paths.iter().cloned());
 
-    let mut rules = load_effective_rules(&config)?;
+    let sources = resolve_config_sources(&config, offline)?;
+    let mut rules = load_effective_rules(&config, &sources)?;
     if let Some(filter_id) = &rule_filter {
         rules.retain(|r| r.id.as_str() == filter_id);
     }
@@ -473,6 +483,7 @@ fn run_fix(opts: FixOpts) -> Result<bool, AppError> {
         no_ai,
         diff: false,
         diff_base: None,
+        offline,
     })?;
     apply_baseline(&mut result, no_baseline, baseline_path)?;
     let remaining = result.findings.len();
