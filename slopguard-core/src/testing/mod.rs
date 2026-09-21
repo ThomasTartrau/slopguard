@@ -169,10 +169,11 @@ fn test_metric_rule(
 }
 
 fn test_one_rule(rule: &Rule) -> Result<RuleTestResult, TestError> {
-    // A cross-file rule needs a whole project to mean anything. A snippet can
-    // never exercise it, and compiling its (null) `rule` to ast-grep would fail,
-    // so `slopguard test` reports it as untested.
-    if rule.is_cross_file() {
+    // A cross-file or resolution rule needs a whole project (and its manifests)
+    // to mean anything. A snippet can never exercise it, and compiling its
+    // (null) `rule` to ast-grep would fail, so `slopguard test` reports it as
+    // untested; its logic is covered by unit and integration tests instead.
+    if rule.is_cross_file() || rule.is_resolution() {
         return Ok(RuleTestResult {
             rule_id: rule.id.clone(),
             status: RuleTestStatus::NoTests,

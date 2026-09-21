@@ -1,0 +1,12 @@
+id: unresolved-import
+language: typescript
+severity: error
+category: correctness
+resolution: unresolved_import
+message: "Unresolved import '$import': not a package.json dependency, a Node builtin, a tsconfig path alias, or a file on disk."
+note: "This specifier resolves to nothing: a bare package absent from package.json (dependencies, devDependencies, peerDependencies, optionalDependencies), or a relative path with no matching file (tried .ts/.tsx/.d.ts/.js/.jsx/.mjs/.cjs and index.*). Node builtins, `node:` specifiers, tsconfig `compilerOptions.paths` aliases and statement-level `import type` are exempt. AI generators often invent module names; this catches them without running the bundler."
+ignores:
+  - "**/target/**"
+  - "**/node_modules/**"
+  - "**/.worktrees/**"
+  - "**/dist/**"

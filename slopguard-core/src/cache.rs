@@ -8,6 +8,7 @@ use thiserror::Error;
 
 use crate::cross_file::FileSymbols;
 use crate::finding::Finding;
+use crate::resolution::FileImports;
 use crate::rule::Rule;
 
 const RULES_HASH_FILE: &str = "rules.hash";
@@ -16,15 +17,18 @@ const CACHE_GITIGNORE: &str = "*\n";
 /// Version of the on-disk entry format. Mixed into the rules hash so a bump
 /// drops every stale entry instead of trying to deserialize it into the new
 /// shape.
-const CACHE_SCHEMA_VERSION: &str = "v2";
+const CACHE_SCHEMA_VERSION: &str = "v3";
 
-/// What one scanned file leaves in the cache: its findings plus the symbols it
-/// contributes to the project index, so a cache hit feeds the cross-file pass
-/// without re-parsing the file.
+/// What one scanned file leaves in the cache: its findings, the symbols it
+/// contributes to the cross-file index, and the imports it contributes to the
+/// resolution pass, so a cache hit feeds both project-wide passes without
+/// re-parsing the file.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CacheEntry {
     pub findings: Vec<Finding>,
     pub symbols: FileSymbols,
+    #[serde(default)]
+    pub imports: FileImports,
 }
 
 /// Hex-encoded SHA256 of `data`. Shared by every cache key in the workspace.
@@ -227,6 +231,7 @@ mod tests {
 
     use super::*;
     use crate::cross_file::{TraitDecl, TraitImpl};
+    use crate::resolution::ImportRef;
     use crate::rule::{parse_rule, RuleId, Severity};
 
     fn test_rule() -> Rule {
@@ -276,7 +281,7 @@ rule:
     fn entry_with(findings: Vec<Finding>) -> CacheEntry {
         CacheEntry {
             findings,
-            symbols: FileSymbols::default(),
+            ..Default::default()
         }
     }
 
@@ -305,6 +310,7 @@ rule:
         let hash = file_content_hash(b"pub trait Repository {}");
         let entry = CacheEntry {
             findings: Vec::new(),
+            imports: FileImports::default(),
             symbols: FileSymbols {
                 traits: vec![TraitDecl {
                     name: "Repository".to_string(),
@@ -331,6 +337,34 @@ rule:
         assert_eq!(cached.symbols.impls.len(), 1);
         assert_eq!(cached.symbols.impls[0].trait_name, "Repository");
         assert!(!cached.symbols.impls[0].blanket);
+    }
+
+    #[test]
+    fn cache_entry_round_trips_imports() {
+        let dir = tempdir().unwrap();
+        let store = CacheStore::new(dir.path());
+        let hash = file_content_hash(b"use made_up_crate::Thing;");
+        let entry = CacheEntry {
+            imports: FileImports {
+                imports: vec![ImportRef {
+                    specifier: "made_up_crate".to_string(),
+                    line: 1,
+                    column: 1,
+                    end_line: 1,
+                    end_column: 26,
+                    matched_text: "use made_up_crate::Thing;".to_string(),
+                }],
+                local_mods: vec!["foo".to_string()],
+            },
+            ..Default::default()
+        };
+
+        store.put(&hash, &entry).unwrap();
+        let cached = store.get(&hash).unwrap();
+
+        assert_eq!(cached.imports.imports.len(), 1);
+        assert_eq!(cached.imports.imports[0].specifier, "made_up_crate");
+        assert_eq!(cached.imports.local_mods, vec!["foo".to_string()]);
     }
 
     #[test]

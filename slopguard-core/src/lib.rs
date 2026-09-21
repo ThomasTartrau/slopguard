@@ -9,6 +9,7 @@ pub mod fix;
 pub mod git;
 pub mod metric;
 pub mod preset;
+pub mod resolution;
 pub mod rule;
 pub mod scanner;
 pub mod test_filter;

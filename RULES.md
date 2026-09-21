@@ -117,6 +117,27 @@ or a name declared more than once in the project. A `#[cfg(test)]` mock counts
 as a second implementation, which is the point: a trait that exists to be mocked
 is not an over-abstraction.
 
+## Resolution rules (1 rule, both languages)
+
+These carry a `resolution` kind instead of an AST `rule`, a `metric` or a
+`cross_file` kind. They check that every import in a file resolves against the
+declared dependencies and on-disk paths, without a full compile and with no
+network or `cargo`/`npm` invocation. Unlike cross-file rules they are per file,
+so they run under `--diff` too. Imports are extracted with the file (and cached
+with it) but re-resolved against the manifests on every scan, so adding a
+dependency clears a finding even when the importing file is unchanged.
+
+| Rule | Language | Kind | What it catches |
+| ---- | -------- | ---- | --------------- |
+| `unresolved-import` | rust | `unresolved_import` | A `use` whose crate root is not in Cargo.toml, std, a keyword path, or a same-file module |
+| `unresolved-import` | typescript | `unresolved_import` | An `import`/`require` absent from package.json and not a relative file, Node builtin, or tsconfig `paths` alias |
+
+Resolution stays silent when no manifest is reachable (nothing can be asserted),
+for statement-level `import type` (may resolve to ambient declarations), for
+re-exports (`export ... from`, not parsed as imports), and for TypeScript
+`compilerOptions.paths` aliases. Rust checks only the crate root, never a deep
+path. `$import` in the message is replaced with the unresolved specifier.
+
 ## Rule anatomy
 
 Each rule follows this structure:
@@ -168,6 +189,9 @@ constraints:
 metric: file_lines                 # file_lines | import_count | function_count | comment_ratio
 threshold: 500                     # required with `metric`; fires only above it, never at it
                                    # `$value` in `message` becomes the measured value
+
+# ...or a per-file import resolution, mutually exclusive with `rule`, `metric` and `cross_file`
+resolution: unresolved_import      # builtin kind; an unknown value is a parse error
 
 # ...or a project-wide analysis, mutually exclusive with both `rule` and `metric`
 cross_file: single_impl_trait      # builtin kind; an unknown value is a parse error
