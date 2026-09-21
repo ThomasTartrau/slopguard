@@ -111,6 +111,10 @@ pub enum Command {
         #[arg(long)]
         no_escalation: bool,
 
+        /// Report slopguard-disable-next-line comments that suppress no finding
+        #[arg(long)]
+        report_unused_disable: bool,
+
         /// Only scan files changed in git (staged and unstaged, or against --base)
         #[arg(long)]
         diff: bool,

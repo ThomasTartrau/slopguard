@@ -31,7 +31,10 @@ use engine::{
 mod engine;
 mod orchestrate;
 
-pub use orchestrate::{count_severities, scan, scan_cached, scan_files, scan_files_cached};
+pub use orchestrate::{
+    count_severities, scan, scan_cached, scan_files, scan_files_cached, scan_files_unused_disables,
+    scan_unused_disables,
+};
 
 #[derive(Debug, Error)]
 pub enum ScanError {
@@ -93,7 +96,7 @@ impl CompiledRules<'_> {
     /// project-level phase by their declared [`EngineScope`]. The AST engine is
     /// always registered; the metric and cross-file engines only when rules of
     /// their kind exist.
-    fn engines(&self) -> (Vec<BoxedEngine<'_>>, Vec<BoxedEngine<'_>>) {
+    fn engines(&self, apply_disable: bool) -> (Vec<BoxedEngine<'_>>, Vec<BoxedEngine<'_>>) {
         let mut all: Vec<BoxedEngine<'_>> = vec![Box::new(AstEngine {
             collection: &self.collection,
             by_id: &self.by_id,
@@ -106,6 +109,7 @@ impl CompiledRules<'_> {
         if !self.cross_file.is_empty() {
             all.push(Box::new(CrossFileEngine {
                 rules: &self.cross_file,
+                apply_disable,
             }));
         }
         all.into_iter()
@@ -290,6 +294,7 @@ fn scan_file(
     test_paths: &TestPaths,
     collect_symbols: bool,
     collect_imports: bool,
+    apply_disable: bool,
 ) -> FileScan {
     let applies = per_file.iter().any(|e| e.applies_to_file(path, lang));
     // A run scoped to a single cross-file rule has no ast-grep and no metric
@@ -341,7 +346,11 @@ fn scan_file(
     };
 
     FileScan {
-        findings: filter_disabled(findings, &source),
+        findings: if apply_disable {
+            filter_disabled(findings, &source)
+        } else {
+            findings
+        },
         symbols,
         imports,
     }
@@ -376,6 +385,7 @@ fn append_cross_file(
 fn resolution_findings(
     rules: &[ResolutionRule<'_>],
     contributions: &[(PathBuf, FileImports)],
+    apply_disable: bool,
 ) -> Vec<Finding> {
     let mut manifests = ManifestResolver::new();
     let mut by_file: HashMap<PathBuf, Vec<Finding>> = HashMap::new();
@@ -403,11 +413,16 @@ fn resolution_findings(
     }
     by_file
         .into_iter()
-        .flat_map(|(path, findings)| match read_to_string(&path) {
-            // A file that can no longer be read keeps its findings unfiltered
-            // rather than losing them.
-            Ok(source) => filter_disabled(findings, &source),
-            Err(_) => findings,
+        .flat_map(|(path, findings)| {
+            if !apply_disable {
+                return findings;
+            }
+            match read_to_string(&path) {
+                // A file that can no longer be read keeps its findings unfiltered
+                // rather than losing them.
+                Ok(source) => filter_disabled(findings, &source),
+                Err(_) => findings,
+            }
         })
         .collect()
 }
@@ -420,9 +435,14 @@ fn append_resolution(
     findings: &mut Vec<Finding>,
     compiled: &CompiledRules,
     contributions: &[(PathBuf, FileImports)],
+    apply_disable: bool,
 ) {
     if !compiled.resolution.is_empty() {
-        findings.extend(resolution_findings(&compiled.resolution, contributions));
+        findings.extend(resolution_findings(
+            &compiled.resolution,
+            contributions,
+            apply_disable,
+        ));
     }
 }
 

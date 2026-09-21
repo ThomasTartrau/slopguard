@@ -23,7 +23,8 @@ use slopguard_core::fix::fix_paths;
 use slopguard_core::git::{self, changed_files, GitError};
 use slopguard_core::rule::{load_effective_rules, Language, ReasonMode, Rule, Severity};
 use slopguard_core::scanner::{
-    count_severities, scan, scan_cached, scan_files, scan_files_cached, ScanError,
+    count_severities, scan, scan_cached, scan_files, scan_files_cached, scan_files_unused_disables,
+    scan_unused_disables, ScanError,
 };
 
 use crate::baseline_cmd::{apply_baseline, resolve_baseline};
@@ -72,6 +73,7 @@ pub(crate) struct ScanOpts {
     pub no_baseline: bool,
     pub baseline_path: Option<PathBuf>,
     pub no_escalation: bool,
+    pub report_unused_disable: bool,
     pub diff: bool,
     pub base: Option<String>,
     pub fix: bool,
@@ -92,6 +94,7 @@ pub struct CollectOpts {
     pub no_cache: bool,
     pub cache_dir: Option<PathBuf>,
     pub no_ai: bool,
+    pub report_unused: bool,
     pub diff: bool,
     pub diff_base: Option<String>,
     pub offline: bool,
@@ -153,6 +156,7 @@ pub fn collect_findings(opts: CollectOpts) -> Result<(ScanResult, Config), AppEr
         no_cache,
         cache_dir,
         no_ai,
+        report_unused,
         diff,
         diff_base,
         offline,
@@ -210,7 +214,23 @@ pub fn collect_findings(opts: CollectOpts) -> Result<(ScanResult, Config), AppEr
         let ai_findings =
             run_ai_phase(&targets, &ai_rules, &config, no_cache, &resolved_cache_dir)?;
         if !ai_findings.is_empty() {
-            merge_ai_findings(&mut result, ai_findings);
+            merge_findings(&mut result, ai_findings);
+        }
+    }
+
+    // A disable's consumption is judged against the AST-level matches of every
+    // active rule (AI rules included, pre-LLM), so the report is stable and
+    // independent of the provider. Uses the same targets, so `--diff` only looks
+    // at changed files.
+    if report_unused {
+        let mut all_rules = ast_rules;
+        all_rules.extend(ai_rules);
+        let unused = match &targets {
+            ScanTargets::Walk(p) => scan_unused_disables(p, &all_rules, &config)?,
+            ScanTargets::Files(f) => scan_files_unused_disables(f, &all_rules, &config)?,
+        };
+        if !unused.is_empty() {
+            merge_findings(&mut result, unused);
         }
     }
 
@@ -241,6 +261,7 @@ pub(crate) fn run_scan(opts: ScanOpts) -> Result<bool, AppError> {
         no_baseline,
         baseline_path,
         no_escalation,
+        report_unused_disable,
         diff,
         base,
         fix,
@@ -280,6 +301,7 @@ pub(crate) fn run_scan(opts: ScanOpts) -> Result<bool, AppError> {
         no_cache,
         cache_dir,
         no_ai,
+        report_unused: report_unused_disable,
         diff,
         diff_base: base,
         offline,
@@ -481,6 +503,7 @@ fn run_fix(opts: FixOpts) -> Result<bool, AppError> {
         no_cache: true,
         cache_dir: None,
         no_ai,
+        report_unused: false,
         diff: false,
         diff_base: None,
         offline,
@@ -563,10 +586,11 @@ fn build_candidates(
     candidates
 }
 
-/// Merge AI-confirmed findings into the AST result, keeping ordering, dedup,
-/// and severity counts consistent (`files_scanned` is preserved).
-fn merge_ai_findings(result: &mut ScanResult, ai_findings: Vec<Finding>) {
-    result.findings.extend(ai_findings);
+/// Merge extra findings (AI-confirmed, or synthetic `unused-disable`) into the
+/// AST result, keeping ordering, dedup, and severity counts consistent
+/// (`files_scanned` is preserved).
+fn merge_findings(result: &mut ScanResult, extra: Vec<Finding>) {
+    result.findings.extend(extra);
     result
         .findings
         .sort_by(|a, b| (&a.file, a.line, a.column).cmp(&(&b.file, b.line, b.column)));
