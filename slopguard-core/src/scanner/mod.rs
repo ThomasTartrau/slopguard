@@ -19,6 +19,7 @@ use thiserror::Error;
 use crate::cross_file::{self, CrossFileKind, DeclFilter, FileSymbols, SymbolIndex};
 use crate::disable::filter_disabled;
 use crate::finding::Finding;
+use crate::resolution::{self, FileImports, ManifestResolver, ResolutionFilter, ResolutionKind};
 use crate::rule::{Language, Rule, RuleId, Severity};
 use crate::test_filter::{CfgTestRanges, TestPaths};
 
@@ -81,6 +82,7 @@ struct CompiledRules<'a> {
     by_id: HashMap<(&'a str, Language), &'a Rule>,
     metrics: Vec<MetricRule<'a>>,
     cross_file: Vec<CrossFileRule<'a>>,
+    resolution: Vec<ResolutionRule<'a>>,
     /// Which paths `skip_test_code` rules treat as test code (built-in
     /// heuristic plus configured `scan.test_paths`).
     test_paths: TestPaths,
@@ -109,6 +111,16 @@ impl CompiledRules<'_> {
         all.into_iter()
             .partition(|e| matches!(e.scope(), EngineScope::PerFile))
     }
+}
+
+/// A resolution rule prepared for scanning: kind resolved and the file filter
+/// compiled once. Resolution runs outside the [`RuleEngine`] partition: it
+/// resolves each file's imports against on-disk manifests after the per-file
+/// pass, so a manifest edit is reflected even for an unchanged file.
+struct ResolutionRule<'a> {
+    rule: &'a Rule,
+    kind: ResolutionKind,
+    filter: ResolutionFilter,
 }
 
 fn extension_to_lang(path: &Path) -> Option<SupportLang> {
@@ -188,14 +200,31 @@ fn build_cross_file_rule<'a>(
     })
 }
 
+/// Compile the globs that bound which files a resolution rule may report on.
+fn build_resolution_rule<'a>(
+    rule: &'a Rule,
+    kind: ResolutionKind,
+) -> Result<ResolutionRule<'a>, ScanError> {
+    Ok(ResolutionRule {
+        rule,
+        kind,
+        filter: ResolutionFilter {
+            files: rule.files.as_deref().map(build_glob_set).transpose()?,
+            ignores: rule.ignores.as_deref().map(build_glob_set).transpose()?,
+        },
+    })
+}
+
 fn compile_rules<'a>(
     rules: &'a [Rule],
     test_paths: TestPaths,
 ) -> Result<CompiledRules<'a>, ScanError> {
-    // Neither cross-file nor metric rules may reach ast-grep: their `rule`
-    // field is null and would fail to compile.
+    // Cross-file, resolution and metric rules must not reach ast-grep: their
+    // `rule` field is null and would fail to compile.
     let (cross_rules, rest): (Vec<&Rule>, Vec<&Rule>) =
         rules.iter().partition(|r| r.is_cross_file());
+    let (resolution_rules, rest): (Vec<&Rule>, Vec<&Rule>) =
+        rest.into_iter().partition(|r| r.is_resolution());
     let (metric_rules, ast_rules): (Vec<&Rule>, Vec<&Rule>) =
         rest.into_iter().partition(|r| r.is_metric());
 
@@ -214,6 +243,11 @@ fn compile_rules<'a>(
         .filter_map(|rule| rule.cross_file_kind().map(|kind| (rule, kind)))
         .map(|(rule, kind)| build_cross_file_rule(rule, kind, &test_paths))
         .collect::<Result<Vec<_>, _>>()?;
+    let resolution = resolution_rules
+        .into_iter()
+        .filter_map(|rule| rule.resolution_kind().map(|kind| (rule, kind)))
+        .map(|(rule, kind)| build_resolution_rule(rule, kind))
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(CompiledRules {
         collection: RuleCollection::try_new(configs)?,
         by_id: ast_rules
@@ -226,6 +260,7 @@ fn compile_rules<'a>(
             .map(build_metric_rule)
             .collect::<Result<Vec<_>, _>>()?,
         cross_file,
+        resolution,
         test_paths,
     })
 }
@@ -245,6 +280,7 @@ pub(crate) fn build_glob_set(patterns: &[String]) -> Result<GlobSet, GlobError> 
 struct FileScan {
     findings: Vec<Finding>,
     symbols: FileSymbols,
+    imports: FileImports,
 }
 
 fn scan_file(
@@ -253,12 +289,15 @@ fn scan_file(
     per_file: &[BoxedEngine],
     test_paths: &TestPaths,
     collect_symbols: bool,
+    collect_imports: bool,
 ) -> FileScan {
     let applies = per_file.iter().any(|e| e.applies_to_file(path, lang));
     // A run scoped to a single cross-file rule has no ast-grep and no metric
-    // rule, yet the file still has to be parsed for its symbols.
+    // rule, yet the file still has to be parsed for its symbols. The same holds
+    // for a resolution-only run and its imports.
     let want_symbols = collect_symbols && lang == SupportLang::Rust;
-    if !applies && !want_symbols {
+    let want_imports = collect_imports;
+    if !applies && !want_symbols && !want_imports {
         return FileScan::default();
     }
     let Ok(source) = read_to_string(path) else {
@@ -292,9 +331,19 @@ fn scan_file(
         _ => FileSymbols::default(),
     };
 
+    // Imports are extracted here (cheap, cached with the file) but resolved
+    // later against manifests, so a manifest edit is reflected without a file
+    // change. Not filtered here: suppression applies to the resolution findings.
+    let imports = if want_imports {
+        resolution::extract_imports(&support_lang_to_language(lang), &root)
+    } else {
+        FileImports::default()
+    };
+
     FileScan {
         findings: filter_disabled(findings, &source),
         symbols,
+        imports,
     }
 }
 
@@ -317,6 +366,63 @@ fn append_cross_file(
     let ctx = RuleContext::Project(ProjectContext { index: &index });
     for engine in project {
         findings.extend(engine.evaluate(&ctx));
+    }
+}
+
+/// Resolve each file's imports against the manifests on disk and collect the
+/// findings, then drop those a disable comment suppresses in the importing file.
+///
+/// Manifests are read once each through a shared [`ManifestResolver`].
+fn resolution_findings(
+    rules: &[ResolutionRule<'_>],
+    contributions: &[(PathBuf, FileImports)],
+) -> Vec<Finding> {
+    let mut manifests = ManifestResolver::new();
+    let mut by_file: HashMap<PathBuf, Vec<Finding>> = HashMap::new();
+    for (path, imports) in contributions {
+        if imports.is_empty() {
+            continue;
+        }
+        let Some(lang) = extension_to_lang(path).map(support_lang_to_language) else {
+            continue;
+        };
+        for rule in rules {
+            if rule.rule.language != lang || !rule.filter.allows(path) {
+                continue;
+            }
+            let found = resolution::evaluate_file(
+                rule.rule,
+                rule.kind,
+                &lang,
+                path,
+                imports,
+                &mut manifests,
+            );
+            by_file.entry(path.clone()).or_default().extend(found);
+        }
+    }
+    by_file
+        .into_iter()
+        .flat_map(|(path, findings)| match read_to_string(&path) {
+            // A file that can no longer be read keeps its findings unfiltered
+            // rather than losing them.
+            Ok(source) => filter_disabled(findings, &source),
+            Err(_) => findings,
+        })
+        .collect()
+}
+
+/// Run the resolution pass and append its findings, if any resolution rule is
+/// active. Unlike the cross-file pass, resolution runs for both full and partial
+/// (`--diff`, explicit files) scans: an import resolves against manifests on
+/// disk, which are complete regardless of the scanned file set.
+fn append_resolution(
+    findings: &mut Vec<Finding>,
+    compiled: &CompiledRules,
+    contributions: &[(PathBuf, FileImports)],
+) {
+    if !compiled.resolution.is_empty() {
+        findings.extend(resolution_findings(&compiled.resolution, contributions));
     }
 }
 

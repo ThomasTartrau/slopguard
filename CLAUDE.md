@@ -8,11 +8,33 @@ Read these files before working:
 - ARCHITECTURE.md - workspace structure, crate responsibilities, data flow
 - DECISIONS.md - all design decisions with rationale (D1-D22)
 - ROADMAP.md - what to build and in what order
-- RULES.md - all 34 builtin rules, their YAML format, and ast-grep syntax gotchas
+- RULES.md - the builtin rules, their YAML format, and ast-grep syntax gotchas
 
 ## Current state
 
-The project is at scaffolding stage. The architecture is designed, decisions are documented, but no Rust code exists yet. The 34 YAML rules exist in `~/Documents/dev/claude/personal-config/slopguard/rules/` and need to be migrated here with inline tests added.
+The project ships as a 4-crate workspace with roughly 14k lines of Rust. The scan engine, config loading, and CLI are all implemented and published to crates.io.
+
+Delivered features:
+- 85 active rules (`slopguard list`), across the `slop`, `security`, and `correctness` rulesets, covering Rust and TypeScript. 97 rule YAML files ship on disk; 12 are disabled by default (`enabled: false`), leaving 85 active.
+- Autofix: `slopguard scan --fix` applies in-place rewrites for rules marked `autofix_safe` (`--fix --dry-run` to preview without writing).
+- AI pipeline: LLM-backed rules run when a provider is configured; `slopguard scan --no-ai` skips them.
+- Cross-file rules and file-level rules, not just single-node AST matches.
+- Metrics: `slopguard stats` summarizes findings (top rules, top files).
+- Baseline: `slopguard baseline` captures current findings; `scan --baseline`/`--no-baseline` control suppression.
+- Diff mode: `slopguard scan --diff` scans only git-changed files (`--base <ref>` for a three-dot diff).
+- Severity escalation (`scan --no-escalation` to disable).
+- Output formats: `text`, `json`, `sarif`, `html` (`scan --format`).
+
+The rule YAML files live in `slopguard-rules/rules/{correctness,security,slop}/`, each with inline `should_match`/`should_not_match` tests.
+
+## Workspace crates
+
+| Crate | Purpose |
+|-------|---------|
+| slopguard-cli | Binary crate (clap CLI, output formatting, SARIF/HTML rendering) |
+| slopguard-core | Library crate: scan engine, config, rule loading, baseline, diff, escalation |
+| slopguard-rules | Builtin YAML rules embedded at compile time |
+| slopguard-ai | LLM provider integration for AI-backed rules |
 
 ## Build and test
 
@@ -58,7 +80,9 @@ cargo run -- init    # generates slopguard.toml
 | ignore | Gitignore-aware file walking |
 | rust-embed | Embed builtin YAML rules |
 
-## Scope for v0.1.0
+## Scope
 
-AST-only, no AI. See ROADMAP.md for the full v0.1.0 checklist.
-Do not add AI integration, caching, or auto-fix rewriting. Those are v0.2+.
+v0.1.0 shipped AST-only scanning; AI-backed rules and autofix have since landed
+(see the feature list under "Current state" and the ROADMAP for version history).
+Caching is not yet implemented. Check the ROADMAP before assuming a feature is
+missing or present.

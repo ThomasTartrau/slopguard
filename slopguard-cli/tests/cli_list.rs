@@ -159,6 +159,38 @@ fn list_text_shows_metric_type() {
 }
 
 #[test]
+fn list_shows_resolution_rule() {
+    let text = slopguard().args(["list"]).output().unwrap();
+    assert!(text.status.success());
+    let stdout = String::from_utf8(text.stdout).unwrap();
+    assert!(
+        stdout.contains("unresolved-import"),
+        "should list unresolved-import, got:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("resolution"),
+        "should show the resolution type column value, got:\n{stdout}"
+    );
+
+    let json_out = slopguard()
+        .args(["list", "--format", "json"])
+        .output()
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&json_out.stdout).unwrap();
+    let entries = json.as_array().unwrap();
+    let resolution_count = entries.iter().filter(|e| e["type"] == "resolution").count();
+    assert!(
+        resolution_count > 0,
+        "at least one rule should be a resolution rule, got {resolution_count}"
+    );
+    let entry = entries
+        .iter()
+        .find(|e| e["id"] == "unresolved-import")
+        .expect("unresolved-import should be listed");
+    assert_eq!(entry["type"], "resolution");
+}
+
+#[test]
 fn list_rejects_sarif_format() {
     slopguard()
         .args(["list", "--format", "sarif"])
