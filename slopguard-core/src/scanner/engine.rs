@@ -262,6 +262,10 @@ pub(crate) struct CrossFileRule<'a> {
 /// index.
 pub(crate) struct CrossFileEngine<'a> {
     pub rules: &'a [CrossFileRule<'a>],
+    /// When false, findings are returned raw (disable comments are not applied).
+    /// Used by the `--report-unused-disable` pass, which needs to know which
+    /// directives would have suppressed a cross-file finding.
+    pub apply_disable: bool,
 }
 
 impl RuleEngine for CrossFileEngine<'_> {
@@ -292,11 +296,16 @@ impl RuleEngine for CrossFileEngine<'_> {
         }
         by_file
             .into_iter()
-            .flat_map(|(path, findings)| match read_to_string(&path) {
-                // A file that can no longer be read keeps its findings unfiltered
-                // rather than losing them.
-                Ok(source) => filter_disabled(findings, &source),
-                Err(_) => findings,
+            .flat_map(|(path, findings)| {
+                if !self.apply_disable {
+                    return findings;
+                }
+                match read_to_string(&path) {
+                    // A file that can no longer be read keeps its findings
+                    // unfiltered rather than losing them.
+                    Ok(source) => filter_disabled(findings, &source),
+                    Err(_) => findings,
+                }
             })
             .collect()
     }

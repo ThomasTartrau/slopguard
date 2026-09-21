@@ -205,6 +205,7 @@ pub fn run_stats(opts: StatsOpts) -> Result<(), AppError> {
         no_cache,
         cache_dir,
         no_ai,
+        report_unused: false,
         diff: false,
         diff_base: None,
         offline,

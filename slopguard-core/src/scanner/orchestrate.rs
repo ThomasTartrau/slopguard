@@ -1,6 +1,7 @@
 //! Top-level scan orchestration: collect files, fan out per-file scans (cached
 //! or not), assemble cross-file findings, and shape the [`ScanResult`].
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -10,6 +11,7 @@ use rayon::prelude::*;
 use crate::cache::{file_content_hash, rules_hash, CacheEntry, CacheStore};
 use crate::config::Config;
 use crate::cross_file::FileSymbols;
+use crate::disable::unused_disable_findings;
 use crate::finding::{CacheStats, Finding, ScanResult, ScanStats};
 use crate::resolution::FileImports;
 use crate::rule::{Rule, Severity};
@@ -49,8 +51,9 @@ fn scan_collected(
     files: Vec<(PathBuf, SupportLang)>,
     compiled: &CompiledRules,
     run_cross_file: bool,
+    apply_disable: bool,
 ) -> ScanResult {
-    let (per_file, project) = compiled.engines();
+    let (per_file, project) = compiled.engines(apply_disable);
     let collect_symbols = project.iter().any(|e| e.needs_symbols());
     let collect_imports = !compiled.resolution.is_empty();
     let scans: Vec<(PathBuf, FileScan)> = files
@@ -63,6 +66,7 @@ fn scan_collected(
                 &compiled.test_paths,
                 collect_symbols,
                 collect_imports,
+                apply_disable,
             );
             (path.clone(), scan)
         })
@@ -81,7 +85,12 @@ fn scan_collected(
         }
     }
     append_cross_file(&mut findings, &project, run_cross_file, &contributions);
-    append_resolution(&mut findings, compiled, &import_contributions);
+    append_resolution(
+        &mut findings,
+        compiled,
+        &import_contributions,
+        apply_disable,
+    );
     normalize_findings(&mut findings);
 
     let (errors, warnings) = count_severities(&findings);
@@ -115,7 +124,10 @@ fn scan_collected_cached(
     prune: bool,
     run_cross_file: bool,
 ) -> ScanResult {
-    let (per_file, project) = compiled.engines();
+    // The cached path always applies disable comments: the raw pass used by
+    // `--report-unused-disable` runs uncached, so the cache only ever stores
+    // suppressed findings.
+    let (per_file, project) = compiled.engines(true);
     let collect_symbols = project.iter().any(|e| e.needs_symbols());
     let collect_imports = !compiled.resolution.is_empty();
     let current_rules_hash = rules_hash(rules);
@@ -179,6 +191,7 @@ fn scan_collected_cached(
                 &compiled.test_paths,
                 collect_symbols,
                 collect_imports,
+                true,
             );
             (work.path.clone(), work.hash.clone(), scan)
         })
@@ -204,7 +217,7 @@ fn scan_collected_cached(
     // scan (cross-file from the assembled index, resolution from the manifests on
     // disk, so a manifest edit is reflected even for an unchanged file).
     append_cross_file(&mut all_findings, &project, run_cross_file, &contributions);
-    append_resolution(&mut all_findings, compiled, &import_contributions);
+    append_resolution(&mut all_findings, compiled, &import_contributions, true);
 
     if prune {
         let current_hashes: Vec<String> =
@@ -241,7 +254,12 @@ pub fn scan(paths: &[PathBuf], rules: &[Rule], config: &Config) -> Result<ScanRe
     let test_paths = TestPaths::new(&config.scan.test_paths)?;
     let compiled = compile_rules(rules, test_paths)?;
     let ignores = build_glob_set(&config.scan.ignores)?;
-    Ok(scan_collected(walk_files(paths, &ignores), &compiled, true))
+    Ok(scan_collected(
+        walk_files(paths, &ignores),
+        &compiled,
+        true,
+        true,
+    ))
 }
 
 /// Scan with file-level caching. Files whose content hash matches a cached
@@ -292,7 +310,65 @@ pub fn scan_files(
         explicit_files(files, &ignores),
         &compiled,
         false,
+        true,
     ))
+}
+
+/// Compute `unused-disable` findings for the given walked paths: a full raw scan
+/// (disable comments not applied) whose findings reveal which directives would
+/// have suppressed something. Cross-file rules run, as in [`scan`].
+///
+/// This is the walk (non-diff) variant used by `--report-unused-disable`. It is
+/// uncached on purpose: the cache stores suppressed findings, which cannot tell
+/// which directives were consumed.
+pub fn scan_unused_disables(
+    paths: &[PathBuf],
+    rules: &[Rule],
+    config: &Config,
+) -> Result<Vec<Finding>, ScanError> {
+    let test_paths = TestPaths::new(&config.scan.test_paths)?;
+    let compiled = compile_rules(rules, test_paths)?;
+    let ignores = build_glob_set(&config.scan.ignores)?;
+    let files = walk_files(paths, &ignores);
+    let raw = scan_collected(files.clone(), &compiled, true, false);
+    Ok(unused_from_raw(&files, &raw.findings))
+}
+
+/// Explicit-file (diff) variant of [`scan_unused_disables`]. Cross-file rules do
+/// not run, matching [`scan_files`], so only the changed files are considered.
+pub fn scan_files_unused_disables(
+    files: &[PathBuf],
+    rules: &[Rule],
+    config: &Config,
+) -> Result<Vec<Finding>, ScanError> {
+    let test_paths = TestPaths::new(&config.scan.test_paths)?;
+    let compiled = compile_rules(rules, test_paths)?;
+    let ignores = build_glob_set(&config.scan.ignores)?;
+    let collected = explicit_files(files, &ignores);
+    let raw = scan_collected(collected.clone(), &compiled, false, false);
+    Ok(unused_from_raw(&collected, &raw.findings))
+}
+
+/// Group raw findings by file and, for each collected file, report the disable
+/// directives that suppressed nothing. Files that cannot be read are skipped.
+fn unused_from_raw(files: &[(PathBuf, SupportLang)], raw: &[Finding]) -> Vec<Finding> {
+    let mut by_file: HashMap<&Path, Vec<Finding>> = HashMap::new();
+    for finding in raw {
+        by_file
+            .entry(finding.file.as_path())
+            .or_default()
+            .push(finding.clone());
+    }
+    let empty: Vec<Finding> = Vec::new();
+    let mut out = Vec::new();
+    for (path, _lang) in files {
+        let Ok(source) = fs::read_to_string(path) else {
+            continue;
+        };
+        let file_raw = by_file.get(path.as_path()).unwrap_or(&empty);
+        out.extend(unused_disable_findings(path, &source, file_raw));
+    }
+    out
 }
 
 /// Cached variant of [`scan_files`]. Cache pruning is skipped: a partial scan
