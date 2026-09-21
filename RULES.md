@@ -131,11 +131,38 @@ category: correctness              # slop | security | correctness
 # User-facing text
 message: "Short, actionable"      # what's wrong, what to do instead
 note: "Explanation"                # why this matters
-fix: "Use X instead"              # textual suggestion
+fix: "Use X instead"              # textual suggestion (human message, never applied)
+
+# Autofix (scan --fix). `rewrite` is the ast-grep replacement template; it may
+# reference the matcher's metavariables. It is applied only when the rule is
+# also marked autofix_safe (idempotent, no semantic change). Distinct from
+# `fix`, which stays a human message.
+rewrite: "$R"                      # replacement template, optional
+autofix_safe: true                 # opt-in; default false. Without it `rewrite` is inert.
+
+# Optional: a dedicated fix matcher, when detection must be broader than the fix
+# (detect broadly, fix narrowly). When set, `scan --fix` locates nodes with this
+# matcher instead of `rule`, and detection `constraints` are not applied to it,
+# so it must be self-contained. `null` (default) means --fix reuses `rule`.
+# Example: flag every dbg!() but only auto-rewrite a single comma-free argument,
+# since rewriting dbg!() or dbg!(a, b) would not compile.
+autofix_rule:
+  all:
+    - pattern: dbg!($$$E)
+    - not: { regex: '^dbg\s*!\s*\(\s*\)$' }
+    - not: { regex: ',' }
 
 # AST matcher (ast-grep syntax)
 rule:
-  pattern: $X.unwrap()             # or kind/regex/all/any/not/has/precedes/follows/inside
+  pattern: $R.clone()              # or kind/regex/all/any/not/has/precedes/follows/inside
+
+# Metavariable constraints (sibling of `rule`): restrict a captured metavariable.
+# Here, only match when the receiver is an already-owned value.
+constraints:
+  R:
+    any:
+      - pattern: $X.to_string()
+      - pattern: "format!($$$A)"
 
 # ...or a file-level metric, mutually exclusive with `rule`
 metric: file_lines                 # file_lines | import_count | function_count | comment_ratio
@@ -157,6 +184,12 @@ tests:
     - "snippet that triggers"
   should_not_match:
     - "snippet that must not trigger"
+  # Autofixable rules: assert the rewrite. `slopguard test` applies `rewrite` to
+  # `before` and requires the result to equal `after`. This is what proves a
+  # rewrite is correct; add one per autofix_safe rule.
+  should_fix:
+    - before: "fn f() { let s = name.to_string().clone(); }"
+      after: "fn f() { let s = name.to_string(); }"
   # Metric rules only: whole-file fixtures, relative to the rule's directory
   should_match_files:
     - "fixtures/metrics/rust_large.rs"

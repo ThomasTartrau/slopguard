@@ -25,6 +25,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
 strsim = "0.11"
+similar = "2"
 
 [dev-dependencies]
 assert_cmd = "2"

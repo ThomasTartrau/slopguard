@@ -5,6 +5,7 @@ use ast_grep_core::tree_sitter::LanguageExt;
 use ast_grep_language::SupportLang;
 use thiserror::Error;
 
+use crate::fix::fix_snippet;
 use crate::metric::{self, Metric};
 use crate::rule::{self, Rule, RuleId, RuleTests};
 use crate::scanner::{compile_ast_grep_rule, AstGrepRule};
@@ -26,6 +27,10 @@ pub struct TestFailure {
 pub enum TestFailureKind {
     ShouldMatchDidNot,
     ShouldNotMatchDid,
+    /// A `should_fix` case's rewrite did not produce the expected `after`.
+    FixMismatch {
+        actual: String,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -202,6 +207,8 @@ fn test_one_rule(rule: &Rule) -> Result<RuleTestResult, TestError> {
         message: &rule.message,
         note: rule.note.as_deref(),
         rule: &rule.rule,
+        constraints: (!rule.constraints.is_null()).then_some(&rule.constraints),
+        fix: None,
         files: None,
         ignores: None,
     };
@@ -231,6 +238,19 @@ fn test_one_rule(rule: &Rule) -> Result<RuleTestResult, TestError> {
             failures.push(TestFailure {
                 kind: TestFailureKind::ShouldNotMatchDid,
                 snippet: snippet.clone(),
+            });
+        }
+    }
+
+    for case in &tests.should_fix {
+        let actual = fix_snippet(rule, &case.before).map_err(|e| TestError::CompileError {
+            id: rule.id.clone(),
+            reason: e.to_string(),
+        })?;
+        if actual != case.after {
+            failures.push(TestFailure {
+                kind: TestFailureKind::FixMismatch { actual },
+                snippet: case.before.clone(),
             });
         }
     }

@@ -106,6 +106,71 @@ tests:
 }
 
 #[test]
+fn test_rule_should_fix_pass() {
+    let rule = parse_rule(
+        r#"
+id: test-fix-pass
+language: rust
+severity: warning
+message: "Unnecessary clone"
+rewrite: "$R"
+autofix_safe: true
+rule:
+  pattern: $R.clone()
+constraints:
+  R:
+    pattern: $X.to_string()
+tests:
+  should_match:
+    - "fn f() { let s = name.to_string().clone(); }"
+  should_fix:
+    - before: "fn f() { let s = name.to_string().clone(); }"
+      after: "fn f() { let s = name.to_string(); }"
+"#,
+    )
+    .unwrap();
+
+    let result = test_one_rule(&rule).unwrap();
+    assert_eq!(result.status, RuleTestStatus::Pass);
+}
+
+#[test]
+fn test_rule_fail_should_fix() {
+    let rule = parse_rule(
+        r#"
+id: test-fix-fail
+language: rust
+severity: warning
+message: "Unnecessary clone"
+rewrite: "$R"
+autofix_safe: true
+rule:
+  pattern: $R.clone()
+constraints:
+  R:
+    pattern: $X.to_string()
+tests:
+  should_fix:
+    - before: "fn f() { let s = name.to_string().clone(); }"
+      after: "fn f() { let s = WRONG; }"
+"#,
+    )
+    .unwrap();
+
+    let result = test_one_rule(&rule).unwrap();
+    assert!(matches!(result.status, RuleTestStatus::Fail { .. }));
+    if let RuleTestStatus::Fail { failures } = &result.status {
+        assert_eq!(failures.len(), 1);
+        assert_eq!(
+            failures[0].kind,
+            TestFailureKind::FixMismatch {
+                actual: "fn f() { let s = name.to_string(); }".to_string()
+            }
+        );
+    }
+}
+
+#[test]
 fn test_rule_no_tests() {
     let rule = parse_rule(
         r#"

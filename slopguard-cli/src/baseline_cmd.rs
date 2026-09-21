@@ -40,7 +40,7 @@ fn recompute_stats(result: &mut ScanResult, baseline_filtered: usize) {
 /// `--no-baseline` disables it, `--baseline <path>` forces a specific file
 /// (an error if missing, never a silent full scan), otherwise the file is
 /// looked up in the working directory and its parents.
-fn resolve_baseline(
+pub(crate) fn resolve_baseline(
     no_baseline: bool,
     baseline_path: Option<PathBuf>,
 ) -> Result<Option<(Baseline, PathBuf)>, AppError> {

@@ -3,7 +3,19 @@ language: rust
 severity: error
 category: correctness
 message: "dbg!() left in production code. Remove it."
-note: "dbg!() writes to stderr and should never be committed."
+note: "dbg!() writes to stderr and should never be committed. dbg!(expr) returns expr, so unwrapping a single argument preserves behavior. Auto-fix is restricted to a single comma-free argument; dbg!(), dbg!(a, b) and args containing commas are flagged but left for manual removal to avoid breaking the build."
+fix: "Remove dbg!() or unwrap its argument."
+rewrite: "$$$E"
+autofix_safe: true
+autofix_rule:
+  all:
+    - pattern: dbg!($$$E)
+    # Exclude dbg!() (empty rewrite) and any comma (multi-arg, or a comma-bearing
+    # single arg like dbg!(vec![1, 2])): rewriting those would not compile.
+    - not:
+        regex: '^dbg\s*!\s*\(\s*\)$'
+    - not:
+        regex: ','
 rule:
   kind: macro_invocation
   has:
@@ -26,3 +38,8 @@ tests:
   should_not_match:
     - "fn handle() { tracing::debug!(?value); }"
     - "fn handle() { log::debug!(\"value: {}\", value); }"
+  should_fix:
+    - before: "fn handle() { let x = dbg!(compute()); }"
+      after: "fn handle() { let x = compute(); }"
+    - before: "fn handle() { dbg!(value); }"
+      after: "fn handle() { value; }"

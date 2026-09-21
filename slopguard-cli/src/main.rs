@@ -157,14 +157,21 @@ fn run_test(config_path: Option<PathBuf>) -> Result<bool, AppError> {
             RuleTestStatus::Fail { failures } => {
                 println!("  FAIL  {}", result.rule_id);
                 for failure in failures {
-                    let label = match failure.kind {
-                        TestFailureKind::ShouldMatchDidNot => "should_match did not match",
-                        TestFailureKind::ShouldNotMatchDid => "should_not_match matched",
-                    };
-                    println!(
-                        "        {label}: {}",
-                        failure.snippet.lines().next().unwrap_or("")
-                    );
+                    match &failure.kind {
+                        TestFailureKind::ShouldMatchDidNot => println!(
+                            "        should_match did not match: {}",
+                            failure.snippet.lines().next().unwrap_or("")
+                        ),
+                        TestFailureKind::ShouldNotMatchDid => println!(
+                            "        should_not_match matched: {}",
+                            failure.snippet.lines().next().unwrap_or("")
+                        ),
+                        TestFailureKind::FixMismatch { actual } => println!(
+                            "        should_fix mismatch: {} -> got {}",
+                            failure.snippet.lines().next().unwrap_or(""),
+                            actual.lines().next().unwrap_or("")
+                        ),
+                    }
                 }
             }
             RuleTestStatus::NoTests => {
@@ -350,6 +357,9 @@ fn main() -> ExitCode {
             no_escalation,
             diff,
             base,
+            fix,
+            dry_run,
+            allow_dirty,
         } => match run_scan(ScanOpts {
             paths,
             format,
@@ -369,6 +379,9 @@ fn main() -> ExitCode {
             no_escalation,
             diff,
             base,
+            fix,
+            dry_run,
+            allow_dirty,
         }) {
             Ok(true) => ExitCode::from(1),
             Ok(false) => ExitCode::SUCCESS,

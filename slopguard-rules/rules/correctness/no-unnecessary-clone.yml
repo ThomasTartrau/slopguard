@@ -5,12 +5,17 @@ category: correctness
 message: "Unnecessary .clone() on a value that is already owned or trivially copyable."
 note: "AI frequently inserts .clone() as a reflex. Without type info, this rule catches obvious patterns."
 fix: "Remove the .clone() or pass by reference."
+rewrite: "$R"
+autofix_safe: true
 rule:
-  any:
-    - pattern: $X.to_string().clone()
-    - pattern: $X.to_owned().clone()
-    - pattern: String::from($X).clone()
-    - pattern: format!($$$).clone()
+  pattern: $R.clone()
+constraints:
+  R:
+    any:
+      - pattern: $X.to_string()
+      - pattern: $X.to_owned()
+      - pattern: String::from($$$A)
+      - pattern: format!($$$B)
 ignores:
   - "**/fixtures/**"
 skip_test_code: true
@@ -22,3 +27,8 @@ tests:
   should_not_match:
     - 'fn f() { let s = name.to_string(); }'
     - 'fn f() { let s = name.clone(); }'
+  should_fix:
+    - before: 'fn f() { let s = name.to_string().clone(); }'
+      after: 'fn f() { let s = name.to_string(); }'
+    - before: 'fn f() { let s = String::from("hello").clone(); }'
+      after: 'fn f() { let s = String::from("hello"); }'

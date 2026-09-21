@@ -145,6 +145,9 @@ slopguard baseline .                 # capture current findings into .slopguard-
 slopguard scan --no-baseline         # ignore the baseline, report everything
 slopguard scan --diff                 # only files changed vs HEAD (staged + unstaged)
 slopguard scan --diff --base main     # only files changed vs main (three-dot diff)
+slopguard scan --fix                  # apply autofix-safe rewrites in place
+slopguard scan --fix --dry-run        # preview the rewrites as a unified diff, write nothing
+slopguard scan --fix --allow-dirty    # rewrite even with uncommitted changes (else refused)
 slopguard list                       # show active rules (with ast/ai type)
 slopguard explain no-unwrap-in-prod  # rule details (prompt template for AI rules)
 slopguard test                       # validate all rule inline tests

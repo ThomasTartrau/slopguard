@@ -5,6 +5,7 @@ pub mod cross_file;
 pub mod disable;
 pub mod escalation;
 pub mod finding;
+pub mod fix;
 pub mod git;
 pub mod metric;
 pub mod preset;

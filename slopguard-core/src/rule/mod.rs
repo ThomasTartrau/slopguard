@@ -92,12 +92,26 @@ impl Category {
     }
 }
 
+/// One rewrite assertion for an autofixable rule: `slopguard test` applies the
+/// rule's `rewrite` to `before` and requires the result to equal `after`. This
+/// is what proves a `rewrite` is correct, alongside `should_match`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FixCase {
+    pub before: String,
+    pub after: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuleTests {
     #[serde(default)]
     pub should_match: Vec<String>,
     #[serde(default)]
     pub should_not_match: Vec<String>,
+    /// Rewrite assertions checked by `slopguard test` for autofixable rules.
+    /// Each case's `before` is rewritten with the rule's `rewrite` and must
+    /// equal `after`. Ignored for rules that are not autofixable.
+    #[serde(default)]
+    pub should_fix: Vec<FixCase>,
     /// Whole-file fixtures for metric rules, resolved against the embedded
     /// ruleset root (builtin rules) or the custom rule directory the rule was
     /// loaded from. A metric cannot be measured on a snippet.
@@ -169,8 +183,31 @@ pub struct Rule {
     pub category: Option<Category>,
     #[serde(default)]
     pub fix: Option<String>,
+    /// ast-grep rewrite (fix) template applied to this rule's match by
+    /// `scan --fix`. Distinct from `fix`, which is a free-text human message:
+    /// `rewrite` carries the replacement pattern (it may reference the rule's
+    /// metavariables). The AST detection pass never reads this field.
+    #[serde(default)]
+    pub rewrite: Option<String>,
+    /// Opt-in marker that this rule's `rewrite` is safe to apply automatically
+    /// (idempotent, no semantic change). `scan --fix` ignores the `rewrite` of
+    /// any rule without it. Defaults to `false`.
+    #[serde(default)]
+    pub autofix_safe: bool,
+    /// Matcher used only by `scan --fix` to locate nodes to rewrite, when it must
+    /// be narrower than the detection `rule` (detect broadly, fix narrowly). A
+    /// rule can flag every variant of a pattern while auto-rewriting only the
+    /// subset whose `rewrite` is provably safe. `null` (the default) means
+    /// `--fix` reuses `rule`. The detection pass never reads this field.
+    #[serde(default, skip_serializing_if = "Value::is_null")]
+    pub autofix_rule: Value,
     #[serde(default)]
     pub rule: Value,
+    /// ast-grep metavariable constraints, a sibling of `rule`. Passed through
+    /// verbatim so a rule can restrict a captured metavariable (e.g. bind the
+    /// receiver of `$R.clone()` to an already-owned value). `null` when unset.
+    #[serde(default, skip_serializing_if = "Value::is_null")]
+    pub constraints: Value,
     /// File-level metric evaluated instead of `rule`. Mutually exclusive with it.
     #[serde(default)]
     pub metric: Option<Metric>,
@@ -229,6 +266,22 @@ impl Rule {
     /// Whether this rule is evaluated by the project-wide pass instead of per file.
     pub fn is_cross_file(&self) -> bool {
         self.cross_file.is_some()
+    }
+
+    /// Whether `scan --fix` may rewrite this rule's matches: it carries a
+    /// `rewrite` template and is explicitly marked `autofix_safe`.
+    pub fn is_autofixable(&self) -> bool {
+        self.autofix_safe && self.rewrite.is_some()
+    }
+
+    /// The matcher `scan --fix` uses to find nodes to rewrite: the dedicated
+    /// `autofix_rule` when set, otherwise the detection `rule`.
+    pub fn fix_matcher(&self) -> &Value {
+        if self.autofix_rule.is_null() {
+            &self.rule
+        } else {
+            &self.autofix_rule
+        }
     }
 
     /// The cross-file analysis this rule requests, `None` for AST and metric rules.

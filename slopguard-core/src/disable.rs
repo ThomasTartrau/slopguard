@@ -27,6 +27,17 @@ fn parse_directives(source: &str) -> Vec<DisableDirective> {
         .collect()
 }
 
+/// Whether a `// slopguard-disable-next-line` directive suppresses `rule_id`
+/// on 1-based `line` of `source`. A directive with no rule id suppresses every
+/// rule; one naming a rule suppresses only that rule. Mirrors the filtering in
+/// [`filter_disabled`] for callers that hold a position rather than a finding
+/// (the `--fix` pass).
+pub fn is_disabled(source: &str, line: usize, rule_id: &RuleId) -> bool {
+    parse_directives(source)
+        .iter()
+        .any(|d| d.target_line == line && d.rule_id.as_ref().is_none_or(|id| id == rule_id))
+}
+
 /// Filter out findings that are suppressed by `// slopguard-disable-next-line`
 /// comments in the source code.
 pub fn filter_disabled(findings: Vec<Finding>, source: &str) -> Vec<Finding> {

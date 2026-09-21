@@ -118,6 +118,18 @@ pub enum Command {
         /// Git ref to diff against (implies a three-dot diff: <ref>...HEAD)
         #[arg(long, value_name = "REF", requires = "diff")]
         base: Option<String>,
+
+        /// Apply autofix-safe rewrites in place (only rules marked autofix_safe)
+        #[arg(long)]
+        fix: bool,
+
+        /// With --fix, print the unified diff of the changes without writing
+        #[arg(long, requires = "fix")]
+        dry_run: bool,
+
+        /// With --fix, rewrite even when the working tree has uncommitted changes
+        #[arg(long, requires = "fix")]
+        allow_dirty: bool,
     },
     /// Show a summary of findings instead of listing them
     Stats {
@@ -495,6 +507,40 @@ mod tests {
         let result =
             Cli::command().try_get_matches_from(["slopguard", "scan", "--base", "main", "."]);
         assert!(result.is_err(), "--base should require --diff");
+    }
+
+    #[test]
+    fn cli_parses_scan_with_fix() {
+        Cli::command()
+            .try_get_matches_from(["slopguard", "scan", "--fix", "."])
+            .expect("scan with --fix should parse");
+    }
+
+    #[test]
+    fn cli_parses_scan_with_fix_dry_run() {
+        Cli::command()
+            .try_get_matches_from(["slopguard", "scan", "--fix", "--dry-run", "."])
+            .expect("scan with --fix --dry-run should parse");
+    }
+
+    #[test]
+    fn cli_parses_scan_with_fix_allow_dirty() {
+        Cli::command()
+            .try_get_matches_from(["slopguard", "scan", "--fix", "--allow-dirty", "."])
+            .expect("scan with --fix --allow-dirty should parse");
+    }
+
+    #[test]
+    fn cli_rejects_dry_run_without_fix() {
+        let result = Cli::command().try_get_matches_from(["slopguard", "scan", "--dry-run", "."]);
+        assert!(result.is_err(), "--dry-run should require --fix");
+    }
+
+    #[test]
+    fn cli_rejects_allow_dirty_without_fix() {
+        let result =
+            Cli::command().try_get_matches_from(["slopguard", "scan", "--allow-dirty", "."]);
+        assert!(result.is_err(), "--allow-dirty should require --fix");
     }
 
     #[test]

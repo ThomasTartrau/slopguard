@@ -42,6 +42,63 @@ tests:
 }
 
 #[test]
+fn parse_rewrite_and_autofix_safe_default_false() {
+    let yaml = r#"
+id: no-rewrite
+language: rust
+severity: warning
+message: "msg"
+rule:
+  pattern: $X.clone()
+"#;
+    let rule = parse_rule(yaml).unwrap();
+    assert_eq!(rule.rewrite, None);
+    assert!(!rule.autofix_safe, "autofix_safe must default to false");
+    assert!(!rule.is_autofixable());
+}
+
+#[test]
+fn parse_rewrite_with_autofix_safe() {
+    let yaml = r#"
+id: no-unnecessary-clone
+language: rust
+severity: warning
+message: "msg"
+fix: "Remove the .clone()."
+rewrite: "$R"
+autofix_safe: true
+rule:
+  pattern: $R.clone()
+"#;
+    let rule = parse_rule(yaml).unwrap();
+    assert_eq!(rule.rewrite.as_deref(), Some("$R"));
+    assert!(rule.autofix_safe);
+    // `fix` (human message) and `rewrite` (pattern) are independent fields.
+    assert_eq!(rule.fix.as_deref(), Some("Remove the .clone()."));
+    assert!(rule.is_autofixable());
+}
+
+#[test]
+fn rewrite_without_autofix_safe_is_not_autofixable() {
+    let yaml = r#"
+id: risky
+language: rust
+severity: warning
+message: "msg"
+rewrite: "$R"
+rule:
+  pattern: $R.clone()
+"#;
+    let rule = parse_rule(yaml).unwrap();
+    assert!(rule.rewrite.is_some());
+    assert!(!rule.autofix_safe);
+    assert!(
+        !rule.is_autofixable(),
+        "a rewrite is inert without autofix_safe"
+    );
+}
+
+#[test]
 fn parse_rule_with_ai_check() {
     let yaml = r#"
 id: ai-rule

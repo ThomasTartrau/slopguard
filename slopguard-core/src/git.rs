@@ -124,6 +124,48 @@ pub fn changed_files(dir: &Path, base: Option<&str>) -> Result<Vec<PathBuf>, Git
     Ok(files)
 }
 
+/// Absolute paths of files with uncommitted changes (staged, unstaged or
+/// untracked) anywhere in the repository containing `dir`.
+///
+/// Used by `scan --fix` to refuse rewriting a dirty tree unless `--allow-dirty`.
+/// Renames are reported under their new name; deletions are excluded since there
+/// is no file left to rewrite.
+pub fn dirty_files(dir: &Path) -> Result<Vec<PathBuf>, GitError> {
+    let root = repo_root(dir)?;
+    let output = run_git(dir, &["status", "--porcelain", "-z"])?;
+    if !output.status.success() {
+        return Err(GitError::Command {
+            args: "status --porcelain".to_string(),
+            stderr: stderr_of(&output),
+        });
+    }
+
+    // `-z` output: each entry is `XY <path>\0`, and a rename adds a second
+    // `<old>\0` field. Two status columns plus a space precede the path.
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut fields = stdout.split('\0').filter(|f| !f.is_empty()).peekable();
+    let mut files = Vec::new();
+    while let Some(entry) = fields.next() {
+        if entry.len() < 3 {
+            continue;
+        }
+        let status = &entry[..2];
+        let path = &entry[3..];
+        // A rename ("R") carries the original path as the next field; skip it.
+        if status.starts_with('R') {
+            fields.next();
+        }
+        // Deletions leave nothing to rewrite.
+        if status.contains('D') {
+            continue;
+        }
+        files.push(root.join(path));
+    }
+    files.sort();
+    files.dedup();
+    Ok(files)
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs::{create_dir_all, write};
@@ -260,6 +302,34 @@ mod tests {
 
         let files = changed_files(dir.path(), None).unwrap();
         assert_eq!(names(&files), vec!["a.rs".to_string()]);
+    }
+
+    #[test]
+    fn dirty_files_reports_modified_and_untracked_not_clean() {
+        let dir = tempdir().unwrap();
+        init_repo(dir.path());
+        write(dir.path().join("committed.rs"), "fn a() {}\n").unwrap();
+        commit(dir.path(), "init");
+
+        // one modified tracked file, one brand-new untracked file
+        write(dir.path().join("committed.rs"), "fn a() { let x = 1; }\n").unwrap();
+        write(dir.path().join("new.rs"), "fn b() {}\n").unwrap();
+
+        let dirty = dirty_files(dir.path()).unwrap();
+        let names = names(&dirty);
+        assert!(names.contains(&"committed.rs".to_string()), "{names:?}");
+        assert!(names.contains(&"new.rs".to_string()), "{names:?}");
+        assert!(dirty.iter().all(|p| p.is_absolute()), "{dirty:?}");
+    }
+
+    #[test]
+    fn dirty_files_empty_on_clean_tree() {
+        let dir = tempdir().unwrap();
+        init_repo(dir.path());
+        write(dir.path().join("a.rs"), "fn a() {}\n").unwrap();
+        commit(dir.path(), "init");
+
+        assert!(dirty_files(dir.path()).unwrap().is_empty());
     }
 
     #[test]

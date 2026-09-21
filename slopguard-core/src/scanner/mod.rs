@@ -55,6 +55,14 @@ pub struct AstGrepRule<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<&'a str>,
     pub rule: &'a Value,
+    /// ast-grep metavariable constraints (sibling of `rule`). `None` when the
+    /// slopguard rule sets none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub constraints: Option<&'a Value>,
+    /// ast-grep `fix` template. Only set by the `--fix` pass (from the rule's
+    /// `rewrite`); the detection pass leaves it `None`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fix: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub files: Option<&'a [String]>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -106,7 +114,7 @@ fn extension_to_lang(path: &Path) -> Option<SupportLang> {
         .filter(|lang| Language::iter().any(|l| l.ast_grep_langs().contains(lang)))
 }
 
-fn support_lang_to_language(lang: SupportLang) -> Language {
+pub(crate) fn support_lang_to_language(lang: SupportLang) -> Language {
     match lang {
         SupportLang::Rust => Language::Rust,
         _ => Language::TypeScript,
@@ -130,6 +138,8 @@ fn compile_rule(rule: &Rule, lang: SupportLang) -> Result<RuleConfig<SupportLang
         message: &rule.message,
         note: rule.note.as_deref(),
         rule: &rule.rule,
+        constraints: (!rule.constraints.is_null()).then_some(&rule.constraints),
+        fix: None,
         files: rule.files.as_deref(),
         ignores: rule.ignores.as_deref(),
     };
@@ -218,7 +228,7 @@ fn compile_rules<'a>(
     })
 }
 
-fn build_glob_set(patterns: &[String]) -> Result<GlobSet, GlobError> {
+pub(crate) fn build_glob_set(patterns: &[String]) -> Result<GlobSet, GlobError> {
     let mut builder = GlobSetBuilder::new();
     for pattern in patterns {
         builder.add(Glob::new(pattern)?);
@@ -433,7 +443,7 @@ fn append_cross_file(
 }
 
 /// Walk `paths` (gitignore-aware) and keep the source files slopguard can parse.
-fn walk_files(paths: &[PathBuf], ignores: &GlobSet) -> Vec<(PathBuf, SupportLang)> {
+pub(crate) fn walk_files(paths: &[PathBuf], ignores: &GlobSet) -> Vec<(PathBuf, SupportLang)> {
     paths
         .iter()
         .flat_map(|path| WalkBuilder::new(path).build().flatten())
@@ -449,7 +459,7 @@ fn walk_files(paths: &[PathBuf], ignores: &GlobSet) -> Vec<(PathBuf, SupportLang
 ///
 /// Deliberately not gitignore-aware: a file git reports as changed must be
 /// scanned even when it lives under a hidden or ignored directory.
-fn explicit_files(files: &[PathBuf], ignores: &GlobSet) -> Vec<(PathBuf, SupportLang)> {
+pub(crate) fn explicit_files(files: &[PathBuf], ignores: &GlobSet) -> Vec<(PathBuf, SupportLang)> {
     files
         .iter()
         .filter(|path| path.is_file())
