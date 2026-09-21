@@ -50,12 +50,20 @@ fn scan_collected(
     compiled: &CompiledRules,
     run_cross_file: bool,
 ) -> ScanResult {
-    let collect_symbols = !compiled.cross_file.is_empty();
+    let (per_file, project) = compiled.engines();
+    let collect_symbols = project.iter().any(|e| e.needs_symbols());
     let collect_imports = !compiled.resolution.is_empty();
     let scans: Vec<(PathBuf, FileScan)> = files
         .par_iter()
         .map(|(path, lang)| {
-            let scan = scan_file(path, *lang, compiled, collect_symbols, collect_imports);
+            let scan = scan_file(
+                path,
+                *lang,
+                &per_file,
+                &compiled.test_paths,
+                collect_symbols,
+                collect_imports,
+            );
             (path.clone(), scan)
         })
         .collect();
@@ -72,7 +80,7 @@ fn scan_collected(
             import_contributions.push((path, scan.imports));
         }
     }
-    append_cross_file(&mut findings, compiled, run_cross_file, &contributions);
+    append_cross_file(&mut findings, &project, run_cross_file, &contributions);
     append_resolution(&mut findings, compiled, &import_contributions);
     normalize_findings(&mut findings);
 
@@ -107,7 +115,8 @@ fn scan_collected_cached(
     prune: bool,
     run_cross_file: bool,
 ) -> ScanResult {
-    let collect_symbols = !compiled.cross_file.is_empty();
+    let (per_file, project) = compiled.engines();
+    let collect_symbols = project.iter().any(|e| e.needs_symbols());
     let collect_imports = !compiled.resolution.is_empty();
     let current_rules_hash = rules_hash(rules);
     let store = CacheStore::with_dir(cache_dir.to_path_buf()).scoped_to_rules(&current_rules_hash);
@@ -166,7 +175,8 @@ fn scan_collected_cached(
             let scan = scan_file(
                 &work.path,
                 work.lang,
-                compiled,
+                &per_file,
+                &compiled.test_paths,
                 collect_symbols,
                 collect_imports,
             );
@@ -193,7 +203,7 @@ fn scan_collected_cached(
     // Cross-file and resolution evaluation are never cached: they re-run on every
     // scan (cross-file from the assembled index, resolution from the manifests on
     // disk, so a manifest edit is reflected even for an unchanged file).
-    append_cross_file(&mut all_findings, compiled, run_cross_file, &contributions);
+    append_cross_file(&mut all_findings, &project, run_cross_file, &contributions);
     append_resolution(&mut all_findings, compiled, &import_contributions);
 
     if prune {
