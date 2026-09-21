@@ -429,3 +429,68 @@ fn invalid_classifier_transport_is_an_error() {
         "expected Parse error for an unknown transport, got: {err:?}"
     );
 }
+
+#[test]
+fn parse_rule_sources_git_and_local() {
+    let dir = tempdir().unwrap();
+    let toml = r#"
+[[rules.sources]]
+git = "https://gitlab.com/org/slopguard-rules.git"
+ref = "v1.2.0"
+path = "rules/"
+
+[[rules.sources]]
+path = "../shared-rules"
+"#;
+    write(dir.path().join("slopguard.toml"), toml).unwrap();
+
+    let cfg = load_config_from(None, dir.path()).unwrap();
+    assert_eq!(cfg.rules.sources.len(), 2);
+
+    let git = &cfg.rules.sources[0];
+    assert_eq!(
+        git.git.as_deref(),
+        Some("https://gitlab.com/org/slopguard-rules.git")
+    );
+    assert_eq!(git.git_ref.as_deref(), Some("v1.2.0"));
+    assert_eq!(git.path, Some(PathBuf::from("rules/")));
+    assert!(git.is_git());
+
+    let local = &cfg.rules.sources[1];
+    assert_eq!(local.git, None);
+    assert_eq!(local.git_ref, None);
+    assert_eq!(local.path, Some(PathBuf::from("../shared-rules")));
+    assert!(!local.is_git());
+}
+
+#[test]
+fn rule_source_without_git_or_path_is_rejected() {
+    let dir = tempdir().unwrap();
+    write(
+        dir.path().join("slopguard.toml"),
+        "[[rules.sources]]\nref = \"main\"\n",
+    )
+    .unwrap();
+
+    let err = load_config_from(None, dir.path()).unwrap_err();
+    assert!(
+        matches!(err, ConfigError::InvalidSource(_)),
+        "expected InvalidSource for a source without git or path, got: {err:?}"
+    );
+}
+
+#[test]
+fn rule_source_ref_without_git_is_rejected() {
+    let dir = tempdir().unwrap();
+    write(
+        dir.path().join("slopguard.toml"),
+        "[[rules.sources]]\npath = \"../shared-rules\"\nref = \"main\"\n",
+    )
+    .unwrap();
+
+    let err = load_config_from(None, dir.path()).unwrap_err();
+    assert!(
+        matches!(err, ConfigError::InvalidSource(_)),
+        "expected InvalidSource for a ref without git, got: {err:?}"
+    );
+}

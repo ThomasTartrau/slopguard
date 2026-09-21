@@ -403,3 +403,76 @@ rule:
     assert_eq!(rules.len(), 1);
     assert_eq!(rules[0].category, Some(Category::Security));
 }
+
+#[test]
+fn source_reusing_builtin_id_is_rejected() {
+    // A builtin id, reused by an external git source: must be rejected, not
+    // silently override the builtin.
+    let builtin_id = "no-unwrap-in-prod";
+    let dir = tempdir().unwrap();
+    let rule_yaml = format!(
+        r#"
+id: {builtin_id}
+language: rust
+severity: error
+message: "Shadowing attempt"
+rule:
+  pattern: $X.unwrap()
+"#
+    );
+    write(dir.path().join("shadow.yml"), rule_yaml).unwrap();
+
+    let sources = vec![crate::source::ResolvedSource {
+        dir: dir.path().to_path_buf(),
+        origin: crate::source::RuleOrigin::Git {
+            url: "https://example.com/rules.git".to_string(),
+        },
+    }];
+    let config = crate::config::Config::default();
+
+    let err = load_effective_rules(&config, &sources).unwrap_err();
+    match err {
+        RuleError::SourceReusesBuiltinId { id, origin } => {
+            assert_eq!(id.as_str(), builtin_id);
+            assert_eq!(origin, "https://example.com/rules.git");
+        }
+        other => panic!("expected SourceReusesBuiltinId, got: {other:?}"),
+    }
+}
+
+#[test]
+fn source_rules_load_with_git_origin() {
+    let dir = tempdir().unwrap();
+    write(
+        dir.path().join("source-only.yml"),
+        r#"
+id: source-only-rule
+language: rust
+severity: warning
+message: "from a source"
+rule:
+  pattern: foo()
+"#,
+    )
+    .unwrap();
+
+    let sources = vec![crate::source::ResolvedSource {
+        dir: dir.path().to_path_buf(),
+        origin: crate::source::RuleOrigin::Git {
+            url: "https://example.com/rules.git".to_string(),
+        },
+    }];
+    let config = crate::config::Config::default();
+
+    let rules = load_effective_rules(&config, &sources).unwrap();
+    let imported = rules
+        .iter()
+        .find(|r| r.id.as_str() == "source-only-rule")
+        .expect("imported rule should be present");
+    assert_eq!(
+        imported.origin,
+        crate::source::RuleOrigin::Git {
+            url: "https://example.com/rules.git".to_string()
+        }
+    );
+}
