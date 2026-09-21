@@ -1,0 +1,12 @@
+id: unresolved-import
+language: rust
+severity: error
+category: correctness
+resolution: unresolved_import
+message: "Unresolved import '$import': not a Cargo.toml dependency, a std crate, or a local module."
+note: "The crate root of this `use` resolves to nothing: it is not declared in Cargo.toml (dependencies, dev-dependencies, build-dependencies, or workspace.dependencies), not std/core/alloc/proc_macro/test, not a crate/self/super path, and not a module declared in this file. AI generators often invent crate names; this catches them before the compiler does. Only the crate root is checked, never a deep path."
+ignores:
+  - "**/target/**"
+  - "**/node_modules/**"
+  - "**/.worktrees/**"
+  - "**/dist/**"
