@@ -3,11 +3,10 @@ use std::fs::read_to_string;
 use std::path::{Path, PathBuf};
 
 use ast_grep_config::{
-    CombinedScan, GlobalRules, RuleCollection, RuleConfig, RuleConfigError, SerializableRuleConfig,
+    GlobalRules, RuleCollection, RuleConfig, RuleConfigError, SerializableRuleConfig,
 };
 use ast_grep_core::tree_sitter::LanguageExt;
 use ast_grep_core::Language as AstLanguage;
-use ast_grep_core::{AstGrep, Doc};
 use ast_grep_language::SupportLang;
 use globset::{Error as GlobError, Glob, GlobSet, GlobSetBuilder};
 use ignore::WalkBuilder;
@@ -20,11 +19,16 @@ use thiserror::Error;
 use crate::cross_file::{self, CrossFileKind, DeclFilter, FileSymbols, SymbolIndex};
 use crate::disable::filter_disabled;
 use crate::finding::Finding;
-use crate::metric::{self, Metric};
 use crate::resolution::{self, FileImports, ManifestResolver, ResolutionFilter, ResolutionKind};
 use crate::rule::{Language, Rule, RuleId, Severity};
 use crate::test_filter::{CfgTestRanges, TestPaths};
 
+use engine::{
+    AstEngine, BoxedEngine, CrossFileEngine, CrossFileRule, EngineScope, FileContext, MetricEngine,
+    MetricRule, ProjectContext, RuleContext,
+};
+
+mod engine;
 mod orchestrate;
 
 pub use orchestrate::{count_severities, scan, scan_cached, scan_files, scan_files_cached};
@@ -71,7 +75,8 @@ pub struct AstGrepRule<'a> {
 }
 
 /// Rules compiled for scanning, plus a way back to the slopguard rule that
-/// produced each ast-grep config.
+/// produced each ast-grep config. Holds the raw compiled data; the registered
+/// [`RuleEngine`]s that read it are built on demand.
 struct CompiledRules<'a> {
     collection: RuleCollection<SupportLang>,
     by_id: HashMap<(&'a str, Language), &'a Rule>,
@@ -83,40 +88,39 @@ struct CompiledRules<'a> {
     test_paths: TestPaths,
 }
 
-/// A cross-file rule prepared for scanning: kind resolved and the declaration
-/// filter compiled once.
-struct CrossFileRule<'a> {
-    rule: &'a Rule,
-    kind: CrossFileKind,
-    decl_filter: DeclFilter,
+impl CompiledRules<'_> {
+    /// The registered engines, split into the per-file phase and the
+    /// project-level phase by their declared [`EngineScope`]. The AST engine is
+    /// always registered; the metric and cross-file engines only when rules of
+    /// their kind exist.
+    fn engines(&self) -> (Vec<BoxedEngine<'_>>, Vec<BoxedEngine<'_>>) {
+        let mut all: Vec<BoxedEngine<'_>> = vec![Box::new(AstEngine {
+            collection: &self.collection,
+            by_id: &self.by_id,
+        })];
+        if !self.metrics.is_empty() {
+            all.push(Box::new(MetricEngine {
+                rules: &self.metrics,
+            }));
+        }
+        if !self.cross_file.is_empty() {
+            all.push(Box::new(CrossFileEngine {
+                rules: &self.cross_file,
+            }));
+        }
+        all.into_iter()
+            .partition(|e| matches!(e.scope(), EngineScope::PerFile))
+    }
 }
 
 /// A resolution rule prepared for scanning: kind resolved and the file filter
-/// compiled once.
+/// compiled once. Resolution runs outside the [`RuleEngine`] partition: it
+/// resolves each file's imports against on-disk manifests after the per-file
+/// pass, so a manifest edit is reflected even for an unchanged file.
 struct ResolutionRule<'a> {
     rule: &'a Rule,
     kind: ResolutionKind,
     filter: ResolutionFilter,
-}
-
-/// A metric rule prepared for scanning: threshold resolved and `files` /
-/// `ignores` globs compiled once. ast-grep applies those globs for AST rules;
-/// metric rules are evaluated outside ast-grep so they apply them here.
-struct MetricRule<'a> {
-    rule: &'a Rule,
-    metric: Metric,
-    threshold: f64,
-    min_lines: Option<usize>,
-    files: Option<GlobSet>,
-    ignores: Option<GlobSet>,
-}
-
-impl MetricRule<'_> {
-    fn applies_to(&self, path: &Path, lang: &Language) -> bool {
-        self.rule.language == *lang
-            && self.files.as_ref().is_none_or(|g| g.is_match(path))
-            && !self.ignores.as_ref().is_some_and(|g| g.is_match(path))
-    }
 }
 
 fn extension_to_lang(path: &Path) -> Option<SupportLang> {
@@ -269,56 +273,6 @@ pub(crate) fn build_glob_set(patterns: &[String]) -> Result<GlobSet, GlobError> 
     builder.build()
 }
 
-/// One finding per metric rule whose measured value exceeds its threshold.
-///
-/// File-level findings have no source position, so they are anchored at 1:1.
-/// `skip_test_code` drops the whole file: a line-1 finding can never be inside
-/// a `#[cfg(test)]` block.
-fn metric_findings<D: Doc>(
-    metrics: &[&MetricRule],
-    path: &Path,
-    root: &AstGrep<D>,
-    source: &str,
-    lang: &Language,
-    test_paths: &TestPaths,
-    cfg_test: Option<&CfgTestRanges>,
-) -> Vec<Finding> {
-    metrics
-        .iter()
-        .filter(|m| !(m.rule.skip_test_code && test_paths.is_test(path)))
-        .filter(|m| {
-            m.min_lines
-                .is_none_or(|floor| source.lines().count() >= floor)
-        })
-        .filter_map(|m| {
-            // A `skip_test_code` rule also ignores inline `#[cfg(test)]` code, so
-            // a production file's test module does not inflate the metric.
-            let exclude = m.rule.skip_test_code.then_some(cfg_test).flatten();
-            let value = metric::compute(m.metric, lang, root, source, exclude);
-            if !metric::exceeds(value, m.threshold) {
-                return None;
-            }
-            let rendered = m.metric.format_value(value);
-            Some(Finding {
-                rule_id: m.rule.id.clone(),
-                severity: m.rule.severity.clone(),
-                category: m.rule.category.clone().unwrap_or_default(),
-                message: m.rule.message.replace("$value", &rendered),
-                note: m.rule.note.clone(),
-                fix: m.rule.fix.clone(),
-                file: path.to_path_buf(),
-                line: 1,
-                column: 1,
-                end_line: 1,
-                end_column: 1,
-                matched_text: m.metric.describe(value),
-                confidence: None,
-                escalated: false,
-            })
-        })
-        .collect()
-}
-
 /// One file's contribution to a scan: its findings plus, when a cross-file
 /// rule is active, the symbols it adds to the project index. Both come out of
 /// a single parse.
@@ -332,23 +286,18 @@ struct FileScan {
 fn scan_file(
     path: &Path,
     lang: SupportLang,
-    rules: &CompiledRules,
+    per_file: &[BoxedEngine],
+    test_paths: &TestPaths,
     collect_symbols: bool,
     collect_imports: bool,
 ) -> FileScan {
-    let rule_lang = support_lang_to_language(lang);
-    let applicable = rules.collection.get_rule_from_lang(path, lang);
-    let metrics: Vec<&MetricRule> = rules
-        .metrics
-        .iter()
-        .filter(|m| m.applies_to(path, &rule_lang))
-        .collect();
+    let applies = per_file.iter().any(|e| e.applies_to_file(path, lang));
     // A run scoped to a single cross-file rule has no ast-grep and no metric
     // rule, yet the file still has to be parsed for its symbols. The same holds
     // for a resolution-only run and its imports.
     let want_symbols = collect_symbols && lang == SupportLang::Rust;
     let want_imports = collect_imports;
-    if applicable.is_empty() && metrics.is_empty() && !want_symbols && !want_imports {
+    if !applies && !want_symbols && !want_imports {
         return FileScan::default();
     }
     let Ok(source) = read_to_string(path) else {
@@ -356,70 +305,24 @@ fn scan_file(
     };
 
     let root = lang.ast_grep(&source);
-    // Built once and shared by the finding filter and the symbol extractor.
+    // Built once and shared by every per-file engine and the symbol extractor.
     let cfg_test = (lang == SupportLang::Rust).then(|| CfgTestRanges::from_root(&root));
 
-    let mut findings: Vec<Finding> = if applicable.is_empty() {
-        Vec::new()
-    } else {
-        let combined = CombinedScan::new(applicable);
-        let result = combined.scan(&root, false);
-
-        let cfg_test = cfg_test.as_ref();
-        let is_test_file = rules.test_paths.is_test(path);
-
-        result
-            .matches
-            .into_iter()
-            .filter_map(|(config, matches)| {
-                let rule = rules.by_id.get(&(config.id.as_str(), rule_lang.clone()))?;
-                Some((*rule, matches))
-            })
-            .flat_map(|(rule, matches)| {
-                let skip_test_code = rule.skip_test_code;
-                matches
-                    .into_iter()
-                    .map(move |node_match| {
-                        let start = node_match.start_pos();
-                        let end = node_match.end_pos();
-                        Finding {
-                            rule_id: rule.id.clone(),
-                            severity: rule.severity.clone(),
-                            category: rule.category.clone().unwrap_or_default(),
-                            message: rule.message.clone(),
-                            note: rule.note.clone(),
-                            fix: rule.fix.clone(),
-                            file: path.to_path_buf(),
-                            line: start.line() + 1,
-                            column: start.byte_point().1 + 1,
-                            end_line: end.line() + 1,
-                            end_column: end.byte_point().1 + 1,
-                            matched_text: node_match.text().to_string(),
-                            confidence: None,
-                            escalated: false,
-                        }
-                    })
-                    .filter(move |f| {
-                        if !skip_test_code {
-                            return true;
-                        }
-                        let in_test_code =
-                            is_test_file || cfg_test.is_some_and(|r| r.contains_line(f.line));
-                        !in_test_code
-                    })
-            })
-            .collect()
-    };
-
-    findings.extend(metric_findings(
-        &metrics,
+    let ctx = RuleContext::File(FileContext {
         path,
-        &root,
-        &source,
-        &rule_lang,
-        &rules.test_paths,
-        cfg_test.as_ref(),
-    ));
+        lang,
+        rule_lang: support_lang_to_language(lang),
+        source: &source,
+        root: &root,
+        cfg_test: cfg_test.as_ref(),
+        is_test_file: test_paths.is_test(path),
+        test_paths,
+    });
+
+    let mut findings: Vec<Finding> = Vec::new();
+    for engine in per_file {
+        findings.extend(engine.evaluate(&ctx));
+    }
 
     // Symbols are not run through `filter_disabled`: suppression applies to the
     // cross-file findings emitted later, against the declaration file's source.
@@ -432,7 +335,7 @@ fn scan_file(
     // later against manifests, so a manifest edit is reflected without a file
     // change. Not filtered here: suppression applies to the resolution findings.
     let imports = if want_imports {
-        resolution::extract_imports(&rule_lang, &root)
+        resolution::extract_imports(&support_lang_to_language(lang), &root)
     } else {
         FileImports::default()
     };
@@ -444,48 +347,25 @@ fn scan_file(
     }
 }
 
-/// Assemble the project index from every file's contribution, evaluate each
-/// active cross-file rule, then drop the findings a disable comment suppresses
-/// in the file that declares the symbol.
-fn cross_file_findings(
-    rules: &[CrossFileRule<'_>],
-    contributions: &[(PathBuf, FileSymbols)],
-) -> Vec<Finding> {
-    let index = SymbolIndex::build(contributions.iter().map(|(p, s)| (p.as_path(), s)));
-    let mut by_file: HashMap<PathBuf, Vec<Finding>> = HashMap::new();
-    for rule in rules {
-        let found = cross_file::evaluate(rule.rule, rule.kind, &index, &rule.decl_filter);
-        for finding in found {
-            by_file
-                .entry(finding.file.clone())
-                .or_default()
-                .push(finding);
-        }
-    }
-    by_file
-        .into_iter()
-        .flat_map(|(path, findings)| match read_to_string(&path) {
-            // A file that can no longer be read keeps its findings unfiltered
-            // rather than losing them.
-            Ok(source) => filter_disabled(findings, &source),
-            Err(_) => findings,
-        })
-        .collect()
-}
-
-/// Run the cross-file pass and append its findings, if it is due. A full scan
-/// asks for it via `run_cross_file`; a partial scan (`--diff`, explicit files)
-/// collects contributions to warm the cache but leaves the index incomplete, so
-/// it must not evaluate. Centralises the `run_cross_file && has cross-file
-/// rules` invariant shared by both scan paths.
+/// Run the project-level engines and append their findings, if they are due.
+///
+/// A full scan asks for it via `run_cross_file`; a partial scan (`--diff`,
+/// explicit files) collects contributions to warm the cache but leaves the
+/// index incomplete, so it must not evaluate. Centralises the `run_cross_file &&
+/// has project engines` invariant shared by both scan paths.
 fn append_cross_file(
     findings: &mut Vec<Finding>,
-    compiled: &CompiledRules,
+    project: &[BoxedEngine],
     run_cross_file: bool,
     contributions: &[(PathBuf, FileSymbols)],
 ) {
-    if run_cross_file && !compiled.cross_file.is_empty() {
-        findings.extend(cross_file_findings(&compiled.cross_file, contributions));
+    if !run_cross_file || project.is_empty() {
+        return;
+    }
+    let index = SymbolIndex::build(contributions.iter().map(|(p, s)| (p.as_path(), s)));
+    let ctx = RuleContext::Project(ProjectContext { index: &index });
+    for engine in project {
+        findings.extend(engine.evaluate(&ctx));
     }
 }
 
