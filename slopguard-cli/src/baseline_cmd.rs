@@ -113,6 +113,7 @@ pub fn run_baseline(opts: BaselineOpts) -> Result<(), AppError> {
         no_cache,
         cache_dir,
         no_ai,
+        report_unused: false,
         diff: false,
         diff_base: None,
         offline,

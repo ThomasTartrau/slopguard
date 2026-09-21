@@ -1,11 +1,23 @@
+use std::path::Path;
+
 use crate::finding::Finding;
-use crate::rule::RuleId;
+use crate::rule::{Category, RuleId, Severity};
 
 const DISABLE_MARKER: &str = "slopguard-disable-next-line";
 
+/// Internal rule id for a disable directive that suppressed nothing, reported
+/// only when `--report-unused-disable` is set. Not a YAML rule.
+pub const UNUSED_DISABLE_RULE_ID: &str = "unused-disable";
+
 struct DisableDirective {
+    /// 1-based line of the `// slopguard-disable-next-line` comment itself.
+    comment_line: usize,
+    /// 1-based line the directive suppresses findings on (the line after it).
     target_line: usize,
     rule_id: Option<RuleId>,
+    /// The trimmed comment text, used as `matched_text` when reporting the
+    /// directive itself as unused.
+    comment_text: String,
 }
 
 fn parse_directives(source: &str) -> Vec<DisableDirective> {
@@ -20,8 +32,10 @@ fn parse_directives(source: &str) -> Vec<DisableDirective> {
                 .strip_prefix(DISABLE_MARKER)?;
             let rest = rest.trim();
             Some(DisableDirective {
+                comment_line: idx + 1,
                 target_line: idx + 2,
                 rule_id: (!rest.is_empty()).then(|| RuleId::from(rest)),
+                comment_text: line.trim().to_string(),
             })
         })
         .collect()
@@ -56,14 +70,60 @@ pub fn filter_disabled(findings: Vec<Finding>, source: &str) -> Vec<Finding> {
         .collect()
 }
 
+/// Report the disable directives in `source` that suppressed nothing, given the
+/// file's raw (pre-suppression) findings.
+///
+/// A targeted directive (`// slopguard-disable-next-line rule-x`) is unused when
+/// no raw finding for `rule-x` lands on the following line; a blanket directive
+/// (no rule id) is unused when no raw finding at all lands there. Consumption is
+/// judged against the raw findings, so for an AI rule it reflects the AST
+/// pre-filter match, not the LLM verdict, and stays independent of the provider.
+///
+/// Each unused directive becomes a `warning`/`slop` [`Finding`] with rule id
+/// [`UNUSED_DISABLE_RULE_ID`], anchored on the comment line.
+pub fn unused_disable_findings(file: &Path, source: &str, raw: &[Finding]) -> Vec<Finding> {
+    parse_directives(source)
+        .into_iter()
+        .filter(|d| {
+            !raw.iter().any(|f| {
+                f.line == d.target_line && d.rule_id.as_ref().is_none_or(|id| *id == f.rule_id)
+            })
+        })
+        .map(|d| {
+            let message = match &d.rule_id {
+                Some(id) => format!(
+                    "unused slopguard-disable-next-line for '{id}': it suppresses no finding"
+                ),
+                None => "unused slopguard-disable-next-line: it suppresses no finding".to_string(),
+            };
+            Finding {
+                rule_id: RuleId::from(UNUSED_DISABLE_RULE_ID),
+                severity: Severity::Warning,
+                category: Category::Slop,
+                message,
+                note: None,
+                fix: None,
+                file: file.to_path_buf(),
+                line: d.comment_line,
+                column: 1,
+                end_line: d.comment_line,
+                end_column: d.comment_text.chars().count() + 1,
+                matched_text: d.comment_text,
+                confidence: None,
+                escalated: false,
+            }
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
     use crate::finding::Finding;
     use crate::rule::{Category, RuleId, Severity};
 
-    use super::filter_disabled;
+    use super::{filter_disabled, unused_disable_findings, UNUSED_DISABLE_RULE_ID};
 
     fn make_finding(rule_id: &str, line: usize) -> Finding {
         Finding {
@@ -186,5 +246,67 @@ mod tests {
         let findings: Vec<Finding> = vec![];
         let result = filter_disabled(findings, source);
         assert!(result.is_empty());
+    }
+
+    #[test]
+    fn unused_targeted_directive_is_reported() {
+        // Directive targets a rule, but no raw finding for that rule lands on the
+        // next line: the directive suppresses nothing.
+        let source = "fn main() {\n    // slopguard-disable-next-line no-unwrap-in-prod\n    let x = 1;\n}\n";
+        let unused = unused_disable_findings(Path::new("test.rs"), source, &[]);
+        assert_eq!(unused.len(), 1);
+        assert_eq!(unused[0].rule_id, RuleId::from(UNUSED_DISABLE_RULE_ID));
+        assert_eq!(unused[0].line, 2, "anchored on the comment line");
+        assert_eq!(unused[0].severity, Severity::Warning);
+        assert_eq!(unused[0].category, Category::Slop);
+        assert!(unused[0].message.contains("no-unwrap-in-prod"));
+    }
+
+    #[test]
+    fn used_targeted_directive_is_not_reported() {
+        // A raw finding for the targeted rule lands on the next line: used.
+        let source = "fn main() {\n    // slopguard-disable-next-line no-unwrap-in-prod\n    foo().unwrap();\n}\n";
+        let raw = vec![make_finding("no-unwrap-in-prod", 3)];
+        let unused = unused_disable_findings(Path::new("test.rs"), source, &raw);
+        assert!(unused.is_empty());
+    }
+
+    #[test]
+    fn unused_global_directive_is_reported() {
+        // Blanket directive with no raw finding on the next line.
+        let source = "fn main() {\n    // slopguard-disable-next-line\n    let x = 1;\n}\n";
+        let unused = unused_disable_findings(Path::new("test.rs"), source, &[]);
+        assert_eq!(unused.len(), 1);
+        assert_eq!(unused[0].line, 2);
+        assert!(
+            !unused[0].message.contains("for '"),
+            "blanket directive message names no rule"
+        );
+    }
+
+    #[test]
+    fn used_global_directive_is_not_reported() {
+        let source = "fn main() {\n    // slopguard-disable-next-line\n    foo().unwrap();\n}\n";
+        let raw = vec![make_finding("no-unwrap-in-prod", 3)];
+        let unused = unused_disable_findings(Path::new("test.rs"), source, &raw);
+        assert!(unused.is_empty());
+    }
+
+    #[test]
+    fn targeted_directive_for_other_rule_is_unused() {
+        // The directive targets no-expect-in-prod, but the finding on the next
+        // line is no-unwrap-in-prod: the directive suppressed nothing.
+        let source = "fn main() {\n    // slopguard-disable-next-line no-expect-in-prod\n    foo().unwrap();\n}\n";
+        let raw = vec![make_finding("no-unwrap-in-prod", 3)];
+        let unused = unused_disable_findings(Path::new("test.rs"), source, &raw);
+        assert_eq!(unused.len(), 1);
+        assert!(unused[0].message.contains("no-expect-in-prod"));
+    }
+
+    #[test]
+    fn no_directives_reports_nothing() {
+        let source = "fn main() {\n    foo().unwrap();\n}\n";
+        let raw = vec![make_finding("no-unwrap-in-prod", 2)];
+        assert!(unused_disable_findings(Path::new("test.rs"), source, &raw).is_empty());
     }
 }
