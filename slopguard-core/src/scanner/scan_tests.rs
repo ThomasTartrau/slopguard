@@ -374,7 +374,7 @@ fn all_builtin_rules_compile() {
         compile_rules(&rules, TestPaths::default()).expect("all builtin rules should compile");
     let ast_rule_count = rules
         .iter()
-        .filter(|r| !r.is_metric() && !r.is_cross_file())
+        .filter(|r| !r.is_metric() && !r.is_cross_file() && !r.is_resolution())
         .count();
     assert_eq!(compiled.by_id.len(), ast_rule_count);
     assert!(
