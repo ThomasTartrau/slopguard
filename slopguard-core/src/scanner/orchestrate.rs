@@ -49,11 +49,18 @@ fn scan_collected(
     compiled: &CompiledRules,
     run_cross_file: bool,
 ) -> ScanResult {
-    let collect_symbols = !compiled.cross_file.is_empty();
+    let (per_file, project) = compiled.engines();
+    let collect_symbols = project.iter().any(|e| e.needs_symbols());
     let scans: Vec<(PathBuf, FileScan)> = files
         .par_iter()
         .map(|(path, lang)| {
-            let scan = scan_file(path, *lang, compiled, collect_symbols);
+            let scan = scan_file(
+                path,
+                *lang,
+                &per_file,
+                &compiled.test_paths,
+                collect_symbols,
+            );
             (path.clone(), scan)
         })
         .collect();
@@ -66,7 +73,7 @@ fn scan_collected(
             contributions.push((path, scan.symbols));
         }
     }
-    append_cross_file(&mut findings, compiled, run_cross_file, &contributions);
+    append_cross_file(&mut findings, &project, run_cross_file, &contributions);
     normalize_findings(&mut findings);
 
     let (errors, warnings) = count_severities(&findings);
@@ -100,7 +107,8 @@ fn scan_collected_cached(
     prune: bool,
     run_cross_file: bool,
 ) -> ScanResult {
-    let collect_symbols = !compiled.cross_file.is_empty();
+    let (per_file, project) = compiled.engines();
+    let collect_symbols = project.iter().any(|e| e.needs_symbols());
     let current_rules_hash = rules_hash(rules);
     let store = CacheStore::with_dir(cache_dir.to_path_buf()).scoped_to_rules(&current_rules_hash);
     let rules_changed = store
@@ -151,7 +159,13 @@ fn scan_collected_cached(
     let scanned: Vec<(PathBuf, String, FileScan)> = to_scan
         .par_iter()
         .map(|work| {
-            let scan = scan_file(&work.path, work.lang, compiled, collect_symbols);
+            let scan = scan_file(
+                &work.path,
+                work.lang,
+                &per_file,
+                &compiled.test_paths,
+                collect_symbols,
+            );
             (work.path.clone(), work.hash.clone(), scan)
         })
         .collect();
@@ -170,7 +184,7 @@ fn scan_collected_cached(
 
     // Cross-file evaluation itself is never cached: it re-runs on every scan
     // from the assembled index.
-    append_cross_file(&mut all_findings, compiled, run_cross_file, &contributions);
+    append_cross_file(&mut all_findings, &project, run_cross_file, &contributions);
 
     if prune {
         let current_hashes: Vec<String> =

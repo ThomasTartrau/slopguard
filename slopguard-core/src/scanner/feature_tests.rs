@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::fs::{create_dir, write};
 
 use tempfile::tempdir;
@@ -467,5 +468,43 @@ fn cross_file_rule_with_no_ast_rules_still_parses_files() {
         result.findings.len(),
         1,
         "a cross-file-only ruleset must still parse every file"
+    );
+}
+
+#[test]
+fn all_engine_kinds_run_and_aggregate() {
+    // One scan with an AST rule (per-file), a metric rule (per-file) and a
+    // cross-file rule (project-level) must return the union of their findings:
+    // the orchestrator iterates every registered engine across both scopes.
+    let dir = tempdir().unwrap();
+    let mut service = String::from(
+        "fn main() {\n    foo().unwrap();\n}\npub trait Repo {\n    fn get(&self);\n}\n",
+    );
+    // Push the file past the file_lines threshold of 10.
+    service.push_str(&rust_lines(10));
+    write(dir.path().join("service.rs"), service).unwrap();
+    write(
+        dir.path().join("postgres.rs"),
+        "struct Pg;\nimpl Repo for Pg {\n    fn get(&self) {}\n}\n",
+    )
+    .unwrap();
+
+    let result = scan_dir(
+        dir.path(),
+        &[unwrap_rule(), file_lines_rule(), single_impl_trait_rule()],
+    );
+
+    let ids: HashSet<RuleId> = result.findings.iter().map(|f| f.rule_id.clone()).collect();
+    assert!(
+        ids.contains(&RuleId::from("test-unwrap")),
+        "AST engine finding missing: {ids:?}"
+    );
+    assert!(
+        ids.contains(&RuleId::from("test-file-lines")),
+        "metric engine finding missing: {ids:?}"
+    );
+    assert!(
+        ids.contains(&RuleId::from("no-single-impl-trait")),
+        "cross-file engine finding missing: {ids:?}"
     );
 }
