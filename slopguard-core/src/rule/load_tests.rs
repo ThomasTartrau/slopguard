@@ -52,8 +52,8 @@ fn load_all_builtin_rules() {
     let rules = load_builtin_rules().unwrap();
     assert_eq!(
         rules.len(),
-        97,
-        "expected 97 builtin rules, got {}",
+        99,
+        "expected 99 builtin rules, got {}",
         rules.len()
     );
 
@@ -71,7 +71,7 @@ fn load_all_builtin_rules() {
         .count();
     assert_eq!(slop_count, 37, "expected 37 slop rules");
     assert_eq!(security_count, 22, "expected 22 security rules");
-    assert_eq!(correctness_count, 38, "expected 38 correctness rules");
+    assert_eq!(correctness_count, 40, "expected 40 correctness rules");
 
     assert!(rules
         .iter()
@@ -91,6 +91,14 @@ fn load_all_builtin_rules() {
             .iter()
             .any(|r| r.id == RuleId::from("no-single-impl-trait") && r.is_cross_file()),
         "no-single-impl-trait should be loaded as a cross-file rule"
+    );
+    assert_eq!(
+        rules
+            .iter()
+            .filter(|r| r.id == RuleId::from("unresolved-import") && r.is_resolution())
+            .count(),
+        2,
+        "unresolved-import should be loaded as a resolution rule for both languages"
     );
 
     validate_unique_ids(&rules).unwrap();
@@ -216,9 +224,10 @@ fn all_builtin_rules_have_tests() {
         let file = BuiltinRules::get(&path).unwrap();
         let yaml = from_utf8(&file.data).unwrap();
         let rule: Rule = serde_yaml::from_str(yaml).unwrap();
-        // A cross-file rule needs a whole project to mean anything, so no
-        // snippet can exercise it.
-        if rule.cross_file.is_some() {
+        // A cross-file or resolution rule needs a whole project (and its
+        // manifests) to mean anything, so no snippet can exercise it; its logic
+        // is covered by unit and integration tests instead.
+        if rule.cross_file.is_some() || rule.resolution.is_some() {
             continue;
         }
         let tests = rule

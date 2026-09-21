@@ -15,6 +15,7 @@ use thiserror::Error;
 
 use crate::cross_file::CrossFileKind;
 use crate::metric::Metric;
+use crate::resolution::ResolutionKind;
 use crate::source::{ResolvedSource, RuleOrigin};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -225,6 +226,13 @@ pub struct Rule {
     /// YAML only carries the rule's identity, severity and user-facing text.
     #[serde(default)]
     pub cross_file: Option<CrossFileKind>,
+    /// Per-file import resolution evaluated instead of `rule`, `metric` or
+    /// `cross_file`, and mutually exclusive with all three. The kind selects
+    /// builtin resolution logic; the YAML only carries the rule's identity,
+    /// severity and user-facing text. `$import` in `message` is replaced with
+    /// the unresolved specifier.
+    #[serde(default)]
+    pub resolution: Option<ResolutionKind>,
     /// Directory a custom rule was loaded from, used to resolve test fixture
     /// paths. `None` for builtin rules, which resolve against `BuiltinRules`.
     #[serde(skip)]
@@ -273,6 +281,11 @@ impl Rule {
         self.cross_file.is_some()
     }
 
+    /// Whether this rule is evaluated by the per-file import resolution pass.
+    pub fn is_resolution(&self) -> bool {
+        self.resolution.is_some()
+    }
+
     /// Whether `scan --fix` may rewrite this rule's matches: it carries a
     /// `rewrite` template and is explicitly marked `autofix_safe`.
     pub fn is_autofixable(&self) -> bool {
@@ -295,6 +308,13 @@ impl Rule {
     pub fn cross_file_kind(&self) -> Option<CrossFileKind> {
         self.cross_file
     }
+
+    /// The resolution analysis this rule requests, `None` for all other rules.
+    // Read-only accessor for a private field.
+    // slopguard-disable-next-line no-trivial-function
+    pub fn resolution_kind(&self) -> Option<ResolutionKind> {
+        self.resolution
+    }
 }
 
 #[derive(Debug, Error)]
@@ -313,6 +333,15 @@ pub enum RuleError {
 
     #[error("rule '{id}': 'cross_file' and 'metric' are mutually exclusive")]
     CrossFileAndMetric { id: RuleId },
+
+    #[error("rule '{id}': 'resolution' and 'rule' are mutually exclusive")]
+    ResolutionAndRule { id: RuleId },
+
+    #[error("rule '{id}': 'resolution' and 'metric' are mutually exclusive")]
+    ResolutionAndMetric { id: RuleId },
+
+    #[error("rule '{id}': 'resolution' and 'cross_file' are mutually exclusive")]
+    ResolutionAndCrossFile { id: RuleId },
 
     #[error("rule '{id}': a metric rule requires a 'threshold'")]
     MissingThreshold { id: RuleId },
@@ -365,6 +394,18 @@ pub fn parse_rule(yaml: &str) -> Result<Rule, RuleError> {
     let has_rule = !rule.rule.is_null();
     let has_metric = rule.metric.is_some();
     let has_cross = rule.cross_file.is_some();
+    let has_resolution = rule.resolution.is_some();
+    if has_resolution {
+        if has_rule {
+            return Err(RuleError::ResolutionAndRule { id: rule.id });
+        }
+        if has_metric {
+            return Err(RuleError::ResolutionAndMetric { id: rule.id });
+        }
+        if has_cross {
+            return Err(RuleError::ResolutionAndCrossFile { id: rule.id });
+        }
+    }
     match (has_cross, has_metric, has_rule) {
         (true, _, true) => return Err(RuleError::CrossFileAndRule { id: rule.id }),
         (true, true, _) => return Err(RuleError::CrossFileAndMetric { id: rule.id }),
@@ -372,7 +413,9 @@ pub fn parse_rule(yaml: &str) -> Result<Rule, RuleError> {
         (false, true, false) if rule.threshold.is_none() => {
             return Err(RuleError::MissingThreshold { id: rule.id })
         }
-        (false, false, false) => return Err(RuleError::EmptyRule { id: rule.id }),
+        (false, false, false) if !has_resolution => {
+            return Err(RuleError::EmptyRule { id: rule.id })
+        }
         _ => {}
     }
     if !rule.is_metric() {

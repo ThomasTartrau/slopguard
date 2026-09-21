@@ -11,12 +11,13 @@ use crate::cache::{file_content_hash, rules_hash, CacheEntry, CacheStore};
 use crate::config::Config;
 use crate::cross_file::FileSymbols;
 use crate::finding::{CacheStats, Finding, ScanResult, ScanStats};
+use crate::resolution::FileImports;
 use crate::rule::{Rule, Severity};
 use crate::test_filter::TestPaths;
 
 use super::{
-    append_cross_file, build_glob_set, compile_rules, explicit_files, scan_file, walk_files,
-    CompiledRules, FileScan, ScanError,
+    append_cross_file, append_resolution, build_glob_set, compile_rules, explicit_files, scan_file,
+    walk_files, CompiledRules, FileScan, ScanError,
 };
 
 /// Count errors and warnings in one pass.
@@ -50,23 +51,29 @@ fn scan_collected(
     run_cross_file: bool,
 ) -> ScanResult {
     let collect_symbols = !compiled.cross_file.is_empty();
+    let collect_imports = !compiled.resolution.is_empty();
     let scans: Vec<(PathBuf, FileScan)> = files
         .par_iter()
         .map(|(path, lang)| {
-            let scan = scan_file(path, *lang, compiled, collect_symbols);
+            let scan = scan_file(path, *lang, compiled, collect_symbols, collect_imports);
             (path.clone(), scan)
         })
         .collect();
 
     let mut findings: Vec<Finding> = Vec::new();
     let mut contributions: Vec<(PathBuf, FileSymbols)> = Vec::new();
+    let mut import_contributions: Vec<(PathBuf, FileImports)> = Vec::new();
     for (path, scan) in scans {
         findings.extend(scan.findings);
         if collect_symbols {
-            contributions.push((path, scan.symbols));
+            contributions.push((path.clone(), scan.symbols));
+        }
+        if collect_imports {
+            import_contributions.push((path, scan.imports));
         }
     }
     append_cross_file(&mut findings, compiled, run_cross_file, &contributions);
+    append_resolution(&mut findings, compiled, &import_contributions);
     normalize_findings(&mut findings);
 
     let (errors, warnings) = count_severities(&findings);
@@ -101,6 +108,7 @@ fn scan_collected_cached(
     run_cross_file: bool,
 ) -> ScanResult {
     let collect_symbols = !compiled.cross_file.is_empty();
+    let collect_imports = !compiled.resolution.is_empty();
     let current_rules_hash = rules_hash(rules);
     let store = CacheStore::with_dir(cache_dir.to_path_buf()).scoped_to_rules(&current_rules_hash);
     let rules_changed = store
@@ -120,6 +128,7 @@ fn scan_collected_cached(
     let mut changed_count = 0usize;
     let mut all_findings: Vec<Finding> = Vec::new();
     let mut contributions: Vec<(PathBuf, FileSymbols)> = Vec::new();
+    let mut import_contributions: Vec<(PathBuf, FileImports)> = Vec::new();
 
     struct FileWork {
         path: PathBuf,
@@ -137,6 +146,9 @@ fn scan_collected_cached(
                 if collect_symbols {
                     contributions.push((path.clone(), entry.symbols));
                 }
+                if collect_imports {
+                    import_contributions.push((path.clone(), entry.imports));
+                }
                 continue;
             }
         }
@@ -151,7 +163,13 @@ fn scan_collected_cached(
     let scanned: Vec<(PathBuf, String, FileScan)> = to_scan
         .par_iter()
         .map(|work| {
-            let scan = scan_file(&work.path, work.lang, compiled, collect_symbols);
+            let scan = scan_file(
+                &work.path,
+                work.lang,
+                compiled,
+                collect_symbols,
+                collect_imports,
+            );
             (work.path.clone(), work.hash.clone(), scan)
         })
         .collect();
@@ -160,17 +178,23 @@ fn scan_collected_cached(
         let entry = CacheEntry {
             findings: scan.findings,
             symbols: scan.symbols,
+            imports: scan.imports,
         };
         store.put(&hash, &entry).ok();
         all_findings.extend(entry.findings);
         if collect_symbols {
-            contributions.push((path, entry.symbols));
+            contributions.push((path.clone(), entry.symbols));
+        }
+        if collect_imports {
+            import_contributions.push((path, entry.imports));
         }
     }
 
-    // Cross-file evaluation itself is never cached: it re-runs on every scan
-    // from the assembled index.
+    // Cross-file and resolution evaluation are never cached: they re-run on every
+    // scan (cross-file from the assembled index, resolution from the manifests on
+    // disk, so a manifest edit is reflected even for an unchanged file).
     append_cross_file(&mut all_findings, compiled, run_cross_file, &contributions);
+    append_resolution(&mut all_findings, compiled, &import_contributions);
 
     if prune {
         let current_hashes: Vec<String> =

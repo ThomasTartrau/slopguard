@@ -21,7 +21,7 @@
 - [x] Exit codes: 0 clean, 1 findings, 2 config error
 - [x] Colored text output (rustc-style diagnostics)
 
-### Rules (55 builtin)
+### Rules (85 active, 97 shipped)
 
 - [x] Migrate 27 Rust rules from personal-config/slopguard/rules/
 - [x] Migrate 5 TypeScript rules from personal-config/slopguard/rules/

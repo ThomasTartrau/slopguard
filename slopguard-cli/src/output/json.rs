@@ -46,7 +46,7 @@ pub struct ListEntry {
     pub language: String,
     pub severity: String,
     pub category: String,
-    /// "ast", "ai", "metric", or "cross-file".
+    /// "ast", "ai", "metric", "cross-file", or "resolution".
     #[serde(rename = "type")]
     pub kind: String,
     /// Provenance: "builtin", a git source URL, or a local path.
@@ -60,6 +60,8 @@ pub fn rule_kind(rule: &Rule) -> &'static str {
         "metric"
     } else if rule.is_cross_file() {
         "cross-file"
+    } else if rule.is_resolution() {
+        "resolution"
     } else if rule.ai_check.is_some() {
         "ai"
     } else {
