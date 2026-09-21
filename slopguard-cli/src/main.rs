@@ -24,6 +24,9 @@ use slopguard_core::rule::{
     RuleError,
 };
 use slopguard_core::scanner::ScanError;
+use slopguard_core::source::{
+    default_cache_root, resolve_sources, ResolvedSource, SourceError, SourceOptions,
+};
 use slopguard_core::testing::{self, RuleTestStatus, TestError, TestFailureKind};
 
 use crate::baseline_cmd::{run_baseline, BaselineOpts};
@@ -53,6 +56,22 @@ pub enum AppError {
     Baseline(#[from] BaselineError),
     #[error("{0}")]
     Git(#[from] GitError),
+    #[error("{0}")]
+    Source(#[from] SourceError),
+}
+
+/// Resolve the external rule sources declared in `config`, cloning or
+/// refreshing git sources (unless `offline`). Shared by every subcommand that
+/// loads rules.
+pub(crate) fn resolve_config_sources(
+    config: &Config,
+    offline: bool,
+) -> Result<Vec<ResolvedSource>, AppError> {
+    let opts = SourceOptions {
+        cache_root: default_cache_root(),
+        offline,
+    };
+    Ok(resolve_sources(&config.rules.sources, &opts)?)
 }
 
 /// The closest rule id to `id` by normalized edit distance, if one clears the
@@ -100,9 +119,11 @@ fn run_explain(
     rule_id: String,
     format: Option<Format>,
     config_path: Option<PathBuf>,
+    offline: bool,
 ) -> Result<(), AppError> {
     let config = resolve_config(config_path.as_deref())?;
-    let rules = load_all_rules(&config)?;
+    let sources = resolve_config_sources(&config, offline)?;
+    let rules = load_all_rules(&config, &sources)?;
 
     let rule = rules.iter().find(|r| r.id.as_str() == rule_id);
     match rule {
@@ -144,9 +165,10 @@ fn run_explain(
     }
 }
 
-fn run_test(config_path: Option<PathBuf>) -> Result<bool, AppError> {
+fn run_test(config_path: Option<PathBuf>, offline: bool) -> Result<bool, AppError> {
     let config = resolve_config(config_path.as_deref())?;
-    let rules = load_effective_rules(&config)?;
+    let sources = resolve_config_sources(&config, offline)?;
+    let rules = load_effective_rules(&config, &sources)?;
     let summary = testing::test_rules(&rules)?;
 
     for result in &summary.results {
@@ -197,13 +219,15 @@ fn run_list(
     language: Option<LanguageFilter>,
     format: Option<Format>,
     config_path: Option<PathBuf>,
+    offline: bool,
 ) -> Result<(), AppError> {
     let config = resolve_config(config_path.as_deref())?;
 
     let rules = if show_all {
         load_builtin_rules()?
     } else {
-        load_effective_rules(&config)?
+        let sources = resolve_config_sources(&config, offline)?;
+        load_effective_rules(&config, &sources)?
     };
 
     let entries: Vec<ListEntry> = rules
@@ -218,6 +242,7 @@ fn run_list(
                 .unwrap_or(&Category::Correctness)
                 .to_string(),
             kind: json::rule_kind(r).to_string(),
+            source: r.origin.label(),
             status: if !show_all || is_rule_active(r, &config) {
                 "enabled".to_string()
             } else {
@@ -360,6 +385,7 @@ fn main() -> ExitCode {
             fix,
             dry_run,
             allow_dirty,
+            offline,
         } => match run_scan(ScanOpts {
             paths,
             format,
@@ -382,6 +408,7 @@ fn main() -> ExitCode {
             fix,
             dry_run,
             allow_dirty,
+            offline,
         }) {
             Ok(true) => ExitCode::from(1),
             Ok(false) => ExitCode::SUCCESS,
@@ -404,6 +431,7 @@ fn main() -> ExitCode {
             no_baseline,
             baseline_path,
             no_escalation,
+            offline,
         } => match run_stats(StatsOpts {
             paths,
             format,
@@ -418,6 +446,7 @@ fn main() -> ExitCode {
             no_baseline,
             baseline_path,
             no_escalation,
+            offline,
         }) {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
@@ -434,6 +463,7 @@ fn main() -> ExitCode {
             no_cache,
             cache_dir,
             no_ai,
+            offline,
         } => match run_baseline(BaselineOpts {
             paths,
             output,
@@ -443,6 +473,7 @@ fn main() -> ExitCode {
             no_cache,
             cache_dir,
             no_ai,
+            offline,
         }) {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
@@ -454,7 +485,8 @@ fn main() -> ExitCode {
             rule_id,
             format,
             config,
-        } => match run_explain(rule_id, format, config) {
+            offline,
+        } => match run_explain(rule_id, format, config, offline) {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
                 eprintln!("error: {e}");
@@ -465,7 +497,7 @@ fn main() -> ExitCode {
             Ok(()) => ExitCode::SUCCESS,
             Err(_) => ExitCode::from(1),
         },
-        Command::Test { config } => match run_test(config) {
+        Command::Test { config, offline } => match run_test(config, offline) {
             Ok(true) => ExitCode::from(1),
             Ok(false) => ExitCode::SUCCESS,
             Err(e) => {
@@ -479,7 +511,8 @@ fn main() -> ExitCode {
             category,
             language,
             config,
-        } => match run_list(all, category, language, format, config) {
+            offline,
+        } => match run_list(all, category, language, format, config, offline) {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
                 eprintln!("error: {e}");

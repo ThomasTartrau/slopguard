@@ -16,6 +16,7 @@ use thiserror::Error;
 use crate::cross_file::CrossFileKind;
 use crate::metric::Metric;
 use crate::resolution::ResolutionKind;
+use crate::source::{ResolvedSource, RuleOrigin};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct RuleId(pub String);
@@ -236,6 +237,10 @@ pub struct Rule {
     /// paths. `None` for builtin rules, which resolve against `BuiltinRules`.
     #[serde(skip)]
     pub source_dir: Option<PathBuf>,
+    /// Provenance of this rule (builtin, git source, or local path), stamped at
+    /// load time and reported by `slopguard list`. Never present in YAML.
+    #[serde(skip)]
+    pub origin: RuleOrigin,
     #[serde(default)]
     pub files: Option<Vec<String>>,
     #[serde(default)]
@@ -352,6 +357,9 @@ pub enum RuleError {
 
     #[error("duplicate rule id: '{id}'")]
     DuplicateId { id: RuleId },
+
+    #[error("rule '{id}' from source '{origin}' reuses a builtin rule id; rename it (external sources may not shadow builtin rules)")]
+    SourceReusesBuiltinId { id: RuleId, origin: String },
 
     #[error("failed to read rule file '{path}': {source}")]
     Io {
@@ -494,28 +502,66 @@ pub fn load_builtin_rules() -> Result<Vec<Rule>, RuleError> {
         .collect()
 }
 
+/// Load every rule YAML found under `dir`, stamping each with `dir` as its
+/// fixture root and `origin` as its provenance. Subdirectories are searched
+/// recursively.
+fn load_rules_in_dir(dir: &Path, origin: &RuleOrigin) -> Result<Vec<Rule>, RuleError> {
+    let mut rules = Vec::new();
+    // Rule directories are plain file trees: gitignore and hidden-file
+    // filtering would silently drop rules.
+    for entry in WalkBuilder::new(dir).standard_filters(false).build() {
+        let entry = entry.map_err(|e| RuleError::io(dir, IoError::other(e)))?;
+        let path = entry.path();
+        let is_file = entry.file_type().is_some_and(|t| t.is_file());
+        if !is_file || !is_rule_file(path) {
+            continue;
+        }
+        let yaml = read_to_string(path).map_err(|e| RuleError::io(path, e))?;
+        let relative = path.strip_prefix(dir).unwrap_or(path);
+        let mut rule = parse_rule_at(&yaml, relative)?;
+        rule.source_dir = Some(dir.to_path_buf());
+        rule.origin = origin.clone();
+        rules.push(rule);
+    }
+    Ok(rules)
+}
+
 /// Load rules from custom directories on the filesystem. Missing directories
 /// are skipped; subdirectories are searched recursively.
 pub fn load_custom_rules(dirs: &[PathBuf]) -> Result<Vec<Rule>, RuleError> {
     let mut rules = Vec::new();
     for dir in dirs.iter().filter(|dir| dir.is_dir()) {
-        // Custom rule directories are plain file trees: gitignore and
-        // hidden-file filtering would silently drop rules.
-        for entry in WalkBuilder::new(dir).standard_filters(false).build() {
-            let entry = entry.map_err(|e| RuleError::io(dir, IoError::other(e)))?;
-            let path = entry.path();
-            let is_file = entry.file_type().is_some_and(|t| t.is_file());
-            if !is_file || !is_rule_file(path) {
-                continue;
-            }
-            let yaml = read_to_string(path).map_err(|e| RuleError::io(path, e))?;
-            let relative = path.strip_prefix(dir).unwrap_or(path);
-            let mut rule = parse_rule_at(&yaml, relative)?;
-            rule.source_dir = Some(dir.clone());
-            rules.push(rule);
-        }
+        let origin = RuleOrigin::Local { path: dir.clone() };
+        rules.extend(load_rules_in_dir(dir, &origin)?);
     }
     Ok(rules)
+}
+
+/// Load rules from resolved external sources (git clones and local paths),
+/// stamping each rule with the source's provenance. A source directory that is
+/// missing (e.g. a git `path` sub-directory that does not exist) is skipped.
+pub fn load_source_rules(sources: &[ResolvedSource]) -> Result<Vec<Rule>, RuleError> {
+    let mut rules = Vec::new();
+    for source in sources.iter().filter(|s| s.dir.is_dir()) {
+        rules.extend(load_rules_in_dir(&source.dir, &source.origin)?);
+    }
+    Ok(rules)
+}
+
+/// Reject any external rule whose (id, language) collides with a builtin rule.
+/// External sources extend the ruleset; they must never shadow a builtin id.
+fn reject_builtin_id_reuse(external: &[Rule], builtin: &[Rule]) -> Result<(), RuleError> {
+    let builtin_ids: HashSet<(&RuleId, &Language)> =
+        builtin.iter().map(|r| (&r.id, &r.language)).collect();
+    for rule in external {
+        if builtin_ids.contains(&(&rule.id, &rule.language)) {
+            return Err(RuleError::SourceReusesBuiltinId {
+                id: rule.id.clone(),
+                origin: rule.origin.label(),
+            });
+        }
+    }
+    Ok(())
 }
 
 /// Whether a builtin rule takes part in a scan under `config`.
@@ -536,26 +582,54 @@ pub fn is_rule_active(rule: &Rule, config: &crate::config::Config) -> bool {
     ruleset_on && rule.enabled && !listed(&config.rules.disable)
 }
 
+/// Load the non-builtin rules (custom directories + external sources) and
+/// reject any external rule that reuses a builtin id. Custom rules come first,
+/// then source rules, matching the order both public loaders expose.
+fn load_external_rules(
+    config: &crate::config::Config,
+    sources: &[ResolvedSource],
+    builtin: &[Rule],
+) -> Result<Vec<Rule>, RuleError> {
+    let source_rules = load_source_rules(sources)?;
+    reject_builtin_id_reuse(&source_rules, builtin)?;
+
+    let mut external = load_custom_rules(&config.rules.custom_dirs)?;
+    external.extend(source_rules);
+    Ok(external)
+}
+
 /// Load all effective rules based on config: builtin (filtered by rulesets and
-/// the enable/disable lists) plus custom rules from configured directories.
-pub fn load_effective_rules(config: &crate::config::Config) -> Result<Vec<Rule>, RuleError> {
-    let mut rules: Vec<Rule> = load_builtin_rules()?
+/// the enable/disable lists), custom rules from configured directories, and
+/// rules from resolved external sources. An external rule reusing a builtin id
+/// is rejected before any filtering.
+pub fn load_effective_rules(
+    config: &crate::config::Config,
+    sources: &[ResolvedSource],
+) -> Result<Vec<Rule>, RuleError> {
+    let builtin = load_builtin_rules()?;
+    let external = load_external_rules(config, sources, &builtin)?;
+
+    let mut rules: Vec<Rule> = builtin
         .into_iter()
         .filter(|rule| is_rule_active(rule, config))
         .collect();
-
-    let custom = load_custom_rules(&config.rules.custom_dirs)?;
-    rules.extend(custom);
+    rules.extend(external);
     validate_unique_ids(&rules)?;
     Ok(rules)
 }
 
-/// Load all rules (builtin + custom) without filtering by activation status.
-/// Used by `explain` to look up any rule regardless of config.
-pub fn load_all_rules(config: &crate::config::Config) -> Result<Vec<Rule>, RuleError> {
-    let mut rules = load_builtin_rules()?;
-    let custom = load_custom_rules(&config.rules.custom_dirs)?;
-    rules.extend(custom);
+/// Load all rules (builtin + custom + external sources) without filtering by
+/// activation status. Used by `explain` to look up any rule regardless of
+/// config.
+pub fn load_all_rules(
+    config: &crate::config::Config,
+    sources: &[ResolvedSource],
+) -> Result<Vec<Rule>, RuleError> {
+    let builtin = load_builtin_rules()?;
+    let external = load_external_rules(config, sources, &builtin)?;
+
+    let mut rules = builtin;
+    rules.extend(external);
     Ok(rules)
 }
 

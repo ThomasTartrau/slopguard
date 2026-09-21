@@ -130,6 +130,10 @@ pub enum Command {
         /// With --fix, rewrite even when the working tree has uncommitted changes
         #[arg(long, requires = "fix")]
         allow_dirty: bool,
+
+        /// Never fetch git rule sources; reuse the cache (fails if it is missing)
+        #[arg(long)]
+        offline: bool,
     },
     /// Show a summary of findings instead of listing them
     Stats {
@@ -184,6 +188,10 @@ pub enum Command {
         /// Disable severity escalation for this run
         #[arg(long)]
         no_escalation: bool,
+
+        /// Never fetch git rule sources; reuse the cache (fails if it is missing)
+        #[arg(long)]
+        offline: bool,
     },
     /// Capture current findings into a baseline file
     Baseline {
@@ -218,6 +226,10 @@ pub enum Command {
         /// Skip AI rules entirely (no LLM calls)
         #[arg(long)]
         no_ai: bool,
+
+        /// Never fetch git rule sources; reuse the cache (fails if it is missing)
+        #[arg(long)]
+        offline: bool,
     },
     /// Generate a slopguard.toml config file
     Init {
@@ -234,6 +246,10 @@ pub enum Command {
         /// Path to a specific slopguard.toml config file
         #[arg(long)]
         config: Option<PathBuf>,
+
+        /// Never fetch git rule sources; reuse the cache (fails if it is missing)
+        #[arg(long)]
+        offline: bool,
     },
     /// Show details of a specific rule
     Explain {
@@ -247,6 +263,10 @@ pub enum Command {
         /// Path to a specific slopguard.toml config file
         #[arg(long)]
         config: Option<PathBuf>,
+
+        /// Never fetch git rule sources; reuse the cache (fails if it is missing)
+        #[arg(long)]
+        offline: bool,
     },
     /// List active rules
     List {
@@ -269,6 +289,10 @@ pub enum Command {
         /// Path to a specific slopguard.toml config file
         #[arg(long)]
         config: Option<PathBuf>,
+
+        /// Never fetch git rule sources; reuse the cache (fails if it is missing)
+        #[arg(long)]
+        offline: bool,
     },
 }
 

@@ -12,5 +12,6 @@ pub mod preset;
 pub mod resolution;
 pub mod rule;
 pub mod scanner;
+pub mod source;
 pub mod test_filter;
 pub mod testing;

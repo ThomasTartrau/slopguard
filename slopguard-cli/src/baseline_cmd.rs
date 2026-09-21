@@ -21,6 +21,7 @@ pub struct BaselineOpts {
     pub no_cache: bool,
     pub cache_dir: Option<PathBuf>,
     pub no_ai: bool,
+    pub offline: bool,
 }
 
 /// Recount errors and warnings after findings were removed.
@@ -99,6 +100,7 @@ pub fn run_baseline(opts: BaselineOpts) -> Result<(), AppError> {
         no_cache,
         cache_dir,
         no_ai,
+        offline,
     } = opts;
 
     let (result, _config) = collect_findings(CollectOpts {
@@ -113,6 +115,7 @@ pub fn run_baseline(opts: BaselineOpts) -> Result<(), AppError> {
         no_ai,
         diff: false,
         diff_base: None,
+        offline,
     })?;
 
     let out_path = match output {

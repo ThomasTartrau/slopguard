@@ -49,6 +49,8 @@ pub struct ListEntry {
     /// "ast", "ai", "metric", "cross-file", or "resolution".
     #[serde(rename = "type")]
     pub kind: String,
+    /// Provenance: "builtin", a git source URL, or a local path.
+    pub source: String,
     pub status: String,
 }
 
