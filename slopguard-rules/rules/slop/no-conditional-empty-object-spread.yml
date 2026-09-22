@@ -1,0 +1,38 @@
+id: no-conditional-empty-object-spread
+language: typescript
+severity: warning
+category: slop
+message: "Conditional spread with an empty-object branch. Use a direct conditional property or omit the key instead."
+note: "'{...(cond ? {} : X)}' is a roundabout way to say 'spread X only if cond', generated instead of a plain conditional assignment."
+rule:
+  kind: spread_element
+  has:
+    kind: parenthesized_expression
+    has:
+      kind: ternary_expression
+      any:
+        - has:
+            field: consequence
+            kind: object
+            not:
+              has:
+                any:
+                  - kind: pair
+                  - kind: spread_element
+        - has:
+            field: alternative
+            kind: object
+            not:
+              has:
+                any:
+                  - kind: pair
+                  - kind: spread_element
+ignores:
+  - "**/fixtures/**"
+tests:
+  should_match:
+    - "const options = { ...(condition ? {} : extra) };"
+    - "const options = { ...(condition ? extra : {}) };"
+  should_not_match:
+    - "const options = { ...extra };"
+    - "const options = { ...(condition ? a : b) };"

@@ -1,0 +1,71 @@
+id: no-widen-then-assert
+language: typescript
+severity: error
+category: correctness
+message: "Value widened to unknown/object/Record<string, unknown> then re-cast with as. Cast directly from the original type or use a type guard."
+note: "Widening then asserting hides the same unsound conversion no-double-cast catches, just spread across two statements instead of one expression."
+rule:
+  kind: as_expression
+  has:
+    kind: identifier
+    pattern: $NAME
+  inside:
+    kind: lexical_declaration
+    stopBy: end
+    follows:
+      kind: lexical_declaration
+      stopBy: end
+      has:
+        kind: variable_declarator
+        stopBy: end
+        all:
+          - has:
+              field: name
+              kind: identifier
+              pattern: $NAME
+          - has:
+              field: type
+              kind: type_annotation
+              any:
+                - has:
+                    kind: predefined_type
+                    regex: '^(unknown|object)$'
+                - has:
+                    kind: generic_type
+                    all:
+                      - has:
+                          field: name
+                          kind: type_identifier
+                          regex: '^Record$'
+                      - has:
+                          field: type_arguments
+                          kind: type_arguments
+                          all:
+                            - has:
+                                kind: predefined_type
+                                regex: '^string$'
+                            - has:
+                                kind: predefined_type
+                                regex: '^unknown$'
+ignores:
+  - "**/fixtures/**"
+tests:
+  should_match:
+    - |
+      let value: Foo = getFoo();
+      let widened: unknown = value;
+      const restored = widened as Bar;
+    - |
+      let value: Foo = getFoo();
+      let widened: object = value;
+      const restored = widened as Bar;
+    - |
+      let value: Foo = getFoo();
+      let widened: Record<string, unknown> = value;
+      const restored = widened as Bar;
+  should_not_match:
+    - |
+      let value: Foo = getFoo();
+      let stillFoo: Foo = value;
+      const alsoFoo = stillFoo as Foo;
+    - "const restored = value as Bar;"

@@ -1,0 +1,17 @@
+id: no-reflect-apply
+language: typescript
+severity: warning
+category: slop
+message: "Reflect.apply() used where a direct call would do. Call the function normally, or use Function.prototype.apply for a real dynamic this."
+note: "Reflect.apply exists for meta-programming (proxies, decorators); reaching for it on an ordinary call is over-engineering that adds indirection for no behavioral gain."
+rule:
+  pattern: Reflect.apply($$$ARGS)
+ignores:
+  - "**/fixtures/**"
+tests:
+  should_match:
+    - "Reflect.apply(fn, thisArg, args);"
+    - "const result = Reflect.apply(callback, null, [1, 2, 3]);"
+  should_not_match:
+    - "fn.apply(thisArg, args);"
+    - "callback(1, 2, 3);"

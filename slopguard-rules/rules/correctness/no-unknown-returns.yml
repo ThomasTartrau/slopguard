@@ -1,0 +1,32 @@
+id: no-unknown-returns
+language: typescript
+severity: error
+category: correctness
+message: "Function return type is unknown. Return the concrete type or a generic."
+note: "A function declaring unknown as its return type forces every caller to narrow the result before using it, which is the function's job, not the caller's."
+rule:
+  any:
+    - kind: function_declaration
+    - kind: arrow_function
+    - kind: function_expression
+    - kind: method_definition
+    - kind: method_signature
+  has:
+    field: return_type
+    kind: type_annotation
+    has:
+      kind: predefined_type
+      regex: '^unknown$'
+ignores:
+  - "**/fixtures/**"
+tests:
+  should_match:
+    - "function parse(): unknown { return JSON.parse(raw); }"
+    - "const parse = (): unknown => JSON.parse(raw);"
+    - |
+      class Parser {
+        parse(): unknown { return JSON.parse(raw); }
+      }
+  should_not_match:
+    - "function parse(): Data { return JSON.parse(raw) as Data; }"
+    - "function isFoo(x: unknown): x is Foo { return true; }"

@@ -1,0 +1,17 @@
+id: no-reflect-get
+language: typescript
+severity: warning
+category: slop
+message: "Reflect.get() used where plain property access would do. Use obj.prop or obj[key] instead."
+note: "Reflect.get exists for meta-programming (proxy traps, custom receivers); using it for an ordinary property read is over-engineering that adds indirection for no behavioral gain."
+rule:
+  pattern: Reflect.get($$$ARGS)
+ignores:
+  - "**/fixtures/**"
+tests:
+  should_match:
+    - "const value = Reflect.get(obj, key);"
+    - "Reflect.get(target, 'name');"
+  should_not_match:
+    - "const value = obj[key];"
+    - "const value = obj.name;"

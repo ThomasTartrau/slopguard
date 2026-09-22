@@ -1,0 +1,51 @@
+id: require-safety-comment-for-type-assertion
+language: typescript
+severity: error
+category: correctness
+message: "Type assertion (as T) without a // SAFETY: comment. Document why this cast is sound."
+note: "as const and as unknown are exempt: neither claims a narrower type than the compiler can already verify. Every other assertion overrides the type checker and needs a stated reason, mirroring no-unsafe-without-safety for Rust unsafe blocks."
+rule:
+  kind: as_expression
+  all:
+    - not:
+        regex: 'as\s+const$'
+    - not:
+        has:
+          kind: predefined_type
+          regex: '^unknown$'
+    - not:
+        any:
+          - follows:
+              kind: comment
+              regex: '(?i)^//[/!]?\s*safety\b'
+              stopBy:
+                not:
+                  kind: comment
+          - inside:
+              follows:
+                kind: comment
+                regex: '(?i)^//[/!]?\s*safety\b'
+                stopBy:
+                  not:
+                    kind: comment
+              stopBy: end
+ignores:
+  - "**/fixtures/**"
+tests:
+  should_match:
+    - "const parsed = value as Foo;"
+    - |
+      function f() {
+        return value as Bar;
+      }
+  should_not_match:
+    - "const parsed = value as const;"
+    - "const parsed = value as unknown;"
+    - |
+      // SAFETY: value was validated by the schema above
+      const parsed = value as Foo;
+    - |
+      function f() {
+        // SAFETY: value was validated by the schema above
+        return value as Bar;
+      }

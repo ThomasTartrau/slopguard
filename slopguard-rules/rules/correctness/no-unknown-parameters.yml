@@ -1,0 +1,42 @@
+id: no-unknown-parameters
+language: typescript
+severity: error
+category: correctness
+message: "Function parameter typed unknown. Use the concrete type or a generic."
+note: "unknown as a parameter type forces every caller to narrow it, pushing the type-safety cost onto call sites instead of the function's own signature."
+rule:
+  kind: required_parameter
+  all:
+    - has:
+        kind: identifier
+        pattern: $NAME
+    - has:
+        kind: type_annotation
+        has:
+          kind: predefined_type
+          regex: '^unknown$'
+  not:
+    inside:
+      stopBy: end
+      any:
+        - kind: function_declaration
+        - kind: arrow_function
+        - kind: function_expression
+        - kind: method_definition
+      has:
+        field: return_type
+        has:
+          kind: type_predicate
+          has:
+            field: name
+            pattern: $NAME
+ignores:
+  - "**/fixtures/**"
+tests:
+  should_match:
+    - "function parse(data: unknown): string { return String(data); }"
+    - "function isFoo(x: unknown, extra: unknown): x is Foo { return true; }"
+  should_not_match:
+    - "function parse(data: string): string { return data; }"
+    - "function isFoo(x: unknown): x is Foo { return true; }"
+    - "const isBar = (x: unknown): x is Bar => true;"

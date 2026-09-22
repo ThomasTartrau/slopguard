@@ -1,0 +1,45 @@
+id: no-reduce-accumulator-copy
+language: typescript
+severity: warning
+category: slop
+message: "reduce() spreads the accumulator into a new object on every iteration. This is O(n^2); mutate the accumulator in place instead."
+note: "AI-generated reducers often favor '{...acc, ...}' for its functional look, copying the growing object on every call and turning a linear loop into a quadratic one."
+rule:
+  kind: call_expression
+  all:
+    - has:
+        field: function
+        kind: member_expression
+        has:
+          field: property
+          regex: '^reduce$'
+    - has:
+        kind: arrow_function
+        stopBy: end
+        all:
+          - has:
+              field: parameters
+              has:
+                kind: required_parameter
+                has:
+                  kind: identifier
+                  pattern: $ACC
+          - has:
+              kind: spread_element
+              stopBy: end
+              has:
+                kind: identifier
+                pattern: $ACC
+ignores:
+  - "**/fixtures/**"
+tests:
+  should_match:
+    - "const byId = items.reduce((acc, x) => ({...acc, [x.id]: x}), {});"
+    - "const merged = list.reduce((acc, cur) => ({...acc, ...cur}), {});"
+  should_not_match:
+    - |
+      const byId = items.reduce((acc, x) => {
+        acc[x.id] = x;
+        return acc;
+      }, {});
+    - "const total = items.reduce((sum, x) => sum + x.value, 0);"

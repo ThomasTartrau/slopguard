@@ -1,0 +1,45 @@
+id: no-unsafe-dictionary-type
+language: typescript
+severity: error
+category: correctness
+message: "Record<string, unknown> or a string index signature to unknown. Type the known keys explicitly."
+note: "A dictionary typed to unknown values defers every property access check to the caller, which is exactly what unknown as a parameter or return type does."
+rule:
+  any:
+    - kind: generic_type
+      all:
+        - has:
+            field: name
+            kind: type_identifier
+            regex: '^Record$'
+        - has:
+            field: type_arguments
+            kind: type_arguments
+            all:
+              - has:
+                  kind: predefined_type
+                  regex: '^string$'
+              - has:
+                  kind: predefined_type
+                  regex: '^unknown$'
+    - kind: index_signature
+      all:
+        - has:
+            field: index_type
+            kind: predefined_type
+            regex: '^string$'
+        - has:
+            field: type
+            kind: type_annotation
+            has:
+              kind: predefined_type
+              regex: '^unknown$'
+ignores:
+  - "**/fixtures/**"
+tests:
+  should_match:
+    - "const config: Record<string, unknown> = load();"
+    - "interface Bag { [key: string]: unknown; }"
+  should_not_match:
+    - "const config: Record<string, string> = load();"
+    - "interface Bag { [key: string]: number; }"

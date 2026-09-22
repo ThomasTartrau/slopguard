@@ -1,0 +1,21 @@
+id: no-unknown-type-aliases
+language: typescript
+severity: error
+category: correctness
+message: "Type alias resolves to unknown. Give it a concrete shape or a generic."
+note: "An alias for unknown adds a name without adding any type information, and hides the escape hatch behind what looks like a real type."
+rule:
+  kind: type_alias_declaration
+  has:
+    field: value
+    kind: predefined_type
+    regex: '^unknown$'
+ignores:
+  - "**/fixtures/**"
+tests:
+  should_match:
+    - "type ApiResponse = unknown;"
+    - "type Payload = unknown;"
+  should_not_match:
+    - "type ApiResponse = { data: string };"
+    - "type Payload = Record<string, string>;"
