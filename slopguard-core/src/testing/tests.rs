@@ -420,6 +420,16 @@ tests:
 }
 
 #[test]
+fn all_builtin_rules_inline_tests_pass() {
+    // load_builtin_rules returns every embedded rule regardless of `enabled`,
+    // so this also exercises opt-in rules that `slopguard test` (which loads
+    // only active rules) never validates.
+    let rules = load_builtin_rules().unwrap();
+    let summary = test_rules(&rules).unwrap();
+    assert_eq!(summary.failed, 0, "{:?}", summary.results);
+}
+
+#[test]
 fn all_builtin_metric_rules_pass() {
     let rules: Vec<Rule> = load_builtin_rules()
         .unwrap()

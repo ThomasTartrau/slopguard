@@ -1,0 +1,19 @@
+id: no-weakened-assertion-ts
+language: typescript
+severity: warning
+category: correctness
+message: "Trivial assertion that can never fail. Assert the real expected value."
+note: "expect(x).toBeDefined() and expect(true).toBe(true) pass for almost any state, so the test proves nothing. An AI writes them to turn a red test green without covering the behavior."
+rule:
+  any:
+    - pattern: expect($X).toBeDefined()
+    - pattern: expect(true).toBe(true)
+ignores:
+  - "**/fixtures/**"
+tests:
+  should_match:
+    - "it('works', () => { expect(result).toBeDefined(); });"
+    - "test('works', () => { expect(true).toBe(true); });"
+  should_not_match:
+    - "it('works', () => { expect(result).toBe(42); });"
+    - "it('works', () => { expect(list).toHaveLength(3); });"

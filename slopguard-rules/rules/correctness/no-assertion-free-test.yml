@@ -1,0 +1,58 @@
+id: no-assertion-free-test
+language: rust
+severity: warning
+category: correctness
+message: "Test function with no assertion. It passes as long as the code does not panic, proving nothing."
+note: "A #[test] with no assert!/panic!, no ? propagation and no #[should_panic] only checks that the code runs. Assert the expected result, or return Result and use ? so an error fails the test."
+rule:
+  kind: function_item
+  all:
+    - follows:
+        kind: attribute_item
+        regex: 'test'
+        stopBy: end
+    - not:
+        follows:
+          kind: attribute_item
+          regex: 'should_panic'
+          stopBy: end
+    - not:
+        has:
+          any:
+            - regex: 'assert'
+            - regex: 'panic'
+            - kind: try_expression
+          stopBy: end
+ignores:
+  - "**/fixtures/**"
+tests:
+  should_match:
+    - |
+      #[test]
+      fn t() {
+          let x = compute();
+      }
+    - |
+      #[test]
+      fn t() {
+          setup();
+          run();
+      }
+  should_not_match:
+    - |
+      #[test]
+      fn t() {
+          assert_eq!(compute(), 42);
+      }
+    - |
+      #[test]
+      #[should_panic]
+      fn t() {
+          do_bad_thing();
+      }
+    - |
+      #[test]
+      fn t() -> Result<(), Error> {
+          let x = compute()?;
+          Ok(())
+      }

@@ -4,7 +4,7 @@
 //! Those contributions are assembled into a [`SymbolIndex`] once the whole walk
 //! is done, and each active cross-file rule is evaluated against that index.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use ast_grep_core::{AstGrep, Doc, Node};
@@ -24,7 +24,26 @@ use crate::test_filter::{CfgTestRanges, TestPaths};
 #[strum(serialize_all = "snake_case")]
 pub enum CrossFileKind {
     SingleImplTrait,
+    DuplicateErrorMessage,
 }
+
+/// Below this length (message content, quotes excluded) a repeated string is
+/// noise (`"utf-8"`, `"id"`), not a copy-pasted error message.
+const MIN_ERROR_MESSAGE_LEN: usize = 10;
+
+/// Macros whose string arguments are error messages. Matched on the last path
+/// segment, so `anyhow::bail!` and `bail!` both count.
+const ERROR_MACROS: &[&str] = &[
+    "panic",
+    "unreachable",
+    "todo",
+    "unimplemented",
+    "bail",
+    "anyhow",
+];
+
+/// Methods whose string argument is an error message: `.expect("...")`.
+const ERROR_METHODS: &[&str] = &["expect", "expect_err"];
 
 /// A trait declared in a scanned file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -50,6 +69,20 @@ pub struct TraitImpl {
     pub blanket: bool,
 }
 
+/// A string literal used as an error message, kept for the duplicate-message
+/// cross-file analysis.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ErrorMessageLit {
+    /// Message content, surrounding quotes stripped.
+    pub text: String,
+    pub line: usize,
+    pub column: usize,
+    pub end_line: usize,
+    pub end_column: usize,
+    /// The literal sits inside a `#[cfg(test)]` item.
+    pub in_cfg_test: bool,
+}
+
 /// What one file contributes to the project index.
 ///
 /// Deliberately carries no path. The scan cache is keyed on file content, so
@@ -60,12 +93,13 @@ pub struct TraitImpl {
 pub struct FileSymbols {
     pub traits: Vec<TraitDecl>,
     pub impls: Vec<TraitImpl>,
+    pub error_messages: Vec<ErrorMessageLit>,
 }
 
 impl FileSymbols {
     /// Whether this file declares or implements nothing the index cares about.
     pub fn is_empty(&self) -> bool {
-        self.traits.is_empty() && self.impls.is_empty()
+        self.traits.is_empty() && self.impls.is_empty() && self.error_messages.is_empty()
     }
 }
 
@@ -103,6 +137,79 @@ fn generic_param_names<D: Doc>(impl_node: &Node<D>) -> Vec<String> {
             (starts_ok && rest_ok).then_some(head)
         })
         .collect()
+}
+
+/// The last `::`-separated segment of a macro or path name.
+fn last_segment(text: &str) -> &str {
+    text.rsplit("::").next().unwrap_or(text).trim()
+}
+
+/// Turn a `string_literal` node into an [`ErrorMessageLit`], dropping the
+/// surrounding quotes. Returns `None` for a non-string node, a raw string
+/// (`r"..."`, left out to keep quote-stripping simple), or a message shorter
+/// than [`MIN_ERROR_MESSAGE_LEN`].
+fn string_literal_message<D: Doc>(
+    node: &Node<D>,
+    cfg_test: &CfgTestRanges,
+) -> Option<ErrorMessageLit> {
+    if &*node.kind() != "string_literal" {
+        return None;
+    }
+    let raw = node.text();
+    let raw = raw.trim();
+    let content = raw.strip_prefix('"')?.strip_suffix('"')?;
+    if content.chars().count() < MIN_ERROR_MESSAGE_LEN {
+        return None;
+    }
+    let start = node.start_pos();
+    let end = node.end_pos();
+    let line = start.line() + 1;
+    Some(ErrorMessageLit {
+        text: content.to_string(),
+        line,
+        column: start.byte_point().1 + 1,
+        end_line: end.line() + 1,
+        end_column: end.byte_point().1 + 1,
+        in_cfg_test: cfg_test.contains_line(line),
+    })
+}
+
+/// Collect the error-message string literals of one node, if it is an
+/// error-raising macro (`panic!`, `bail!`, ...) or an `.expect(...)` call.
+fn collect_error_messages<D: Doc>(
+    node: &Node<D>,
+    cfg_test: &CfgTestRanges,
+    out: &mut Vec<ErrorMessageLit>,
+) {
+    match &*node.kind() {
+        "macro_invocation" => {
+            let is_error_macro = node
+                .field("macro")
+                .is_some_and(|m| ERROR_MACROS.contains(&last_segment(&m.text())));
+            if is_error_macro {
+                out.extend(
+                    node.dfs()
+                        .filter_map(|n| string_literal_message(&n, cfg_test)),
+                );
+            }
+        }
+        "call_expression" => {
+            let is_error_method = node.field("function").is_some_and(|f| {
+                &*f.kind() == "field_expression"
+                    && f.field("field")
+                        .is_some_and(|name| ERROR_METHODS.contains(&name.text().trim()))
+            });
+            if is_error_method {
+                if let Some(args) = node.field("arguments") {
+                    out.extend(
+                        args.children()
+                            .filter_map(|n| string_literal_message(&n, cfg_test)),
+                    );
+                }
+            }
+        }
+        _ => {}
+    }
 }
 
 /// Collect the trait declarations and trait impls of one parsed Rust file.
@@ -154,6 +261,7 @@ pub fn extract_rust_symbols<D: Doc>(root: &AstGrep<D>, cfg_test: &CfgTestRanges)
             }
             _ => {}
         }
+        collect_error_messages(&node, cfg_test, &mut symbols.error_messages);
     }
     symbols
 }
@@ -162,6 +270,9 @@ pub fn extract_rust_symbols<D: Doc>(root: &AstGrep<D>, cfg_test: &CfgTestRanges)
 #[derive(Debug, Default)]
 pub struct SymbolIndex {
     traits: HashMap<String, TraitEntry>,
+    /// Error-message content -> every occurrence, keyed by exact text so a
+    /// literal repeated across files collides.
+    error_messages: HashMap<String, Vec<(PathBuf, ErrorMessageLit)>>,
 }
 
 #[derive(Debug, Default)]
@@ -185,6 +296,7 @@ impl SymbolIndex {
         I: IntoIterator<Item = (&'a Path, &'a FileSymbols)>,
     {
         let mut traits: HashMap<String, TraitEntry> = HashMap::new();
+        let mut error_messages: HashMap<String, Vec<(PathBuf, ErrorMessageLit)>> = HashMap::new();
         for (path, symbols) in contributions {
             for decl in &symbols.traits {
                 traits
@@ -201,8 +313,17 @@ impl SymbolIndex {
                     entry.concrete_impls += 1;
                 }
             }
+            for msg in &symbols.error_messages {
+                error_messages
+                    .entry(msg.text.clone())
+                    .or_default()
+                    .push((path.to_path_buf(), msg.clone()));
+            }
         }
-        Self { traits }
+        Self {
+            traits,
+            error_messages,
+        }
     }
 }
 
@@ -226,6 +347,21 @@ impl DeclFilter {
             return false;
         }
         if self.skip_test_code && (self.test_paths.is_test(path) || decl.in_cfg_test) {
+            return false;
+        }
+        true
+    }
+
+    /// Whether an error-message literal found at `path` is in scope for the rule.
+    /// Same globs and `skip_test_code` policy as [`DeclFilter::allows`].
+    pub fn allows_message(&self, path: &Path, msg: &ErrorMessageLit) -> bool {
+        if !self.files.as_ref().is_none_or(|g| g.is_match(path)) {
+            return false;
+        }
+        if self.ignores.as_ref().is_some_and(|g| g.is_match(path)) {
+            return false;
+        }
+        if self.skip_test_code && (self.test_paths.is_test(path) || msg.in_cfg_test) {
             return false;
         }
         true
@@ -272,6 +408,40 @@ pub fn evaluate(
                 matched_text: decl.header.clone(),
                 confidence: None,
                 escalated: false,
+            })
+            .collect(),
+        CrossFileKind::DuplicateErrorMessage => index
+            .error_messages
+            .values()
+            .flat_map(|occurrences| {
+                let in_scope: Vec<&(PathBuf, ErrorMessageLit)> = occurrences
+                    .iter()
+                    .filter(|(path, msg)| filter.allows_message(path, msg))
+                    .collect();
+                let distinct_files: HashSet<&Path> =
+                    in_scope.iter().map(|(path, _)| path.as_path()).collect();
+                if distinct_files.len() < 2 {
+                    return Vec::new();
+                }
+                in_scope
+                    .into_iter()
+                    .map(|(path, msg)| Finding {
+                        rule_id: rule.id.clone(),
+                        severity: rule.severity.clone(),
+                        category: rule.category.clone().unwrap_or_default(),
+                        message: rule.message.clone(),
+                        note: rule.note.clone(),
+                        fix: rule.fix.clone(),
+                        file: path.clone(),
+                        line: msg.line,
+                        column: msg.column,
+                        end_line: msg.end_line,
+                        end_column: msg.end_column,
+                        matched_text: msg.text.clone(),
+                        confidence: None,
+                        escalated: false,
+                    })
+                    .collect()
             })
             .collect(),
     }
