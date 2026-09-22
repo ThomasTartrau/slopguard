@@ -60,6 +60,14 @@ const COMMENTED_AI_BODY: &str = r#"
 # model = "claude-haiku-4-5"
 # concurrency = 4
 # api_key via ANTHROPIC_API_KEY / OPENAI_API_KEY env, or ai.api_key
+#
+# [ai.classifier]         # System One (Jev) pass, on a separate axis from the LLM
+# enabled = false
+# transport = "direct"    # "direct" (TYPESAFE_API_KEY) | "openrouter" (OPENROUTER_API_KEY)
+# threshold = 0.7
+# batch = true            # group overlapping candidates into one request
+# batch_max_questions = 8
+# batch_max_state_lines = 200
 "#;
 
 /// The live `[ai]` block of the `ai` preset. The model is the same default the
@@ -72,6 +80,14 @@ vendor = "anthropic"    # "anthropic" | "openai"
 model = "claude-haiku-4-5"
 concurrency = 4
 # api_key via ANTHROPIC_API_KEY / OPENAI_API_KEY env, or ai.api_key
+#
+# [ai.classifier]         # System One (Jev) pass, on a separate axis from the LLM
+# enabled = false
+# transport = "direct"    # "direct" (TYPESAFE_API_KEY) | "openrouter" (OPENROUTER_API_KEY)
+# threshold = 0.7
+# batch = true            # group overlapping candidates into one request
+# batch_max_questions = 8
+# batch_max_state_lines = 200
 "#;
 
 /// The commented-out `[escalation]` block shipped by every preset. Escalation

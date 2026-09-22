@@ -156,6 +156,17 @@ pub struct ClassifierConfig {
     /// Overridden per rule by `ai_check.threshold`.
     #[default = 0.7]
     pub threshold: f64,
+    /// Batch cache-miss candidates whose context windows overlap into a single
+    /// multi-noul request per cluster. `false` falls back to one call per
+    /// candidate.
+    #[default = true]
+    pub batch: bool,
+    /// Maximum number of candidates (nouls) grouped into one batched request.
+    #[default = 8]
+    pub batch_max_questions: usize,
+    /// Maximum number of source lines carried in one batched request `state`.
+    #[default = 200]
+    pub batch_max_state_lines: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, SmartDefault)]

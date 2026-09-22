@@ -13,7 +13,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use similar::TextDiff;
 use slopguard_ai::{
     build_classifier, build_provider, resolve_jev_model, run_ai_pass, run_classifier_pass, AiCache,
-    AiCandidate, DEFAULT_MODEL,
+    AiCandidate, BatchConfig, DEFAULT_MODEL,
 };
 use slopguard_core::baseline::{project_root, Baseline};
 use slopguard_core::config::{Config, OutputFormat};
@@ -684,6 +684,11 @@ fn run_classifier_phase(
         &jev_model,
         config.ai.classifier.threshold,
         config.ai.concurrency,
+        BatchConfig {
+            batch: config.ai.classifier.batch,
+            max_questions: config.ai.classifier.batch_max_questions,
+            max_state_lines: config.ai.classifier.batch_max_state_lines,
+        },
         cache.as_ref(),
     ))
 }

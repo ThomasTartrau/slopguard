@@ -33,21 +33,84 @@ impl MockDecider {
 }
 
 impl DecisionProvider for MockDecider {
-    fn decide<'a>(&'a self, _request: &'a DecisionRequest) -> DecideFuture<'a> {
+    fn decide<'a>(&'a self, request: &'a DecisionRequest) -> DecideFuture<'a> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         let p = self.noul;
+        // Echo the fixed probability under every question key the request asked,
+        // so a batched multi-noul request gets one answer per member.
+        let keys: Vec<String> = request.questions.keys().cloned().collect();
         Box::pin(async move {
-            let mut answers = BTreeMap::new();
-            answers.insert(
-                QUESTION.to_string(),
-                DecisionAnswer::Noul(NoulAnswer { noul: p }),
-            );
+            let answers = keys
+                .into_iter()
+                .map(|key| (key, DecisionAnswer::Noul(NoulAnswer { noul: p })))
+                .collect();
             Ok(DecisionOutput {
                 model: None,
                 answers,
                 usage: DecisionUsage::default(),
             })
         })
+    }
+}
+
+/// A decider whose every call fails, to exercise the cluster-failure skip.
+struct FailingDecider;
+
+impl DecisionProvider for FailingDecider {
+    fn decide<'a>(&'a self, _request: &'a DecisionRequest) -> DecideFuture<'a> {
+        Box::pin(async move {
+            Err(AgentError::ProcessFailed {
+                exit_code: 1,
+                stderr: "boom".to_string(),
+            })
+        })
+    }
+}
+
+/// The default batching caps (mirrors `[ai.classifier]` defaults).
+fn batch() -> BatchConfig {
+    BatchConfig {
+        batch: true,
+        max_questions: 8,
+        max_state_lines: 200,
+    }
+}
+
+/// A file of `n` numbered lines, to give candidates room to be near or far.
+fn many_lines(n: usize) -> String {
+    (1..=n)
+        .map(|i| format!("let x{i} = {i};"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// A static-reason candidate for `rule_id` at `line` in `content`.
+fn candidate_at(rule_id: &str, line: usize, content: &str) -> AiCandidate {
+    AiCandidate {
+        finding: Finding {
+            rule_id: RuleId::from(rule_id),
+            severity: Severity::Warning,
+            category: Category::Slop,
+            message: "candidate".to_string(),
+            note: None,
+            fix: None,
+            file: PathBuf::from("src/main.rs"),
+            line,
+            column: 1,
+            end_line: line,
+            end_column: 2,
+            matched_text: "x".to_string(),
+            confidence: None,
+            escalated: false,
+        },
+        file_content: content.to_string(),
+        prompt_template: "audit {{filename}}\n{{code}}\nctx={{rule_context}}".to_string(),
+        model: super::super::DEFAULT_MODEL.to_string(),
+        rule_context: "static note".to_string(),
+        reason_mode: ReasonMode::Static,
+        threshold: None,
+        if_true: None,
+        if_false: None,
     }
 }
 
@@ -132,6 +195,7 @@ fn fires_when_probability_meets_threshold() {
         "jev-latest",
         0.7,
         4,
+        batch(),
         None,
     );
     assert_eq!(findings.len(), 1, "p=0.82 >= 0.7 must fire");
@@ -147,6 +211,7 @@ fn drops_when_probability_below_threshold() {
         "jev-latest",
         0.7,
         4,
+        batch(),
         None,
     );
     assert!(findings.is_empty(), "p=0.55 < 0.7 must not fire");
@@ -163,6 +228,7 @@ fn per_rule_threshold_overrides_global() {
         "jev-latest",
         0.7,
         4,
+        batch(),
         None,
     );
     assert_eq!(
@@ -182,6 +248,7 @@ fn confidence_is_the_raw_probability() {
         "jev-latest",
         0.7,
         4,
+        batch(),
         None,
     );
     assert_eq!(
@@ -201,6 +268,7 @@ fn static_reason_uses_the_rule_note() {
         "jev-latest",
         0.7,
         4,
+        batch(),
         None,
     );
     assert_eq!(
@@ -227,6 +295,7 @@ fn raw_probability_cached_threshold_applied_after_cache() {
         "jev-latest",
         0.9,
         4,
+        batch(),
         Some(&cache),
     );
     assert!(first.is_empty(), "p=0.8 < 0.9 drops on the first pass");
@@ -243,6 +312,7 @@ fn raw_probability_cached_threshold_applied_after_cache() {
         "jev-latest",
         0.5,
         4,
+        batch(),
         Some(&cache),
     );
     assert_eq!(second.len(), 1, "retuned threshold 0.5 fires from cache");
@@ -266,6 +336,7 @@ fn generated_reason_written_by_llm() {
         "jev-latest",
         0.7,
         4,
+        batch(),
         None,
     );
     assert_eq!(
@@ -285,6 +356,7 @@ fn generated_reason_falls_back_to_static_without_llm() {
         "jev-latest",
         0.7,
         4,
+        batch(),
         None,
     );
     assert_eq!(
@@ -304,6 +376,7 @@ fn generated_reason_falls_back_when_llm_fails() {
         "jev-latest",
         0.7,
         4,
+        batch(),
         None,
     );
     assert_eq!(
@@ -322,6 +395,7 @@ fn missing_answer_skips_candidate_without_panicking() {
         "jev-latest",
         0.7,
         4,
+        batch(),
         None,
     );
     assert!(
@@ -348,6 +422,7 @@ fn resolve_jev_model_defaults_per_transport() {
         transport: ClassifierTransport::Direct,
         model: None,
         threshold: 0.7,
+        ..ClassifierConfig::default()
     };
     assert_eq!(resolve_jev_model(&direct), "jev-latest");
 
@@ -362,4 +437,180 @@ fn resolve_jev_model_defaults_per_transport() {
         ..direct
     };
     assert_eq!(resolve_jev_model(&explicit), "jev-2");
+}
+
+#[test]
+fn cluster_three_same_zone_one_call() {
+    // Three candidates in overlapping context windows batch into one request.
+    let content = many_lines(30);
+    let decider = MockDecider::new(0.9);
+    let findings = run_classifier_pass(
+        &decider,
+        None,
+        vec![
+            candidate_at("rule-a", 2, &content),
+            candidate_at("rule-b", 4, &content),
+            candidate_at("rule-c", 6, &content),
+        ],
+        "jev-latest",
+        0.7,
+        4,
+        batch(),
+        None,
+    );
+    assert_eq!(findings.len(), 3, "all three fire at p=0.9");
+    assert_eq!(
+        decider.calls.load(Ordering::SeqCst),
+        1,
+        "one overlapping cluster = one decision call"
+    );
+}
+
+#[test]
+fn distant_matches_two_calls() {
+    // Two candidates whose windows do not overlap (radius 25, lines 2 and 100)
+    // land in separate clusters: two calls.
+    let content = many_lines(120);
+    let decider = MockDecider::new(0.9);
+    let findings = run_classifier_pass(
+        &decider,
+        None,
+        vec![
+            candidate_at("rule-a", 2, &content),
+            candidate_at("rule-a", 100, &content),
+        ],
+        "jev-latest",
+        0.7,
+        4,
+        batch(),
+        None,
+    );
+    assert_eq!(findings.len(), 2);
+    assert_eq!(
+        decider.calls.load(Ordering::SeqCst),
+        2,
+        "distant matches beyond the window = two calls"
+    );
+}
+
+#[test]
+fn cache_hit_skips_call_only_miss_batched() {
+    // One candidate is pre-cached (hit), the other is a distant miss. Only the
+    // miss triggers a network call.
+    let content = many_lines(120);
+    let dir = tempdir().unwrap();
+    let cache = AiCache::new(dir.path());
+    let hit = candidate_at("rule-a", 2, &content);
+    let miss = candidate_at("rule-a", 100, &content);
+    cache
+        .put_probability(&candidate_key(&hit, "jev-latest"), 0.9)
+        .unwrap();
+
+    let decider = MockDecider::new(0.9);
+    let findings = run_classifier_pass(
+        &decider,
+        None,
+        vec![hit, miss],
+        "jev-latest",
+        0.7,
+        4,
+        batch(),
+        Some(&cache),
+    );
+    assert_eq!(findings.len(), 2, "hit and miss both fire");
+    assert_eq!(
+        decider.calls.load(Ordering::SeqCst),
+        1,
+        "only the cache miss reaches the decider"
+    );
+}
+
+#[test]
+fn two_candidates_same_rule_distinct_keys() {
+    // Same rule, same file, two lines: their cache keys must differ (the line
+    // is in the instructions), so caching one never shadows the other.
+    let content = many_lines(30);
+    let a = candidate_at("rule-a", 2, &content);
+    let b = candidate_at("rule-a", 20, &content);
+    assert_ne!(
+        candidate_key(&a, "jev-latest"),
+        candidate_key(&b, "jev-latest"),
+        "two candidates of the same rule at different lines must not collide"
+    );
+
+    let dir = tempdir().unwrap();
+    let cache = AiCache::new(dir.path());
+    let key_a = candidate_key(&a, "jev-latest");
+    let key_b = candidate_key(&b, "jev-latest");
+    let decider = MockDecider::new(0.9);
+    let findings = run_classifier_pass(
+        &decider,
+        None,
+        vec![a, b],
+        "jev-latest",
+        0.7,
+        4,
+        batch(),
+        Some(&cache),
+    );
+    assert_eq!(findings.len(), 2, "both distinct candidates fire");
+    assert!(
+        cache.get_probability(&key_a).is_some() && cache.get_probability(&key_b).is_some(),
+        "each candidate cached its probability under its own key"
+    );
+}
+
+#[test]
+fn cluster_failure_skips_all_members() {
+    // A failing decider skips every member of the cluster, no panic.
+    let content = many_lines(30);
+    let findings = run_classifier_pass(
+        &FailingDecider,
+        None,
+        vec![
+            candidate_at("rule-a", 2, &content),
+            candidate_at("rule-b", 4, &content),
+            candidate_at("rule-c", 6, &content),
+        ],
+        "jev-latest",
+        0.7,
+        4,
+        batch(),
+        None,
+    );
+    assert!(
+        findings.is_empty(),
+        "a cluster-level failure skips all its members"
+    );
+}
+
+#[test]
+fn batch_disabled_one_call_per_candidate() {
+    // batch = false collapses every candidate into its own single-noul call.
+    let content = many_lines(30);
+    let decider = MockDecider::new(0.9);
+    let findings = run_classifier_pass(
+        &decider,
+        None,
+        vec![
+            candidate_at("rule-a", 2, &content),
+            candidate_at("rule-b", 4, &content),
+            candidate_at("rule-c", 6, &content),
+        ],
+        "jev-latest",
+        0.7,
+        4,
+        BatchConfig {
+            batch: false,
+            max_questions: 8,
+            max_state_lines: 200,
+        },
+        None,
+    );
+    assert_eq!(findings.len(), 3);
+    assert_eq!(
+        decider.calls.load(Ordering::SeqCst),
+        3,
+        "batch = false = one call per candidate"
+    );
 }
