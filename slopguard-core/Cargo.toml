@@ -22,7 +22,7 @@ thiserror = "2"
 sha2 = "0.10"
 rmp-serde = "1"
 serde_yaml = "0.9"
-slopguard-rules = { path = "../slopguard-rules", version = "0.1.14" }
+slopguard-rules = { path = "../slopguard-rules", version = "0.1.15" }
 dirs = "7.0.0"
 smart-default = "0.7.1"
 globset = "0.4"
