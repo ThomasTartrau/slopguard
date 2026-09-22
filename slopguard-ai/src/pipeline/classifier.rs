@@ -14,7 +14,10 @@
 //! Enabled by the `provider-typesafe` feature.
 
 use std::collections::BTreeMap;
+use std::path::Path;
+use std::sync::Arc;
 
+use futures::future::join_all;
 use ironflow_core::decision::{DecisionProvider, DecisionQuestion, DecisionRequest, NoulCriteria};
 use ironflow_core::provider::AgentProvider;
 use ironflow_core::providers::http::typesafe::{
@@ -26,20 +29,20 @@ use slopguard_core::config::{ClassifierConfig, ClassifierTransport};
 use slopguard_core::finding::Finding;
 use slopguard_core::rule::ReasonMode;
 use thiserror::Error;
+use tokio::runtime::Builder;
+use tokio::sync::Semaphore;
 
 use crate::cache::{cache_key, AiCache};
 use crate::provider::non_empty_env;
 
-use super::context::{extract_context, CONTEXT_RADIUS};
+use super::context::{extract_context, extract_numbered, CONTEXT_RADIUS};
 use super::prompt::render_prompt;
-use super::{call_llm, run_bounded, AiCandidate};
-
-/// The name of the noul question asked for every candidate.
-pub(crate) const QUESTION: &str = "is_issue";
+use super::{call_llm, AiCandidate};
 
 /// What replaces `{{code}}` in the noul instructions: the code itself travels
-/// as the request `state`, not inline in the instructions.
-const CODE_PLACEHOLDER: &str = "the code under review (provided as the state)";
+/// as the request `state` (line-numbered), not inline in the instructions.
+const CODE_PLACEHOLDER: &str =
+    "the code under review (provided as the state, each line prefixed with its absolute line number)";
 
 /// Environment variable holding the direct TypeSafe API key.
 pub const TYPESAFE_API_KEY_ENV: &str = "TYPESAFE_API_KEY";
@@ -106,31 +109,121 @@ pub fn resolve_jev_model(cfg: &ClassifierConfig) -> String {
     })
 }
 
-/// Build the decision request for one candidate: the code as `state`, and a
-/// single noul question with the rule's calibration criteria.
-fn build_request(
-    code: &str,
-    candidate: &AiCandidate,
-    instructions: String,
-    jev_model: &str,
-) -> DecisionRequest {
-    let criteria = NoulCriteria {
-        if_true: candidate.if_true.clone(),
-        if_false: candidate.if_false.clone(),
-    };
-    let mut questions = BTreeMap::new();
-    questions.insert(
-        QUESTION.to_string(),
-        DecisionQuestion::Noul {
-            instructions: json!(instructions),
-            criteria,
-        },
+/// Batching configuration for [`run_classifier_pass`], mirrored from
+/// `[ai.classifier]`.
+pub struct BatchConfig {
+    /// Whether overlapping cache-miss candidates are grouped into one request.
+    pub batch: bool,
+    /// Maximum number of nouls (candidates) in one batched request.
+    pub max_questions: usize,
+    /// Maximum number of source lines carried in one batched request `state`.
+    pub max_state_lines: usize,
+}
+
+/// Resolved caps used while clustering: the context radius that decides window
+/// overlap, plus the two size limits.
+struct ClusterCaps {
+    radius: usize,
+    max_questions: usize,
+    max_state_lines: usize,
+}
+
+/// A group of cache-miss candidates from one file whose context windows overlap,
+/// answered by a single multi-noul request over the merged `[region_start,
+/// region_end]` line range (1-based, inclusive).
+struct Cluster<'a> {
+    members: Vec<&'a AiCandidate>,
+    region_start: usize,
+    region_end: usize,
+}
+
+/// The noul instructions for one candidate: the rule prompt with the code left
+/// out (it travels as the request `state`), plus the candidate's absolute line
+/// so the model evaluates the right spot inside a shared region. Carrying the
+/// line here also makes the cache key unique per candidate, so two matches of
+/// the same rule in one file no longer collide.
+fn cluster_instructions(candidate: &AiCandidate) -> String {
+    let filename = candidate.finding.file.display().to_string();
+    let base = render_prompt(
+        &candidate.prompt_template,
+        CODE_PLACEHOLDER,
+        &filename,
+        &candidate.rule_context,
     );
-    DecisionRequest {
-        state: json!(code),
-        model: jev_model.into(),
-        questions,
+    format!(
+        "{base}\n\nEvaluate only the code at line {}.",
+        candidate.finding.line
+    )
+}
+
+/// The per-candidate cache key. Structure unchanged
+/// (`[file_content, rule_id, instructions, jev_model]`); the instructions now
+/// carry the candidate line, so distinct candidates get distinct keys.
+fn candidate_key(candidate: &AiCandidate, jev_model: &str) -> String {
+    cache_key(&[
+        &candidate.file_content,
+        candidate.finding.rule_id.as_str(),
+        &cluster_instructions(candidate),
+        jev_model,
+    ])
+}
+
+/// The deterministic question key for the `index`th member of a cluster.
+fn question_key(index: usize) -> String {
+    format!("q{index}")
+}
+
+/// Start a cluster from a single candidate: its context window is the region.
+fn new_cluster(candidate: &AiCandidate, radius: usize) -> Cluster<'_> {
+    Cluster {
+        region_start: candidate.finding.line.saturating_sub(radius).max(1),
+        region_end: candidate.finding.line + radius,
+        members: vec![candidate],
     }
+}
+
+/// Group cache-miss candidates into clusters: by file, sorted by line, merging
+/// while the next candidate's `[line-R, line+R]` window overlaps the current
+/// region and no cap is exceeded, otherwise starting a new cluster.
+fn build_clusters<'a>(misses: &[&'a AiCandidate], caps: &ClusterCaps) -> Vec<Cluster<'a>> {
+    let mut by_file: BTreeMap<&Path, Vec<&'a AiCandidate>> = BTreeMap::new();
+    for &candidate in misses {
+        by_file
+            .entry(candidate.finding.file.as_path())
+            .or_default()
+            .push(candidate);
+    }
+
+    let mut clusters = Vec::new();
+    for (_file, mut candidates) in by_file {
+        candidates.sort_by_key(|candidate| candidate.finding.line);
+        let mut iter = candidates.into_iter();
+        let Some(first) = iter.next() else {
+            continue;
+        };
+        let mut current = new_cluster(first, caps.radius);
+        for candidate in iter {
+            let window_start = candidate.finding.line.saturating_sub(caps.radius).max(1);
+            let window_end = candidate.finding.line + caps.radius;
+            let merged_start = current.region_start.min(window_start);
+            let merged_end = current.region_end.max(window_end);
+            // Sorted ascending, so the window can only extend downward: overlap
+            // reduces to "does its start fall within the current region".
+            let overlaps = window_start <= current.region_end;
+            let over_questions = current.members.len() + 1 > caps.max_questions;
+            let over_lines = merged_end - merged_start + 1 > caps.max_state_lines;
+            if overlaps && !over_questions && !over_lines {
+                current.region_start = merged_start;
+                current.region_end = merged_end;
+                current.members.push(candidate);
+            } else {
+                clusters.push(current);
+                current = new_cluster(candidate, caps.radius);
+            }
+        }
+        clusters.push(current);
+    }
+    clusters
 }
 
 /// Ask the LLM to write a per-instance reason for a `generated` rule. `None`
@@ -152,54 +245,18 @@ async fn generate_reason(
     Some(verdict.reason)
 }
 
-/// Classify a single candidate: consult the cache, else call Jev; apply the
-/// threshold; and, on a fire, attach the reason (static note or LLM-generated).
-async fn classify_one(
-    decider: &dyn DecisionProvider,
-    llm: Option<&dyn AgentProvider>,
+/// Build a finding for a classified candidate, or `None` when its probability
+/// is below the (per-rule or global) threshold. On a fire, the reason is the
+/// static note or, for a `generated` rule, an LLM-written per-instance note.
+///
+/// The threshold is applied here, after the cache read, so retuning it never
+/// forces a new call: the raw probability is what is cached.
+async fn finding_for(
     candidate: &AiCandidate,
-    jev_model: &str,
+    probability: f64,
+    llm: Option<&dyn AgentProvider>,
     global_threshold: f64,
-    cache: Option<&AiCache>,
 ) -> Option<Finding> {
-    let filename = candidate.finding.file.display().to_string();
-    let code = extract_context(
-        &candidate.file_content,
-        candidate.finding.line,
-        CONTEXT_RADIUS,
-    );
-    // The noul instructions: the rule prompt with the code left out, since the
-    // code is carried by the request `state`.
-    let instructions = render_prompt(
-        &candidate.prompt_template,
-        CODE_PLACEHOLDER,
-        &filename,
-        &candidate.rule_context,
-    );
-    let key = cache_key(&[
-        &candidate.file_content,
-        candidate.finding.rule_id.as_str(),
-        &instructions,
-        jev_model,
-    ]);
-
-    let probability = match cache.and_then(|c| c.get_probability(&key)) {
-        Some(p) => p,
-        None => {
-            let request = build_request(&code, candidate, instructions, jev_model);
-            let output = decider.decide(&request).await.ok()?;
-            let p = output.noul(QUESTION).ok()?;
-            if let Some(cache) = cache {
-                // A cache write failure must not drop the finding.
-                // slopguard-disable-next-line no-ignored-result
-                let _ = cache.put_probability(&key, p);
-            }
-            p
-        }
-    };
-
-    // Threshold applied after the cache read, so retuning it does not force a
-    // new call: the raw probability is what is cached.
     let threshold = candidate.threshold.unwrap_or(global_threshold);
     if probability < threshold {
         return None;
@@ -209,27 +266,109 @@ async fn classify_one(
     finding.confidence = Some(probability);
     let note = match candidate.reason_mode {
         ReasonMode::Static => candidate.rule_context.clone(),
-        ReasonMode::Generated => match generate_reason(llm, candidate, &code, &filename).await {
-            Some(reason) => reason,
-            None => {
-                // CLI diagnostic to stderr, not application logging.
-                // slopguard-disable-next-line no-println-in-prod
-                eprintln!(
-                    "warning: rule '{}' requires a generated reason but no LLM provider is available; using the static note",
-                    finding.rule_id
-                );
-                candidate.rule_context.clone()
+        ReasonMode::Generated => {
+            let filename = candidate.finding.file.display().to_string();
+            let code = extract_context(
+                &candidate.file_content,
+                candidate.finding.line,
+                CONTEXT_RADIUS,
+            );
+            match generate_reason(llm, candidate, &code, &filename).await {
+                Some(reason) => reason,
+                None => {
+                    // CLI diagnostic to stderr, not application logging.
+                    // slopguard-disable-next-line no-println-in-prod
+                    eprintln!(
+                        "warning: rule '{}' requires a generated reason but no LLM provider is available; using the static note",
+                        finding.rule_id
+                    );
+                    candidate.rule_context.clone()
+                }
             }
-        },
+        }
     };
     finding.note = Some(note);
     Some(finding)
 }
 
+/// Classify one cluster with a single multi-noul request: the merged region as
+/// line-numbered `state`, one `qN` noul per member. Remaps each answer to its
+/// candidate, caches the raw probability, and applies the threshold per member.
+///
+/// A request error skips every member (no per-candidate fallback), and a
+/// missing or mistyped answer skips just that member, matching the existing
+/// silent-skip behavior.
+async fn classify_cluster(
+    decider: &dyn DecisionProvider,
+    llm: Option<&dyn AgentProvider>,
+    cluster: &Cluster<'_>,
+    jev_model: &str,
+    global_threshold: f64,
+    cache: Option<&AiCache>,
+) -> Vec<Finding> {
+    // Members are grouped by file, so any member's content is the file's.
+    let Some(first) = cluster.members.first() else {
+        return Vec::new();
+    };
+    let state = extract_numbered(
+        &first.file_content,
+        cluster.region_start,
+        cluster.region_end,
+    );
+
+    let mut questions = BTreeMap::new();
+    for (index, candidate) in cluster.members.iter().enumerate() {
+        let criteria = NoulCriteria {
+            if_true: candidate.if_true.clone(),
+            if_false: candidate.if_false.clone(),
+        };
+        questions.insert(
+            question_key(index),
+            DecisionQuestion::Noul {
+                instructions: json!(cluster_instructions(candidate)),
+                criteria,
+            },
+        );
+    }
+    let request = DecisionRequest {
+        state: json!(state),
+        model: jev_model.into(),
+        questions,
+    };
+    let output = match decider.decide(&request).await {
+        Ok(output) => output,
+        // A cluster-level failure (network, rate limit) skips all its members.
+        // slopguard-disable-next-line no-swallowed-error
+        Err(_) => return Vec::new(),
+    };
+
+    let mut findings = Vec::new();
+    for (index, candidate) in cluster.members.iter().enumerate() {
+        let probability = match output.noul(&question_key(index)) {
+            Ok(probability) => probability,
+            // A missing/mistyped answer skips just that member.
+            // slopguard-disable-next-line no-swallowed-error
+            Err(_) => continue,
+        };
+        if let Some(cache) = cache {
+            // A cache write failure must not drop the finding.
+            // slopguard-disable-next-line no-ignored-result
+            let _ = cache.put_probability(&candidate_key(candidate, jev_model), probability);
+        }
+        if let Some(finding) = finding_for(candidate, probability, llm, global_threshold).await {
+            findings.push(finding);
+        }
+    }
+    findings
+}
+
 /// Run the classification pass over `candidates`, bounded to `concurrency`
-/// simultaneous decisions. Returns only findings whose probability meets the
+/// simultaneous decision requests. Cache-miss candidates whose context windows
+/// overlap are batched into one multi-noul request per cluster; cache hits skip
+/// the network entirely. Returns only findings whose probability meets the
 /// threshold. Blocks the calling thread on a private multi-thread runtime, like
 /// [`run_ai_pass`](super::run_ai_pass).
+#[allow(clippy::too_many_arguments)]
 pub fn run_classifier_pass(
     decider: &dyn DecisionProvider,
     llm: Option<&dyn AgentProvider>,
@@ -237,10 +376,75 @@ pub fn run_classifier_pass(
     jev_model: &str,
     global_threshold: f64,
     concurrency: usize,
+    caps: BatchConfig,
     cache: Option<&AiCache>,
 ) -> Vec<Finding> {
-    run_bounded(&candidates, concurrency, |candidate| {
-        classify_one(decider, llm, candidate, jev_model, global_threshold, cache)
+    if candidates.is_empty() {
+        return Vec::new();
+    }
+    let runtime = match Builder::new_multi_thread().enable_all().build() {
+        Ok(runtime) => runtime,
+        // If a runtime cannot be built, skip AI rather than crashing the scan.
+        Err(_) => return Vec::new(),
+    };
+
+    let cluster_caps = ClusterCaps {
+        radius: CONTEXT_RADIUS,
+        // batch = false collapses every candidate into its own single-noul call.
+        max_questions: if caps.batch {
+            caps.max_questions.max(1)
+        } else {
+            1
+        },
+        max_state_lines: caps.max_state_lines.max(1),
+    };
+
+    runtime.block_on(async {
+        // Read the cache per candidate: hits carry their probability, misses go
+        // to clustering.
+        let mut hits: Vec<(&AiCandidate, f64)> = Vec::new();
+        let mut misses: Vec<&AiCandidate> = Vec::new();
+        for candidate in &candidates {
+            match cache.and_then(|c| c.get_probability(&candidate_key(candidate, jev_model))) {
+                Some(probability) => hits.push((candidate, probability)),
+                None => misses.push(candidate),
+            }
+        }
+
+        let clusters = build_clusters(&misses, &cluster_caps);
+        let permits = Arc::new(Semaphore::new(concurrency.max(1)));
+
+        // Batched decision calls: one request per cluster, bounded on clusters.
+        let cluster_tasks = clusters.iter().map(|cluster| {
+            let permits = Arc::clone(&permits);
+            async move {
+                let _permit = match permits.acquire().await {
+                    Ok(permit) => permit,
+                    Err(_) => return Vec::new(),
+                };
+                classify_cluster(decider, llm, cluster, jev_model, global_threshold, cache).await
+            }
+        });
+        let mut findings: Vec<Finding> = join_all(cluster_tasks)
+            .await
+            .into_iter()
+            .flatten()
+            .collect();
+
+        // Cache hits need no network call, only the threshold and (rarely) an
+        // LLM-written reason.
+        let hit_tasks = hits.iter().map(|(candidate, probability)| {
+            let permits = Arc::clone(&permits);
+            async move {
+                let _permit = match permits.acquire().await {
+                    Ok(permit) => permit,
+                    Err(_) => return None,
+                };
+                finding_for(candidate, *probability, llm, global_threshold).await
+            }
+        });
+        findings.extend(join_all(hit_tasks).await.into_iter().flatten());
+        findings
     })
 }
 
