@@ -1,0 +1,28 @@
+id: no-assertion-free-test-ts
+language: typescript
+severity: warning
+category: correctness
+message: "Test with no expect(). It passes as long as the callback does not throw, proving nothing."
+note: "An it()/test() whose callback never calls expect() only checks that the code runs. Assert the expected result with expect(...)."
+rule:
+  kind: call_expression
+  all:
+    - has:
+        field: function
+        regex: '^(it|test)$'
+    - has:
+        kind: arrow_function
+        stopBy: end
+    - not:
+        has:
+          regex: 'expect\('
+          stopBy: end
+ignores:
+  - "**/fixtures/**"
+tests:
+  should_match:
+    - "it('does nothing', () => { const x = compute(); });"
+    - "test('does nothing', () => { setup(); run(); });"
+  should_not_match:
+    - "it('checks', () => { expect(compute()).toBe(42); });"
+    - "test('checks', async () => { const r = await run(); expect(r).toEqual(y); });"

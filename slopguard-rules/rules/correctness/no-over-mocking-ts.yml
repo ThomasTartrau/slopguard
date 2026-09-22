@@ -1,0 +1,24 @@
+id: no-over-mocking-ts
+language: typescript
+severity: warning
+category: correctness
+message: "Mocking a local module. The subject under test is replaced by a stub (pass-by-mock)."
+note: "jest.mock/vi.mock on a relative path ('./', '../') replaces your own code, so the test exercises the mock instead of the real implementation. Mock only third-party boundaries (bare specifiers like 'axios'), not the module you are testing."
+rule:
+  any:
+    - pattern: jest.mock($M)
+    - pattern: jest.mock($M, $$$F)
+    - pattern: vi.mock($M)
+    - pattern: vi.mock($M, $$$F)
+constraints:
+  M:
+    regex: '^[''"]\.'
+ignores:
+  - "**/fixtures/**"
+tests:
+  should_match:
+    - "jest.mock('./user-service');"
+    - "vi.mock('../repository/db', () => ({ query: vi.fn() }));"
+  should_not_match:
+    - "jest.mock('axios');"
+    - "vi.mock('node:fs');"

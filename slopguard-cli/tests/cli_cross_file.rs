@@ -36,13 +36,19 @@ fn fixture_project(name: &str) -> TempDir {
 /// Findings reported by `no-single-impl-trait` alone, so unrelated builtins
 /// cannot perturb the count.
 fn findings(dir: &Path) -> Vec<serde_json::Value> {
+    findings_for(dir, "no-single-impl-trait")
+}
+
+/// Findings reported by a single cross-file rule, so unrelated builtins cannot
+/// perturb the count.
+fn findings_for(dir: &Path, rule: &str) -> Vec<serde_json::Value> {
     let output = slopguard()
         .args([
             "scan",
             "--format",
             "json",
             "--rule",
-            "no-single-impl-trait",
+            rule,
             dir.to_str().unwrap(),
         ])
         .output()
@@ -80,6 +86,30 @@ fn two_impls_reports_nothing() {
 fn no_impl_reports_nothing() {
     let project = fixture_project("no_impl");
     assert!(findings(project.path()).is_empty());
+}
+
+#[test]
+fn duplicate_error_message_reports_each_occurrence() {
+    let project = fixture_project("dup_error_message");
+    let found = findings_for(project.path(), "no-duplicate-error-message");
+
+    assert_eq!(found.len(), 2, "got: {found:?}");
+    for finding in &found {
+        assert_eq!(finding["rule_id"], "no-duplicate-error-message");
+    }
+    let files: std::collections::HashSet<&str> =
+        found.iter().map(|f| f["file"].as_str().unwrap()).collect();
+    assert_eq!(
+        files.len(),
+        2,
+        "occurrences should span two files: {found:?}"
+    );
+}
+
+#[test]
+fn unique_error_message_reports_nothing() {
+    let project = fixture_project("unique_error_message");
+    assert!(findings_for(project.path(), "no-duplicate-error-message").is_empty());
 }
 
 #[test]

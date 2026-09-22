@@ -325,6 +325,7 @@ rule:
                     trait_name: "Repository".to_string(),
                     blanket: false,
                 }],
+                error_messages: Vec::new(),
             },
         };
 

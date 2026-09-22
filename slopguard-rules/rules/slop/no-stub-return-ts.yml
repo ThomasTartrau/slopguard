@@ -1,0 +1,27 @@
+id: no-stub-return-ts
+language: typescript
+severity: warning
+category: slop
+enabled: false
+message: "Function body is a single bare constant. Looks like an unimplemented stub."
+note: "A function with a declared return type whose whole body is return true/false/[]/{}/null returns a placeholder instead of real logic. Opt-in rule (getters and defaults can look similar): enable in slopguard.toml."
+rule:
+  any:
+    - pattern: 'function $N($$$P): $R { return true; }'
+    - pattern: 'function $N($$$P): $R { return false; }'
+    - pattern: 'function $N($$$P): $R { return []; }'
+    - pattern: 'function $N($$$P): $R { return null; }'
+    - pattern: '($$$P): $R => { return true; }'
+    - pattern: '($$$P): $R => { return false; }'
+    - pattern: '($$$P): $R => { return []; }'
+    - pattern: '($$$P): $R => { return null; }'
+ignores:
+  - "**/fixtures/**"
+tests:
+  should_match:
+    - "function isReady(): boolean { return true; }"
+    - "function items(): Item[] { return []; }"
+    - "const find = (id: number): Item | null => { return null; };"
+  should_not_match:
+    - "function isReady(): boolean { return this.ready; }"
+    - "function count(): number { return this.items.length; }"
