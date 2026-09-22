@@ -87,6 +87,106 @@ fn trait_in_cfg_test_is_flagged() {
     assert!(found.traits[0].in_cfg_test);
 }
 
+// --- duplicate_error_message ---
+
+fn dup_rule() -> Rule {
+    parse_rule(
+        r#"
+id: no-duplicate-error-message
+language: rust
+severity: warning
+category: slop
+cross_file: duplicate_error_message
+message: "Same error message literal in more than one file."
+"#,
+    )
+    .unwrap()
+}
+
+fn dup_findings(contributions: &[(PathBuf, FileSymbols)], filter: &DeclFilter) -> Vec<Finding> {
+    let index = SymbolIndex::build(contributions.iter().map(|(p, s)| (p.as_path(), s)));
+    evaluate(
+        &dup_rule(),
+        CrossFileKind::DuplicateErrorMessage,
+        &index,
+        filter,
+    )
+}
+
+fn errmsgs(source: &str) -> Vec<ErrorMessageLit> {
+    symbols(source).error_messages
+}
+
+fn with_msgs(path: &str, msgs: Vec<ErrorMessageLit>) -> (PathBuf, FileSymbols) {
+    (
+        PathBuf::from(path),
+        FileSymbols {
+            error_messages: msgs,
+            ..Default::default()
+        },
+    )
+}
+
+#[test]
+fn extracts_panic_message() {
+    let found = errmsgs(r#"fn f() { panic!("the widget failed to load"); }"#);
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].text, "the widget failed to load");
+}
+
+#[test]
+fn extracts_expect_message() {
+    let found = errmsgs(r#"fn f() { let x = do_it().expect("could not open the file"); }"#);
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].text, "could not open the file");
+}
+
+#[test]
+fn short_message_is_ignored() {
+    assert!(errmsgs(r#"fn f() { panic!("nope"); }"#).is_empty());
+}
+
+#[test]
+fn non_error_string_is_ignored() {
+    assert!(errmsgs(r#"fn f() { let name = "a long plain configuration string"; }"#).is_empty());
+}
+
+#[test]
+fn same_message_in_two_files_fires_per_occurrence() {
+    let msg = errmsgs(r#"fn a() { panic!("an unexpected error occurred"); }"#);
+    let contributions = [
+        with_msgs("src/a.rs", msg.clone()),
+        with_msgs("src/b.rs", msg),
+    ];
+    let found = dup_findings(&contributions, &open_filter());
+    assert_eq!(found.len(), 2, "got: {found:?}");
+    assert_eq!(found[0].rule_id.as_str(), "no-duplicate-error-message");
+}
+
+#[test]
+fn message_in_one_file_stays_silent() {
+    let mut msg = errmsgs(r#"fn a() { panic!("an unexpected error occurred"); }"#);
+    // Same literal twice, but in a single file: not a cross-file duplicate.
+    msg.push(msg[0].clone());
+    let contributions = [with_msgs("src/a.rs", msg)];
+    assert!(dup_findings(&contributions, &open_filter()).is_empty());
+}
+
+#[test]
+fn distinct_messages_stay_silent() {
+    let contributions = [
+        with_msgs(
+            "src/a.rs",
+            errmsgs(r#"fn a() { panic!("the widget failed to load"); }"#),
+        ),
+        with_msgs(
+            "src/b.rs",
+            errmsgs(r#"fn b() { panic!("the gadget failed to save"); }"#),
+        ),
+    ];
+    assert!(dup_findings(&contributions, &open_filter()).is_empty());
+}
+
 fn single_impl_rule() -> Rule {
     parse_rule(
         r#"
@@ -134,7 +234,14 @@ fn contribution(
     traits: Vec<TraitDecl>,
     impls: Vec<TraitImpl>,
 ) -> (PathBuf, FileSymbols) {
-    (PathBuf::from(path), FileSymbols { traits, impls })
+    (
+        PathBuf::from(path),
+        FileSymbols {
+            traits,
+            impls,
+            error_messages: Vec::new(),
+        },
+    )
 }
 
 /// Evaluate `single_impl_trait` over hand-written per-file contributions.

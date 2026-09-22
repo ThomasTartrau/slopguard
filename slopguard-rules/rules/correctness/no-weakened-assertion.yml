@@ -1,0 +1,41 @@
+id: no-weakened-assertion
+language: rust
+severity: warning
+category: correctness
+message: "Trivial assertion that can never fail. Assert the real expected value."
+note: "assert!(true), assert_eq!(x, x) and debug_assert!(true) always hold, so the test proves nothing. An AI writes them to turn a red test green without covering the behavior."
+rule:
+  any:
+    - pattern: assert!(true)
+    - pattern: debug_assert!(true)
+    - pattern: assert_eq!($X, $X)
+    - pattern: debug_assert_eq!($X, $X)
+ignores:
+  - "**/fixtures/**"
+tests:
+  should_match:
+    - |
+      #[test]
+      fn t() {
+          assert!(true);
+      }
+    - |
+      #[test]
+      fn t() {
+          assert_eq!(value, value);
+      }
+    - |
+      fn t() {
+          debug_assert!(true);
+      }
+  should_not_match:
+    - |
+      #[test]
+      fn t() {
+          assert_eq!(result, 42);
+      }
+    - |
+      #[test]
+      fn t() {
+          assert!(result.is_ok());
+      }
