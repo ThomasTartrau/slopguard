@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.1.27](https://gitlab.com/ThomasTartrau/slopguard/compare/slopguard-core-v0.1.26...slopguard-core-v0.1.27) - 2026-09-22
+
+### Added
+
+- add 10 new correctness and slop rules
+
 ## [0.1.25](https://gitlab.com/ThomasTartrau/slopguard/compare/slopguard-core-v0.1.24...slopguard-core-v0.1.25) - 2026-09-22
 
 ### Added
