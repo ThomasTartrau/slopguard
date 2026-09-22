@@ -388,6 +388,30 @@ threshold = 0.85
 }
 
 #[test]
+fn classifier_batch_defaults() {
+    // Batching is on by default with caps of 8 questions and 200 state lines.
+    let cfg = Config::default();
+    assert!(cfg.ai.classifier.batch, "batching defaults on");
+    assert_eq!(cfg.ai.classifier.batch_max_questions, 8);
+    assert_eq!(cfg.ai.classifier.batch_max_state_lines, 200);
+}
+
+#[test]
+fn classifier_batch_overrides_parse() {
+    let dir = tempdir().unwrap();
+    write(
+        dir.path().join("slopguard.toml"),
+        "[ai.classifier]\nbatch = false\nbatch_max_questions = 3\nbatch_max_state_lines = 120\n",
+    )
+    .unwrap();
+
+    let cfg = load_config_from(None, dir.path()).unwrap();
+    assert!(!cfg.ai.classifier.batch);
+    assert_eq!(cfg.ai.classifier.batch_max_questions, 3);
+    assert_eq!(cfg.ai.classifier.batch_max_state_lines, 120);
+}
+
+#[test]
 fn classifier_defaults_when_absent() {
     // The classifier must be off with a 0.7 threshold when [ai.classifier] is
     // not present: opt-in strict, so a bare config never reaches Jev.

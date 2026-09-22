@@ -1,0 +1,23 @@
+{
+  "_comment": "Labeled calibration set for the System One classifier. Each case names a fixture file, the 1-based line of the matched construct, the rule it belongs to, and the expected is_issue label. Consumed by the ignored live A/B test slopguard-ai/tests/calibration.rs.",
+  "rules": {
+    "ai-safety-comment-validation": {
+      "rule_context": "A // SAFETY: comment must state the concrete invariants and preconditions that make this unsafe block sound, not a generic 'this is safe because we checked'.",
+      "prompt": "You are auditing a Rust // SAFETY comment on an unsafe block in {{filename}}.\n\nA valid SAFETY comment names the concrete invariants, preconditions, or ownership guarantees that make the unsafe operations sound. An invalid one is generic, circular, or unrelated to the actual unsafe operations (\"this is safe\", \"we checked\", \"trust me\").\n\nContext: {{rule_context}}\n\nCode (SAFETY comment plus surrounding lines):\n{{code}}\n\nDecide whether the SAFETY comment fails to justify the unsafe block. Set is_issue to true only when the justification is missing, generic, or does not correspond to the unsafe operations shown."
+    },
+    "ai-doc-comment-quality": {
+      "rule_context": "A doc-comment on a pub fn or pub struct should add information the reader cannot get from the name and signature: preconditions, errors, panics, or non-obvious behavior.",
+      "prompt": "You are auditing a Rust doc-comment on a public item in {{filename}}.\n\nA useful doc-comment adds information the reader cannot recover from the item name and signature: what it returns in edge cases, when it errors or panics, invariants, units, or non-obvious behavior. A low-value doc-comment merely restates the name.\n\nContext: {{rule_context}}\n\nCode (doc-comment plus the item it documents):\n{{code}}\n\nDecide whether the doc-comment only paraphrases the name and signature. Set is_issue to true only when it adds no information beyond what the name already conveys."
+    }
+  },
+  "cases": [
+    { "file": "safety.rs", "line": 14, "rule": "ai-safety-comment-validation", "label": true,  "note": "generic 'this is safe'" },
+    { "file": "safety.rs", "line": 32, "rule": "ai-safety-comment-validation", "label": true,  "note": "'trust me, we already checked'" },
+    { "file": "safety.rs", "line": 49, "rule": "ai-safety-comment-validation", "label": false, "note": "concrete: len clamped, valid for reads" },
+    { "file": "safety.rs", "line": 68, "rule": "ai-safety-comment-validation", "label": false, "note": "concrete: i < len from caller bounds check" },
+    { "file": "doc.rs",    "line": 8,  "rule": "ai-doc-comment-quality",       "label": true,  "note": "'Returns the user.' restates the name" },
+    { "file": "doc.rs",    "line": 28, "rule": "ai-doc-comment-quality",       "label": false, "note": "documents error paths and duplicate-key behavior" },
+    { "file": "doc.rs",    "line": 56, "rule": "ai-doc-comment-quality",       "label": true,  "note": "'Creates a new Config.' restates the name" },
+    { "file": "doc.rs",    "line": 69, "rule": "ai-doc-comment-quality",       "label": false, "note": "documents units and zero-value semantics" }
+  ]
+}

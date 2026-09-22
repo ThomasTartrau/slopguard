@@ -17,5 +17,5 @@ pub use provider::{build_provider, provider_kind, ProviderError, ProviderKind};
 
 #[cfg(feature = "provider-typesafe")]
 pub use pipeline::classifier::{
-    build_classifier, resolve_jev_model, run_classifier_pass, ClassifierError,
+    build_classifier, resolve_jev_model, run_classifier_pass, BatchConfig, ClassifierError,
 };
