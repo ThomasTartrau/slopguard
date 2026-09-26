@@ -4,7 +4,7 @@ severity: warning
 category: slop
 cross_file: duplicate_error_message
 message: "Same error message literal used in more than one file. Extract a shared constant or a typed error."
-note: "An error message copied verbatim across files (from panic!, .expect(), bail!, anyhow!, and similar) is hard to trace back to its source and drifts out of sync. Define it once. Only literals of 10 characters or more are considered, and duplication inside a single file is ignored."
+note: "An error value built from a message copied verbatim across files (bail!, anyhow!, eyre!, format_err!, ensure!) carries no location, so a log line cannot tell the sites apart, and the copies drift out of sync. Define it once. Panic messages (panic!, .expect(), unreachable!) are not considered: a panic prints its file and line. Only literals of 10 characters or more count, and duplication inside a single file is ignored."
 fix: "Move the message to a shared const or an error enum variant and reference it from both sites."
 skip_test_code: true
 ignores:

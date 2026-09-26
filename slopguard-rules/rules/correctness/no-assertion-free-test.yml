@@ -3,25 +3,43 @@ language: rust
 severity: warning
 category: correctness
 message: "Test function with no assertion. It passes as long as the code does not panic, proving nothing."
-note: "A #[test] with no assert!/panic!, no ? propagation and no #[should_panic] only checks that the code runs. Assert the expected result, or return Result and use ? so an error fails the test."
+note: "A #[test] with no assert!/panic!, no ? propagation, no .unwrap()/.expect(), no inline snapshot and no #[should_panic] only checks that the code runs. Assert the expected result, or return Result and use ? so an error fails the test."
+# Only the attributes stacked directly on the function count: the search walks
+# back over attributes and comments and stops at the first other sibling, so a
+# #[cfg(test)] or #[test] on an earlier item never marks this one as a test.
 rule:
   kind: function_item
   all:
     - follows:
         kind: attribute_item
-        regex: 'test'
-        stopBy: end
+        regex: '^#\[\s*(\w+::)*\w*test\w*\s*[\](]'
+        stopBy:
+          not:
+            any:
+              - kind: attribute_item
+              - kind: line_comment
+              - kind: block_comment
     - not:
         follows:
           kind: attribute_item
           regex: 'should_panic'
-          stopBy: end
+          stopBy:
+            not:
+              any:
+                - kind: attribute_item
+                - kind: line_comment
+                - kind: block_comment
     - not:
         has:
           any:
             - regex: 'assert'
             - regex: 'panic'
             - kind: try_expression
+            # A panicking accessor fails the test on an error, like `?` does.
+            - regex: '\.(unwrap|expect)(_err)?\s*\('
+            # An inline snapshot (snapbox str![], expect-test expect![]) is the
+            # expected value handed to a checking helper.
+            - regex: '\b(str|expect|expect_file|file)!\s*\['
           stopBy: end
 ignores:
   - "**/fixtures/**"
@@ -37,6 +55,14 @@ tests:
       fn t() {
           setup();
           run();
+      }
+    # Stacked attributes and a comment between them and the function.
+    - |
+      #[tokio::test(flavor = "multi_thread")]
+      #[ignore]
+      // slow
+      async fn t() {
+          run().await;
       }
   should_not_match:
     - |
@@ -55,4 +81,30 @@ tests:
       fn t() -> Result<(), Error> {
           let x = compute()?;
           Ok(())
+      }
+    # Not a test: the #[test] belongs to the previous function.
+    - |
+      #[test]
+      fn t() {
+          assert!(ok());
+      }
+
+      fn helper() {
+          setup();
+      }
+    # Not a test: #[cfg(test)] is not a test attribute.
+    - |
+      #[cfg(test)]
+      fn helper() {
+          setup();
+      }
+    - |
+      #[test]
+      fn t() {
+          compute().unwrap();
+      }
+    - |
+      #[cargo_test]
+      fn t() {
+          p.cargo("build").with_stderr_data(str![[r#"[FINISHED]"#]]).run();
       }

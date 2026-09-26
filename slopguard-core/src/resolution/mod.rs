@@ -62,12 +62,13 @@ pub struct ImportRef {
 }
 
 /// What one file contributes to the resolution pass: its imports plus, for Rust,
-/// the modules it declares (`mod foo;`), which a bare `use foo::...` in the same
-/// file may legitimately reference.
+/// the names it binds itself (`mod foo;`, `use crate::a::foo;`, `use a::b as
+/// foo;`), which a bare `use foo::...` in the same file may legitimately
+/// reference.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FileImports {
     pub imports: Vec<ImportRef>,
-    pub local_mods: Vec<String>,
+    pub local_names: Vec<String>,
 }
 
 impl FileImports {
@@ -102,17 +103,17 @@ impl ResolutionFilter {
 /// below select the impl by matching on [`Language`]. The extraction method is
 /// generic over `Doc`, so this is a static-dispatch contract, not a `dyn` one.
 trait LanguageSupport {
-    /// Collect the imports (and, for Rust, local `mod` declarations) of one
+    /// Collect the imports (and, for Rust, the names bound in the file) of one
     /// parsed file.
     fn extract_imports<D: Doc>(&self, root: &AstGrep<D>) -> FileImports;
 
     /// Whether one import resolves against manifests, the standard library /
-    /// builtins, on-disk paths, or same-file modules. `local_mods` is only
+    /// builtins, on-disk paths, or same-file names. `local_names` is only
     /// meaningful for Rust; other languages ignore it.
     fn resolves(
         &self,
         import: &ImportRef,
-        local_mods: &[String],
+        local_names: &[String],
         file_dir: &Path,
         manifests: &mut ManifestResolver,
     ) -> bool;
@@ -136,13 +137,13 @@ pub fn extract_imports<D: Doc>(lang: &Language, root: &AstGrep<D>) -> FileImport
 pub fn import_resolves(
     lang: &Language,
     import: &ImportRef,
-    local_mods: &[String],
+    local_names: &[String],
     file_dir: &Path,
     manifests: &mut ManifestResolver,
 ) -> bool {
     match lang {
-        Language::Rust => Rust.resolves(import, local_mods, file_dir, manifests),
-        Language::TypeScript => TypeScript.resolves(import, local_mods, file_dir, manifests),
+        Language::Rust => Rust.resolves(import, local_names, file_dir, manifests),
+        Language::TypeScript => TypeScript.resolves(import, local_names, file_dir, manifests),
     }
 }
 
@@ -162,7 +163,7 @@ pub fn evaluate_file(
     imports
         .imports
         .iter()
-        .filter(|import| !import_resolves(lang, import, &imports.local_mods, file_dir, manifests))
+        .filter(|import| !import_resolves(lang, import, &imports.local_names, file_dir, manifests))
         .map(|import| Finding {
             rule_id: rule.id.clone(),
             severity: rule.severity.clone(),

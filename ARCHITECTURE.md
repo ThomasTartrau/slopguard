@@ -7,13 +7,20 @@ slopguard is a Rust CLI tool that scans source code for AI-generated anti-patter
 ```
 slopguard scan [path]
   |
-  +-- Phase 1: AST analysis (ast-grep-core, deterministic, instant)
-  |     -> structural findings
+  +-- Phase 1: per-file pass, one parse per file (deterministic, cached)
+  |     ast + metric engines, import extraction, symbol extraction
   |
-  +-- Phase 2: AI analysis (v0.2+, ironflow SDK, on pre-filtered candidates)
-  |     -> semantic findings
+  +-- Phase 2: project pass (full scans only, never under --diff)
+  |     cross-file engine over the symbol index
   |
-  +-- Unified output (same format, severity, file:line)
+  +-- Import resolution against the manifests on disk (re-run every scan)
+  |
+  +-- Phase 3: AI pass (slopguard-ai, on AST pre-filtered candidates)
+  |     LLM confirmation, or the optional classifier
+  |
+  +-- baseline filter -> severity escalation -> severity threshold
+  |
+  +-- Unified output (text / json / sarif / html)
 ```
 
 ## Workspace structure
@@ -21,10 +28,14 @@ slopguard scan [path]
 ```
 slopguard/
   Cargo.toml              # workspace root
-  slopguard-cli/          # binary crate (clap CLI)
+  slopguard-cli/          # binary crate (clap CLI, output rendering)
   slopguard-core/         # library crate (scan engine, config, rule loading)
   slopguard-rules/        # builtin rules (YAML files embedded at compile time)
-  tests/                  # integration tests
+  slopguard-ai/           # AI pass for rules with an `ai_check`
+  tests/fixtures/         # fixture projects shared by the integration tests
+  ci/                     # GitLab CI template for user projects
+  .github/actions/        # GitHub Action for user projects
+  benchmarks/             # reproducible scans of real repositories (bench.sh)
 ```
 
 ### slopguard-cli
@@ -36,75 +47,73 @@ The binary crate. Responsible for:
 - Exit code logic (0 = clean, 1 = findings, 2 = config error)
 - Reading config from slopguard.toml (hierarchical: global + project)
 
-Dependencies: clap, slopguard-core, serde_json, colored/owo-colors, sarif (for SARIF output)
+Dependencies: clap, slopguard-core, slopguard-ai, serde_json, strsim (rule id suggestions), similar (the `--fix --dry-run` diff). Colors are raw ANSI escapes and SARIF is built with serde_json, with no dedicated crate.
 
 ### slopguard-core
 
 The library crate. Responsible for:
-- Rule loading and validation (builtin + custom YAML)
-- AST scanning via ast-grep-core
-- Inline disable comment parsing (// slopguard-disable-next-line)
-- Config parsing (slopguard.toml via serde + toml)
-- Finding representation (file, line, rule_id, severity, message, note)
-- Baseline hashing, persistence and filtering (baseline.rs)
+- Rule loading and validation (builtin + custom YAML), external rule sources
+  from git or local paths with their provenance (rule/, source/)
+- Scan orchestration (scanner/): every in-process rule kind implements the
+  `RuleEngine` trait (engine.rs, D30), the orchestrator parses each file once
+  and hands the tree to every per-file engine
+- File-level metrics (metric.rs)
 - Project-wide (cross-file) analysis: per-file symbol extraction and the index
-  they are folded into (cross_file.rs). A cache entry carries the file's symbol
+  they are folded into (cross_file/). A cache entry carries the file's symbol
   contribution alongside its findings, so a cache hit feeds the cross-file pass
   without reparsing.
-- Git diff resolution for `--diff` (git.rs)
-- Rule testing (should_match / should_not_match validation)
+- Import resolution against Cargo.toml / package.json / tsconfig.json
+  (resolution/, D32)
+- Per-file scan cache keyed by content hash (cache.rs)
+- Inline disable comment parsing and the unused-disable report (disable.rs)
+- `#[cfg(test)]` and test-path detection for `skip_test_code` (test_filter.rs)
+- Autofix: `rewrite` application, fix point, dry-run diff (fix/, D31)
+- Config parsing (slopguard.toml via serde + toml) and `init` presets (preset.rs)
+- Finding representation (file, line, rule_id, severity, message, note)
+- Baseline hashing, persistence and filtering (baseline.rs)
+- Severity escalation (escalation.rs)
+- Git integration: `--diff` file lists and the `--fix` dirty-tree check (git.rs)
+- Rule testing (should_match / should_not_match / should_fix validation, testing/)
 - Ruleset management (slop, security, correctness)
 
 Dependencies: ast-grep-core, ast-grep-config, ast-grep-language, serde, toml, glob/ignore
 
+### slopguard-ai
+
+Runs the rules that carry an `ai_check`. The CLI collects their AST matches as
+candidates, then this crate confirms or rejects each one:
+- provider.rs: builds the generative provider from `[ai]` (`api` with the
+  Anthropic or OpenAI vendor, or `cli` for the local `claude` binary)
+- pipeline.rs: bounded-concurrency LLM confirmation, one call per candidate,
+  on a private tokio runtime
+- pipeline/classifier.rs: the optional System One classifier (Jev), which
+  returns a probability per candidate, batched per context cluster (D35, D36)
+- pipeline/context.rs: the code window sent with a candidate (25 lines each
+  side)
+- cache.rs: AI verdicts and probabilities under `<cache-dir>/ai/`
+
+It is not a `RuleEngine`: it is async, needs an external provider and is
+orchestrated by `slopguard-cli` (D30). Dependencies: ironflow-core, tokio.
+
 ### slopguard-rules
 
-Contains the builtin YAML rules organized by ruleset:
+Contains the builtin YAML rules organized by ruleset, one file per
+(rule, language) pair:
 ```
 slopguard-rules/
   src/
-    lib.rs                # exports embedded rules via include_str! or rust-embed
+    lib.rs                # exports the embedded rules (rust-embed)
   rules/
-    slop/
-      no-slop-words.yml
-      no-trivial-doc.yml
-      no-paraphrase-doc.yml
-      no-and-more-doc.yml
-      no-restated-comment.yml
-      no-manual-display.yml
-      no-manual-rfc3339.yml
-      no-inline-qualified-path.yml
-      no-glob-reexport.yml
-    security/
-      no-debug-on-secrets.yml
-      no-empty-env-secret.yml
-      no-format-path.yml
-      no-format-url.yml
-      no-unsafe-without-safety.yml
-      no-safety-hallucination.yml
-      no-allow-dead-code.yml
-      no-client-without-timeout.yml
-    correctness/
-      no-unwrap-in-prod.yml
-      no-expect-in-prod.yml
-      no-ignored-result.yml
-      no-swallowed-error.yml
-      no-silent-fallback.yml
-      no-double-fallback.yml
-      no-ok-chain.yml
-      no-sqlx-runtime.yml
-      no-index-without-if-not-exists.yml
-      no-float-money.yml
-      pub-fn-needs-tracing.yml
-      test-needs-timeout.yml
-      no-any-typescript.yml
-      no-async-foreach.yml
-      no-replace-single.yml
-      no-sort-without-comparator.yml
-      no-useeffect-derived-state.yml
+    slop/                 # 44 files
+    security/             # 22 files
+    correctness/          # 51 files
+    fixtures/             # whole-file fixtures for metric rule tests
 ```
 
-Dependencies: rust-embed (or include_str! macros)
+117 files ship, 14 of them opt-in (`enabled: false`). `slopguard list --all`
+is the source of truth for the inventory, and RULES.md describes each rule.
+
+Dependencies: rust-embed
 
 ## Rule format (YAML)
 
@@ -125,8 +134,18 @@ ignores: ["**/tests/**"]       # glob exclude patterns
 
 # Slopguard extensions
 category: slop                 # slop | security | correctness (derived from ruleset dir if omitted)
-fix: "Use X instead of Y"     # textual suggestion (v0.1), ast-grep rewrite pattern (future)
+enabled: false                 # opt-in rule, activated by `rules.enable` (default true)
+fix: "Use X instead of Y"     # human message, never applied
+rewrite: "$R"                  # ast-grep rewrite template applied by `scan --fix` (D31)
+autofix_safe: true             # required for `rewrite` to be applied (default false)
 skip_test_code: true           # drop findings inside #[cfg(test)] blocks (Rust only, default false)
+ai_check:                      # turns the rule into an AI rule: `rule` only collects candidates
+  prompt: "..."                # template with {{filename}}, {{rule_context}}, {{code}}
+  model: "..."                 # optional per-rule LLM model
+  reason: static               # static | generated (classifier only, D35)
+  threshold: 0.8               # optional per-rule classifier threshold
+  if_true: "..."               # optional classifier criteria (prose)
+  if_false: "..."
 tests:                         # inline test cases
   should_match:
     - "code snippet that triggers the rule"
@@ -173,10 +192,14 @@ Absolute paths and `..` components are rejected.
 ### Cross-file rules
 
 `cross_file` replaces `rule` and `metric` and is mutually exclusive with both.
-It names a builtin analysis; the only kind today is `single_impl_trait`.
+It names a builtin analysis. Two kinds exist: `single_impl_trait` (a trait
+with exactly one implementor of the trait's own crate, D29) and
+`duplicate_error_message` (the same error value message of 10 characters or
+more, passed to `bail!`, `anyhow!`, `eyre!`, `format_err!` or `ensure!`, in two
+or more files, D37).
 
 ```yaml
-cross_file: single_impl_trait  # the only kind in v0.1
+cross_file: single_impl_trait  # or duplicate_error_message
 skip_test_code: true           # applies to the declaration site
 ignores: ["**/target/**"]      # applies to the declaration site
 ```
@@ -188,12 +211,55 @@ parse error. A cross-file rule carries no `tests` block, since no snippet can
 exercise it, and `slopguard test` reports it as untested.
 
 The pass runs after the per-file scan, over the walked paths only. Each scanned
-Rust file contributes a `FileSymbols` (its trait declarations and its
-`impl Trait for Type` headers) from the same parse that produced its findings;
-those contributions are folded into a project-wide `SymbolIndex` and every
-active cross-file rule is evaluated against it. `--diff` and any explicit file
-list skip evaluation, because their index would be incomplete, but they still
-collect and cache contributions so a later full scan is not penalised.
+Rust file contributes a `FileSymbols` (its trait declarations, its
+`impl Trait for Type` headers with the implementing type, the structs, enums
+and unions it declares, and its error message literals) from the same
+parse that produced its findings; those contributions are folded into a
+project-wide `SymbolIndex` and every active cross-file rule is evaluated
+against it. `--diff` and any explicit file list skip evaluation, because their
+index would be incomplete, but they still collect and cache contributions so a
+later full scan is not penalised.
+
+### Resolution rules
+
+`resolution` replaces `rule`, `metric` and `cross_file`. The only kind is
+`unresolved_import`, with one YAML per language (D32).
+
+```yaml
+resolution: unresolved_import
+message: "Import '$import' does not resolve."   # $import is the specifier
+```
+
+Each file's imports are extracted from its parse and cached with it, then
+resolved on every scan against the manifests found by walking up from the file
+(`Cargo.toml`, `package.json`, `tsconfig.json`). Rust checks the crate root
+only, and skips roots the file already has in scope: a name bound by a `mod`
+or another `use`, an uppercase item name, or any root in a module that holds a
+non-std glob import. The pass is per file, so it runs under `--diff` too. Like cross-file
+rules, resolution rules carry no `tests` block; their coverage lives in
+`tests/fixtures/resolution` and the CLI integration tests.
+
+### Rule sources
+
+Builtin rules are embedded; everything else is loaded at startup from
+`rules.custom_dirs` and `[[rules.sources]]` (D33):
+
+```toml
+[[rules.sources]]
+git = "https://gitlab.com/org/slopguard-rules.git"
+ref = "v1.2.0"          # tag, branch or sha; default branch when omitted
+path = "rules/"         # sub-directory inside the repository
+
+[[rules.sources]]
+path = "../shared-rules"
+```
+
+Git sources are shallow-fetched with the machine's `git` into
+`<user cache>/slopguard/sources/<hash>` (`SLOPGUARD_SOURCES_CACHE` overrides
+the root) and refreshed best-effort on each run; `--offline` reuses the cache
+only. `SLOPGUARD_GIT_TOKEN` provides an https token without writing it to
+disk. An external rule reusing a builtin (id, language) is rejected.
+`slopguard list` shows each rule's `source`.
 
 ## Config format (slopguard.toml)
 
@@ -204,11 +270,17 @@ security = true
 correctness = true
 
 [rules]
-disable = ["pub-fn-needs-tracing", "no-glob-reexport"]
+disable = ["no-glob-reexport"]
+enable = ["pub-fn-needs-tracing"]   # opt-in rules (enabled: false) are off otherwise
 custom_dirs = ["./my-rules"]
+
+[[rules.sources]]                   # see "Rule sources"
+git = "https://gitlab.com/org/slopguard-rules.git"
 
 [scan]
 ignores = ["target/", "generated/", "*.generated.rs"]
+test_paths = ["**/it/**"]           # extra globs treated as test code
+# cache_dir = ".slopguard-cache"
 
 [output]
 format = "text"    # text | json | sarif | html
@@ -216,9 +288,19 @@ colors = true
 
 [ai]
 enabled = false
-provider = "anthropic"   # anthropic | openai | ollama
-model = "claude-sonnet-5"
+provider = "api"          # api (HTTP) | cli (local claude binary)
+vendor = "anthropic"      # anthropic | openai, for provider = "api"
+model = "claude-haiku-4-5"
+concurrency = 4
 # api_key via ANTHROPIC_API_KEY / OPENAI_API_KEY env var
+
+[ai.classifier]           # optional, replaces the LLM confirmation (D35)
+enabled = false
+transport = "direct"      # direct (TYPESAFE_API_KEY) | openrouter (OPENROUTER_API_KEY)
+threshold = 0.7
+batch = true
+batch_max_questions = 8
+batch_max_state_lines = 200
 
 [escalation]
 enabled = false    # opt-in
@@ -324,6 +406,28 @@ let x = foo().unwrap();
 
 The core scanner reads the line above each finding. If it contains `slopguard-disable-next-line` (optionally with a rule id), the finding is suppressed.
 
+`scan --report-unused-disable` reports every directive that suppresses nothing
+as an `unused-disable` warning on the comment line. Consumption is judged on a
+separate, uncached raw scan, against the AST matches of every active rule, AI
+rules included before any model verdict, so the report does not depend on the
+provider (D34).
+
+## Autofix
+
+`scan --fix` applies the `rewrite` of every `autofix_safe` rule in place
+(`slopguard-core::fix`, D31):
+
+1. Refuse when the scanned paths have uncommitted changes, unless
+   `--allow-dirty` (outside a git repository the check passes).
+2. Match each autofixable rule (or its narrower `autofix_rule`) directly on the
+   source, skipping matches that detection would suppress: test code, inline
+   disable, baseline.
+3. Apply the non-overlapping edits, then match the new buffer again, until a
+   fix point or 10 iterations.
+4. Rescan from disk and exit 1 if findings remain.
+
+`--dry-run` prints the unified diff and writes nothing.
+
 ## Severity escalation
 
 `slopguard_core::escalation` groups the reported findings by `(file, rule id)`
@@ -365,6 +469,14 @@ Metric rules are tested on whole files instead of snippets: every entry of
 `should_match_files` / `should_not_match_files` name fixtures on disk. A
 failure reports the fixture path rather than its contents.
 
+Autofixable rules add `should_fix` cases (`before` / `after`): `slopguard test`
+applies the `rewrite` to `before` and requires the result to equal `after`.
+
+Cross-file and resolution rules are the exception: a snippet cannot exercise a
+project index or a manifest, so they carry no `tests` block, `slopguard test`
+lists them as "no tests", and they are covered by fixture projects under
+`tests/fixtures/` driven by the CLI integration tests.
+
 ## Key dependencies
 
 | Crate | Purpose | Version |
@@ -375,14 +487,12 @@ failure reports the fixture path rather than its contents.
 | clap | CLI argument parsing (derive) | 4.x |
 | serde + toml | Config parsing | latest |
 | serde_json | JSON output | latest |
-| owo-colors | Terminal colors | latest |
+| similar | Unified diff for `--fix --dry-run` | latest |
 | ignore | Gitignore-aware file walking | latest |
 | rust-embed | Embed builtin YAML rules | latest |
+| ironflow-core | LLM and classifier providers (slopguard-ai) | 3.x |
+| tokio | Async runtime for the AI pass (slopguard-ai) | 1.x |
 
-## Future (v0.2+)
+## What is next
 
-- AI-powered rules via ironflow SDK (LlmProvider trait for multi-provider: Claude, OpenAI, ollama)
-- AI rules use ironflow Operations for tracked, structured LLM calls
-- Cache by file content hash to avoid re-analyzing unchanged files
-- `ai_check` field in rule YAML with a prompt template
-- `--no-ai` flag to skip AI rules in local dev (fast mode)
+See ROADMAP.md for the open items.

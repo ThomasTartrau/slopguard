@@ -17,7 +17,7 @@ const CACHE_GITIGNORE: &str = "*\n";
 /// Version of the on-disk entry format. Mixed into the rules hash so a bump
 /// drops every stale entry instead of trying to deserialize it into the new
 /// shape.
-const CACHE_SCHEMA_VERSION: &str = "v3";
+const CACHE_SCHEMA_VERSION: &str = "v4";
 
 /// What one scanned file leaves in the cache: its findings, the symbols it
 /// contributes to the cross-file index, and the imports it contributes to the
@@ -324,8 +324,10 @@ rule:
                 impls: vec![TraitImpl {
                     trait_name: "Repository".to_string(),
                     blanket: false,
+                    self_type: "PostgresRepository".to_string(),
                 }],
                 error_messages: Vec::new(),
+                types: vec!["PostgresRepository".to_string()],
             },
         };
 
@@ -338,6 +340,8 @@ rule:
         assert_eq!(cached.symbols.impls.len(), 1);
         assert_eq!(cached.symbols.impls[0].trait_name, "Repository");
         assert!(!cached.symbols.impls[0].blanket);
+        assert_eq!(cached.symbols.impls[0].self_type, "PostgresRepository");
+        assert_eq!(cached.symbols.types, vec!["PostgresRepository".to_string()]);
     }
 
     #[test]
@@ -355,7 +359,7 @@ rule:
                     end_column: 26,
                     matched_text: "use made_up_crate::Thing;".to_string(),
                 }],
-                local_mods: vec!["foo".to_string()],
+                local_names: vec!["foo".to_string()],
             },
             ..Default::default()
         };
@@ -365,7 +369,7 @@ rule:
 
         assert_eq!(cached.imports.imports.len(), 1);
         assert_eq!(cached.imports.imports[0].specifier, "made_up_crate");
-        assert_eq!(cached.imports.local_mods, vec!["foo".to_string()]);
+        assert_eq!(cached.imports.local_names, vec!["foo".to_string()]);
     }
 
     #[test]

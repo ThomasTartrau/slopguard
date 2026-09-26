@@ -84,7 +84,10 @@ for i in "${!repos[@]}"; do
   # Scan
   out="$RESULTS_DIR/${name}_${timestamp}.json"
   start=$(date +%s%N 2>/dev/null || python3 -c "import time; print(int(time.time()*1e9))")
-  $SLOPGUARD scan --format json "$repo_dir" > "$out" 2>/dev/null || true
+  # Builtin defaults only (bench.toml), no AI calls, a cold scan every time, and
+  # no baseline that a parent directory might hold.
+  $SLOPGUARD scan --format json --config "$SCRIPT_DIR/bench.toml" \
+    --no-ai --no-cache --no-baseline "$repo_dir" > "$out" 2>/dev/null || true
   end=$(date +%s%N 2>/dev/null || python3 -c "import time; print(int(time.time()*1e9))")
 
   elapsed_ms=$(( (end - start) / 1000000 ))

@@ -324,8 +324,16 @@ fn cross_file_single_impl_trait_reported() {
 fn cross_file_two_impls_not_reported() {
     let dir = tempdir().unwrap();
     write(dir.path().join("repo.rs"), "pub trait Repository {}\n").unwrap();
-    write(dir.path().join("pg.rs"), "impl Repository for Pg {}\n").unwrap();
-    write(dir.path().join("mem.rs"), "impl Repository for Mem {}\n").unwrap();
+    write(
+        dir.path().join("pg.rs"),
+        "pub struct Pg;\nimpl Repository for Pg {}\n",
+    )
+    .unwrap();
+    write(
+        dir.path().join("mem.rs"),
+        "pub struct Mem;\nimpl Repository for Mem {}\n",
+    )
+    .unwrap();
 
     let result = scan_dir(dir.path(), &[single_impl_trait_rule()]);
     assert_eq!(result.findings.len(), 0);
@@ -355,7 +363,11 @@ fn cross_file_duplicate_trait_name_not_reported() {
     let dir = tempdir().unwrap();
     write(dir.path().join("a.rs"), "pub trait Repository {}\n").unwrap();
     write(dir.path().join("b.rs"), "pub trait Repository {}\n").unwrap();
-    write(dir.path().join("pg.rs"), "impl Repository for Pg {}\n").unwrap();
+    write(
+        dir.path().join("pg.rs"),
+        "pub struct Pg;\nimpl Repository for Pg {}\n",
+    )
+    .unwrap();
 
     let result = scan_dir(dir.path(), &[single_impl_trait_rule()]);
     assert_eq!(result.findings.len(), 0);
@@ -369,7 +381,11 @@ fn cross_file_disable_comment_on_declaration() {
         "// slopguard-disable-next-line no-single-impl-trait\npub trait Repository {}\n",
     )
     .unwrap();
-    write(dir.path().join("pg.rs"), "impl Repository for Pg {}\n").unwrap();
+    write(
+        dir.path().join("pg.rs"),
+        "pub struct Pg;\nimpl Repository for Pg {}\n",
+    )
+    .unwrap();
 
     let result = scan_dir(dir.path(), &[single_impl_trait_rule()]);
     assert_eq!(
@@ -383,7 +399,11 @@ fn cross_file_disable_comment_on_declaration() {
 fn cross_file_cfg_test_mock_counts_as_second_impl() {
     let dir = tempdir().unwrap();
     write(dir.path().join("repo.rs"), "pub trait Repository {}\n").unwrap();
-    write(dir.path().join("pg.rs"), "impl Repository for Pg {}\n").unwrap();
+    write(
+        dir.path().join("pg.rs"),
+        "pub struct Pg;\nimpl Repository for Pg {}\n",
+    )
+    .unwrap();
     write(
         dir.path().join("mock.rs"),
         "#[cfg(test)]\nmod tests {\n    struct MockRepo;\n    impl Repository for MockRepo {}\n}\n",
@@ -404,7 +424,11 @@ fn cross_file_declaration_in_test_path_not_reported() {
     let tests_dir = dir.path().join("tests");
     create_dir(&tests_dir).unwrap();
     write(tests_dir.join("support.rs"), "pub trait Repository {}\n").unwrap();
-    write(tests_dir.join("pg.rs"), "impl Repository for Pg {}\n").unwrap();
+    write(
+        tests_dir.join("pg.rs"),
+        "pub struct Pg;\nimpl Repository for Pg {}\n",
+    )
+    .unwrap();
 
     let result = scan_dir(dir.path(), &[single_impl_trait_rule()]);
     assert_eq!(result.findings.len(), 0);
@@ -416,7 +440,7 @@ fn cross_file_not_run_for_scan_files() {
     let repo = dir.path().join("repo.rs");
     let pg = dir.path().join("pg.rs");
     write(&repo, "pub trait Repository {}\n").unwrap();
-    write(&pg, "impl Repository for Pg {}\n").unwrap();
+    write(&pg, "pub struct Pg;\nimpl Repository for Pg {}\n").unwrap();
 
     let rules = [single_impl_trait_rule()];
     let partial = scan_files(&[repo, pg], &rules, &Config::default()).unwrap();
@@ -436,7 +460,11 @@ fn cross_file_survives_cache_round_trip() {
     let cache_dir = tempdir().unwrap();
     let cache_path = cache_dir.path().join("cache");
     write(src_dir.path().join("repo.rs"), "pub trait Repository {}\n").unwrap();
-    write(src_dir.path().join("pg.rs"), "impl Repository for Pg {}\n").unwrap();
+    write(
+        src_dir.path().join("pg.rs"),
+        "pub struct Pg;\nimpl Repository for Pg {}\n",
+    )
+    .unwrap();
 
     let rules = [single_impl_trait_rule()];
     let config = Config::default();
@@ -461,7 +489,11 @@ fn cross_file_survives_cache_round_trip() {
 fn cross_file_rule_with_no_ast_rules_still_parses_files() {
     let dir = tempdir().unwrap();
     write(dir.path().join("repo.rs"), "pub trait Repository {}\n").unwrap();
-    write(dir.path().join("pg.rs"), "impl Repository for Pg {}\n").unwrap();
+    write(
+        dir.path().join("pg.rs"),
+        "pub struct Pg;\nimpl Repository for Pg {}\n",
+    )
+    .unwrap();
 
     let result = scan_dir(dir.path(), &[single_impl_trait_rule()]);
     assert_eq!(

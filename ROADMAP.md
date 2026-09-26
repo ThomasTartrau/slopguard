@@ -21,7 +21,7 @@
 - [x] Exit codes: 0 clean, 1 findings, 2 config error
 - [x] Colored text output (rustc-style diagnostics)
 
-### Rules (85 active, 97 shipped)
+### Rules (34 at v0.1.0; today 117 shipped, 103 active by default)
 
 - [x] Migrate 27 Rust rules from personal-config/slopguard/rules/
 - [x] Migrate 5 TypeScript rules from personal-config/slopguard/rules/
@@ -71,12 +71,16 @@
 - [x] Script de benchmark reproductible (benchmarks/bench.sh + repos.toml)
 - [x] Ajuster les regles bruyantes (opt-in pour pub-fn-needs-tracing, test-needs-timeout)
 - [x] `--enable`/`--disable` CLI flags et `rules.enable` config
+- [x] Benchmark 2026-09-26 (commits epingles, `bench.sh` sans IA ni config du repo) : faux positifs corriges sur unresolved-import (38 -> 0), no-shell-format-arg (21 -> 0), no-assertion-free-test (3626 -> 680), no-duplicate-error-message (111 -> 29), no-single-impl-trait (21 -> 5)
+- [ ] no-assertion-free-test : les 680 restants delegent surtout leurs assertions a des helpers locaux, invisibles pour une regle ast-grep (opt-in, ou resolution des helpers du meme fichier)
 
 ### Nouvelles regles ([#15](https://gitlab.com/ThomasTartrau/slopguard/-/issues/15))
 
 - [x] Tier 1 : no-todo-fixme, no-empty-catch, no-println-in-prod, no-dbg-in-prod, no-commented-out-code, no-hedging-comment, no-deferral-comment, no-hardcoded-secret, no-eval
 - [x] Tier 2 : no-unnecessary-clone, no-double-cast, no-ts-ignore-without-reason, no-box-dyn-error, no-excessive-comment-ratio
 - [x] Tier 3 : no-arc-mutex-prefer-rwlock, no-doc-hidden-public, no-empty-doc-comment
+- [x] Qualite des tests et stubs : no-assertion-free-test, no-over-mocking, no-weakened-assertion, no-stub-return, no-duplicate-error-message (cross-file) ([#39](https://gitlab.com/ThomasTartrau/slopguard/-/issues/39))
+- [x] 10 regles TypeScript et slop (unknown, Reflect, spread dans reduce...) ([#42](https://gitlab.com/ThomasTartrau/slopguard/-/issues/42))
 
 ### Fonctionnalites
 
@@ -85,6 +89,10 @@
 - [x] `slopguard baseline` pour ignorer les findings pre-existants ([#24](https://gitlab.com/ThomasTartrau/slopguard/-/issues/24))
 - [x] `slopguard scan --format html` rapport visuel standalone + flag `-o/--output` ([#28](https://gitlab.com/ThomasTartrau/slopguard/-/issues/28))
 - [x] Escalade de severite par seuil de repetition (`[escalation]`, `--no-escalation`) ([#29](https://gitlab.com/ThomasTartrau/slopguard/-/issues/29))
+- [x] Regles file-level (metriques par fichier) ([#30](https://gitlab.com/ThomasTartrau/slopguard/-/issues/30))
+- [x] Resolution des imports hallucines, regle `unresolved-import` Rust + TS ([#35](https://gitlab.com/ThomasTartrau/slopguard/-/issues/35))
+- [x] Moteur de regles unifie derriere un trait `RuleEngine` ([#37](https://gitlab.com/ThomasTartrau/slopguard/-/issues/37))
+- [x] `scan --report-unused-disable` ([#40](https://gitlab.com/ThomasTartrau/slopguard/-/issues/40))
 
 ### CI integration ([#18](https://gitlab.com/ThomasTartrau/slopguard/-/issues/18))
 
@@ -108,6 +116,9 @@
 - [x] `ai.enabled`, `ai.provider`, `ai.model` in slopguard.toml
 - [x] Runtime provider selection with clear errors on missing credentials
 - [x] `slopguard list` shows rule type (ast vs ai); `explain` shows the prompt template
+- [x] Optional System One classifier (Jev / TypeSafe) with a calibrated threshold, `ai_check.reason: static | generated` ([#34](https://gitlab.com/ThomasTartrau/slopguard/-/issues/34))
+- [x] Classifier requests batched per context cluster ([#41](https://gitlab.com/ThomasTartrau/slopguard/-/issues/41))
+- [x] AI rules for SSRF and open redirect ([#31](https://gitlab.com/ThomasTartrau/slopguard/-/issues/31))
 
 ### AI-powered rules (candidates)
 
@@ -115,7 +126,7 @@
 - [x] Redundant .to_string() on Serialize types
 - [x] SAFETY comment content validation (is the justification real or hallucinated?)
 - [x] Doc-comment quality (does it add information beyond the function name?)
-- [ ] Cross-file pattern: trait with a single impl
+- [x] Cross-file pattern: trait with a single impl (shipped as a builtin cross-file rule, not an AI rule, [#32](https://gitlab.com/ThomasTartrau/slopguard/-/issues/32))
 
 ### Cache
 
@@ -129,17 +140,17 @@
 
 ### Auto-fix
 
-- [ ] `fix` field supports ast-grep rewrite patterns
-- [ ] `slopguard scan --fix` applies safe fixes
-- [ ] `slopguard scan --fix --dry-run` previews fixes
+- [x] `rewrite` field (ast-grep rewrite template) gated by `autofix_safe`, separate from the textual `fix` ([#33](https://gitlab.com/ThomasTartrau/slopguard/-/issues/33))
+- [x] `slopguard scan --fix` applies safe fixes (refuses a dirty tree unless `--allow-dirty`)
+- [x] `slopguard scan --fix --dry-run` previews fixes
+- [ ] More autofixable rules (only no-dbg-in-prod and no-unnecessary-clone today)
 
 ### CI integration
 
+GitHub Action, GitLab CI template and pre-commit hook shipped in v0.1.x (#18).
+
 - [x] `slopguard scan --diff [--base <ref>]` pour ne scanner que les fichiers changes
-- [ ] GitHub Action (`slopguard/action`)
-- [ ] GitLab CI template
-- [ ] Pre-commit hook support
-- [ ] SARIF upload to GitHub Code Scanning
+- [ ] SARIF upload to GitHub Code Scanning (the action outputs SARIF but does not upload it)
 
 ---
 
@@ -147,7 +158,9 @@
 
 ### Rule sharing
 
-- [ ] `slopguard add <ruleset-url>` installs third-party rulesets
+- [x] `[[rules.sources]]`: rulesets from git repositories or local paths, with provenance in `slopguard list` ([#38](https://gitlab.com/ThomasTartrau/slopguard/-/issues/38))
+- [ ] `slopguard add <ruleset-url>` writes a `[[rules.sources]]` entry
+- [ ] Lockfile pinning the resolved sha of each git source
 - [ ] Registry of community rulesets
 - [ ] Rule documentation site (generated from YAML)
 
@@ -158,5 +171,4 @@
 
 ### Distribution
 
-- [ ] Homebrew tap
-- [ ] Pre-compiled binaries via cargo-dist / GitHub Releases
+- [ ] Homebrew tap (pre-compiled binaries already ship on GitLab Releases, #19)

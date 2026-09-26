@@ -1,3 +1,3 @@
-pub fn save() {
-    panic!("the configuration file could not be read");
+pub fn save() -> anyhow::Result<()> {
+    anyhow::bail!("the configuration file could not be read");
 }
