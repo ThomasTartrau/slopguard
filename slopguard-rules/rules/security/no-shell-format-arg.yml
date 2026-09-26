@@ -2,11 +2,26 @@ id: no-shell-format-arg
 language: rust
 severity: error
 category: security
-message: "Command argument built with format!(). Pass values as separate .arg() calls instead of interpolating into one string."
-note: "A single interpolated argument can smuggle extra flags or shell metacharacters if the interpolated value is not fully controlled."
-fix: "Split into multiple .arg() calls, one value per call, with no formatting."
+message: "Shell command line built with format!(). An interpolated value can inject shell syntax."
+note: "The command runs through a shell (sh -c, cmd /C, powershell -Command), which parses the formatted string: quotes, ;, | or $( ) in the interpolated value become shell syntax. Without a shell, std::process::Command passes each .arg() to the program verbatim, so a formatted flag such as format!(\"--width={w}\") is safe and is not reported."
+fix: "Call the program directly with Command::new(program) and one .arg() per value. If a shell is required, pass the value as a positional parameter (sh -c 'cmd \"$1\"' sh value) instead of interpolating it."
+# Only a function that starts a shell with a command-string flag is in scope:
+# the program and the flag are matched anywhere in the enclosing function, so
+# both the chained form and a `let mut cmd` built over several statements count.
 rule:
   pattern: $CMD.arg(format!($$$ARGS))
+  inside:
+    kind: function_item
+    stopBy: end
+    all:
+      - has:
+          kind: call_expression
+          regex: 'Command::new\(\s*"(sh|bash|zsh|dash|ksh|cmd|cmd\.exe|powershell|pwsh)"'
+          stopBy: end
+      - has:
+          kind: string_literal
+          regex: '^"(-c|/C|/c|-Command)"$'
+          stopBy: end
 ignores:
   - "**/tests/**"
   - "**/*_tests/**"
@@ -16,8 +31,34 @@ ignores:
 skip_test_code: true
 tests:
   should_match:
-    - 'cmd.arg(format!("--user={}", user_id));'
-    - 'command.arg(format!("{flag}={value}"));'
+    - |
+      fn run(user: &str) {
+          Command::new("sh").arg("-c").arg(format!("ls {}", user)).status();
+      }
+    - |
+      fn build(dir: &str) {
+          let mut cmd = std::process::Command::new("bash");
+          cmd.arg("-c");
+          cmd.arg(format!("cd {dir} && make"));
+      }
+    - |
+      fn win(path: &str) {
+          Command::new("cmd").arg("/C").arg(format!("type {path}"));
+      }
   should_not_match:
+    # No shell: rustc receives the formatted flag as one verbatim argument.
+    - |
+      fn link(arg: &str) {
+          Command::new("rustc").arg("-C").arg(format!("link-arg={}", arg));
+      }
+    - |
+      fn width(cmd: &mut Command, w: u16) {
+          cmd.arg(format!("--diagnostic-width={w}"));
+      }
+    # A shell running a script file, not a command string.
+    - |
+      fn script(root: &str) {
+          Command::new("sh").arg(format!("{root}/configure"));
+      }
     - 'cmd.arg("--verbose");'
     - 'let msg = format!("hi {}", name);'

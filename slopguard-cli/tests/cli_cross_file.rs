@@ -112,6 +112,50 @@ fn unique_error_message_reports_nothing() {
     assert!(findings_for(project.path(), "no-duplicate-error-message").is_empty());
 }
 
+/// Lines of the `no-assertion-free-test` findings for `project`, scanned with
+/// the given `slopguard.toml` content.
+fn assertion_free_lines(project: &Path, config: &str) -> Vec<u64> {
+    let config_path = project.join("slopguard.toml");
+    fs::write(&config_path, config).unwrap();
+    let output = slopguard()
+        .args([
+            "scan",
+            "--format",
+            "json",
+            "--no-cache",
+            "--rule",
+            "no-assertion-free-test",
+            "--config",
+            config_path.to_str().unwrap(),
+            project.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    let json: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("output should be valid JSON");
+    json["findings"]
+        .as_array()
+        .expect("findings should be an array")
+        .iter()
+        .map(|f| f["line"].as_u64().unwrap())
+        .collect()
+}
+
+#[test]
+fn assertion_free_test_follows_local_helpers() {
+    let project = fixture_project("assertion_free");
+    // `checks_nothing` and `delegates_to_external_test_support`: the
+    // helper-backed and compile-only tests stay silent.
+    assert_eq!(assertion_free_lines(project.path(), ""), vec![19, 24]);
+}
+
+#[test]
+fn assert_functions_option_covers_external_test_support() {
+    let project = fixture_project("assertion_free");
+    let config = "[rules.options.no-assertion-free-test]\nassert_functions = [\"run_*\"]\n";
+    assert_eq!(assertion_free_lines(project.path(), config), vec![19]);
+}
+
 #[test]
 fn disable_comment_silences_the_declaration() {
     let project = fixture_project("single_impl");

@@ -1,0 +1,3 @@
+# Config used by bench.sh: the builtin defaults, so a benchmark measures the
+# shipped ruleset and never picks up the repository's own slopguard.toml (which
+# may enable AI providers and make billable calls).

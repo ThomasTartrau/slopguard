@@ -518,3 +518,63 @@ fn rule_source_ref_without_git_is_rejected() {
         "expected InvalidSource for a ref without git, got: {err:?}"
     );
 }
+
+#[test]
+fn assertion_free_test_options_are_parsed() {
+    let dir = tempdir().unwrap();
+    write(
+        dir.path().join("slopguard.toml"),
+        "[rules.options.no-assertion-free-test]\nassert_functions = [\"run\", \"check_*\"]\n",
+    )
+    .unwrap();
+
+    let cfg = load_config_from(None, dir.path()).unwrap();
+    assert_eq!(
+        cfg.rules.options.no_assertion_free_test.assert_functions,
+        vec!["run", "check_*"]
+    );
+}
+
+#[test]
+fn options_default_to_empty() {
+    let dir = tempdir().unwrap();
+    let cfg = load_config_from(None, dir.path()).unwrap();
+    assert!(cfg
+        .rules
+        .options
+        .no_assertion_free_test
+        .assert_functions
+        .is_empty());
+}
+
+#[test]
+fn options_for_an_unknown_rule_are_rejected() {
+    let dir = tempdir().unwrap();
+    write(
+        dir.path().join("slopguard.toml"),
+        "[rules.options.no-such-rule]\nassert_functions = [\"run\"]\n",
+    )
+    .unwrap();
+
+    let err = load_config_from(None, dir.path()).unwrap_err();
+    assert!(
+        matches!(err, ConfigError::Parse { .. }) && err.to_string().contains("no-such-rule"),
+        "expected a parse error naming the unknown rule, got: {err}"
+    );
+}
+
+#[test]
+fn unknown_option_key_is_rejected() {
+    let dir = tempdir().unwrap();
+    write(
+        dir.path().join("slopguard.toml"),
+        "[rules.options.no-assertion-free-test]\nassert_function = [\"run\"]\n",
+    )
+    .unwrap();
+
+    let err = load_config_from(None, dir.path()).unwrap_err();
+    assert!(
+        matches!(err, ConfigError::Parse { .. }) && err.to_string().contains("assert_function"),
+        "expected a parse error naming the misspelled key, got: {err}"
+    );
+}

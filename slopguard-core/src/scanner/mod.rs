@@ -16,7 +16,8 @@ use serde_yaml::{to_value, Value};
 use strum::IntoEnumIterator;
 use thiserror::Error;
 
-use crate::cross_file::{self, CrossFileKind, DeclFilter, FileSymbols, SymbolIndex};
+use crate::config::{Config, RuleOptions};
+use crate::cross_file::{self, CrossFileKind, DeclFilter, FileSymbols};
 use crate::disable::filter_disabled;
 use crate::finding::Finding;
 use crate::resolution::{self, FileImports, ManifestResolver, ResolutionFilter, ResolutionKind};
@@ -25,11 +26,12 @@ use crate::test_filter::{CfgTestRanges, TestPaths};
 
 use engine::{
     AstEngine, BoxedEngine, CrossFileEngine, CrossFileRule, EngineScope, FileContext, MetricEngine,
-    MetricRule, ProjectContext, RuleContext,
+    MetricRule, RuleContext,
 };
 
 mod engine;
 mod orchestrate;
+mod project;
 
 pub use orchestrate::{
     count_severities, scan, scan_cached, scan_files, scan_files_cached, scan_files_unused_disables,
@@ -184,14 +186,24 @@ fn build_metric_rule(rule: &Rule) -> Result<MetricRule<'_>, ScanError> {
     })
 }
 
-/// Compile the globs that bound which declarations a cross-file rule may
-/// report. The `kind` is resolved by the caller, which already partitioned the
-/// rules on `is_cross_file()`.
+/// Compile the globs that bound which findings a cross-file rule may report,
+/// and its options. The `kind` is resolved by the caller, which already
+/// partitioned the rules on `is_cross_file()`.
 fn build_cross_file_rule<'a>(
     rule: &'a Rule,
     kind: CrossFileKind,
     test_paths: &TestPaths,
+    options: &RuleOptions,
 ) -> Result<CrossFileRule<'a>, ScanError> {
+    let assert_functions = match kind {
+        CrossFileKind::AssertionFreeTest => {
+            let names = &options.no_assertion_free_test.assert_functions;
+            (!names.is_empty())
+                .then(|| build_glob_set(names))
+                .transpose()?
+        }
+        CrossFileKind::SingleImplTrait | CrossFileKind::DuplicateErrorMessage => None,
+    };
     Ok(CrossFileRule {
         rule,
         kind,
@@ -200,6 +212,7 @@ fn build_cross_file_rule<'a>(
             ignores: rule.ignores.as_deref().map(build_glob_set).transpose()?,
             skip_test_code: rule.skip_test_code,
             test_paths: test_paths.clone(),
+            assert_functions,
         },
     })
 }
@@ -219,10 +232,10 @@ fn build_resolution_rule<'a>(
     })
 }
 
-fn compile_rules<'a>(
-    rules: &'a [Rule],
-    test_paths: TestPaths,
-) -> Result<CompiledRules<'a>, ScanError> {
+/// Compile the active rules for scanning, reading the `scan.test_paths` and
+/// `rules.options` settings they depend on from `config`.
+fn compile_rules<'a>(rules: &'a [Rule], config: &Config) -> Result<CompiledRules<'a>, ScanError> {
+    let test_paths = TestPaths::new(&config.scan.test_paths)?;
     // Cross-file, resolution and metric rules must not reach ast-grep: their
     // `rule` field is null and would fail to compile.
     let (cross_rules, rest): (Vec<&Rule>, Vec<&Rule>) =
@@ -245,7 +258,7 @@ fn compile_rules<'a>(
     let cross_file = cross_rules
         .into_iter()
         .filter_map(|rule| rule.cross_file_kind().map(|kind| (rule, kind)))
-        .map(|(rule, kind)| build_cross_file_rule(rule, kind, &test_paths))
+        .map(|(rule, kind)| build_cross_file_rule(rule, kind, &test_paths, &config.rules.options))
         .collect::<Result<Vec<_>, _>>()?;
     let resolution = resolution_rules
         .into_iter()
@@ -353,28 +366,6 @@ fn scan_file(
         },
         symbols,
         imports,
-    }
-}
-
-/// Run the project-level engines and append their findings, if they are due.
-///
-/// A full scan asks for it via `run_cross_file`; a partial scan (`--diff`,
-/// explicit files) collects contributions to warm the cache but leaves the
-/// index incomplete, so it must not evaluate. Centralises the `run_cross_file &&
-/// has project engines` invariant shared by both scan paths.
-fn append_cross_file(
-    findings: &mut Vec<Finding>,
-    project: &[BoxedEngine],
-    run_cross_file: bool,
-    contributions: &[(PathBuf, FileSymbols)],
-) {
-    if !run_cross_file || project.is_empty() {
-        return;
-    }
-    let index = SymbolIndex::build(contributions.iter().map(|(p, s)| (p.as_path(), s)));
-    let ctx = RuleContext::Project(ProjectContext { index: &index });
-    for engine in project {
-        findings.extend(engine.evaluate(&ctx));
     }
 }
 

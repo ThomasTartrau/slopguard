@@ -16,6 +16,14 @@ use crate::finding::Finding;
 use crate::rule::Rule;
 use crate::test_filter::{CfgTestRanges, TestPaths};
 
+mod assertion;
+mod names;
+mod test_support;
+
+use assertion::AssertionIndex;
+pub use assertion::{TestHelper, UnassertedTest};
+use names::{bare_trait_name, bare_type_name, generic_param_names, last_segment};
+
 /// Cross-file analyses a rule can request. Builtin only: a custom YAML may
 /// tune an existing kind's severity or message, never invent a new one, so an
 /// unknown discriminant is a parse error.
@@ -25,25 +33,22 @@ use crate::test_filter::{CfgTestRanges, TestPaths};
 pub enum CrossFileKind {
     SingleImplTrait,
     DuplicateErrorMessage,
+    AssertionFreeTest,
 }
 
 /// Below this length (message content, quotes excluded) a repeated string is
 /// noise (`"utf-8"`, `"id"`), not a copy-pasted error message.
 const MIN_ERROR_MESSAGE_LEN: usize = 10;
 
-/// Macros whose string arguments are error messages. Matched on the last path
+/// Macros that build an error value from a message. Matched on the last path
 /// segment, so `anyhow::bail!` and `bail!` both count.
-const ERROR_MACROS: &[&str] = &[
-    "panic",
-    "unreachable",
-    "todo",
-    "unimplemented",
-    "bail",
-    "anyhow",
-];
-
-/// Methods whose string argument is an error message: `.expect("...")`.
-const ERROR_METHODS: &[&str] = &["expect", "expect_err"];
+///
+/// `panic!`, `unreachable!`, `todo!` and `.expect()` are left out on purpose:
+/// a panic prints its `file:line`, so a message repeated across files is still
+/// traced to its site, and those messages are invariants, not errors a user
+/// reads. An error value carries no location: two sites with the same text are
+/// indistinguishable in a log.
+const ERROR_MACROS: &[&str] = &["bail", "anyhow", "eyre", "format_err", "ensure"];
 
 /// A trait declared in a scanned file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -67,6 +72,9 @@ pub struct TraitImpl {
     /// `impl<T> Foo for T`: the implementing type is one of the impl's own
     /// generic parameters, so the trait covers a whole family of types.
     pub blanket: bool,
+    /// Bare name of the implementing type (`Request<B>` -> `Request`,
+    /// `&'a str` -> `str`), matched against the types the project declares.
+    pub self_type: String,
 }
 
 /// A string literal used as an error message, kept for the duplicate-message
@@ -94,54 +102,26 @@ pub struct FileSymbols {
     pub traits: Vec<TraitDecl>,
     pub impls: Vec<TraitImpl>,
     pub error_messages: Vec<ErrorMessageLit>,
+    /// Names of the structs, enums and unions the file declares: the types
+    /// that can take inherent methods. A type alias cannot (its target may be
+    /// foreign), so it is left out.
+    pub types: Vec<String>,
+    /// Functions and macros a test may delegate its assertions to.
+    pub helpers: Vec<TestHelper>,
+    /// Tests that check nothing on their own.
+    pub unasserted_tests: Vec<UnassertedTest>,
 }
 
 impl FileSymbols {
     /// Whether this file declares or implements nothing the index cares about.
     pub fn is_empty(&self) -> bool {
-        self.traits.is_empty() && self.impls.is_empty() && self.error_messages.is_empty()
+        self.traits.is_empty()
+            && self.impls.is_empty()
+            && self.error_messages.is_empty()
+            && self.types.is_empty()
+            && self.helpers.is_empty()
+            && self.unasserted_tests.is_empty()
     }
-}
-
-/// The bare name a trait reference resolves to: the last path segment with any
-/// generic arguments stripped. `fmt::Display` -> `Display`, `From<u32>` ->
-/// `From`, `crate::db::Repo` -> `Repo`. Matching is by bare name, not by a
-/// real Rust path resolver.
-fn bare_trait_name(text: &str) -> String {
-    let base = text.split('<').next().unwrap_or(text);
-    base.rsplit("::").next().unwrap_or(base).trim().to_string()
-}
-
-/// The names of an impl's own generic parameters, used to recognise a blanket
-/// impl. Lifetimes and const parameters are skipped: only a plain type
-/// parameter can be the implementing type of a blanket impl.
-fn generic_param_names<D: Doc>(impl_node: &Node<D>) -> Vec<String> {
-    let Some(params) = impl_node.field("type_parameters") else {
-        return Vec::new();
-    };
-    params
-        .children()
-        .filter(|child| child.is_named())
-        .filter_map(|child| {
-            let text = child.text().to_string();
-            // `T: Clone` and `T = u32` keep their head; `'a` and
-            // `const N: usize` do not survive the shape check below.
-            let head = text
-                .split([':', '=', '<'])
-                .next()
-                .unwrap_or(&text)
-                .trim()
-                .to_string();
-            let starts_ok = head.starts_with(|c: char| c.is_alphabetic() || c == '_');
-            let rest_ok = head.chars().all(|c| c.is_alphanumeric() || c == '_');
-            (starts_ok && rest_ok).then_some(head)
-        })
-        .collect()
-}
-
-/// The last `::`-separated segment of a macro or path name.
-fn last_segment(text: &str) -> &str {
-    text.rsplit("::").next().unwrap_or(text).trim()
 }
 
 /// Turn a `string_literal` node into an [`ErrorMessageLit`], dropping the
@@ -175,40 +155,23 @@ fn string_literal_message<D: Doc>(
 }
 
 /// Collect the error-message string literals of one node, if it is an
-/// error-raising macro (`panic!`, `bail!`, ...) or an `.expect(...)` call.
+/// error-building macro (`bail!`, `anyhow!`, ...).
 fn collect_error_messages<D: Doc>(
     node: &Node<D>,
     cfg_test: &CfgTestRanges,
     out: &mut Vec<ErrorMessageLit>,
 ) {
-    match &*node.kind() {
-        "macro_invocation" => {
-            let is_error_macro = node
-                .field("macro")
-                .is_some_and(|m| ERROR_MACROS.contains(&last_segment(&m.text())));
-            if is_error_macro {
-                out.extend(
-                    node.dfs()
-                        .filter_map(|n| string_literal_message(&n, cfg_test)),
-                );
-            }
-        }
-        "call_expression" => {
-            let is_error_method = node.field("function").is_some_and(|f| {
-                &*f.kind() == "field_expression"
-                    && f.field("field")
-                        .is_some_and(|name| ERROR_METHODS.contains(&name.text().trim()))
-            });
-            if is_error_method {
-                if let Some(args) = node.field("arguments") {
-                    out.extend(
-                        args.children()
-                            .filter_map(|n| string_literal_message(&n, cfg_test)),
-                    );
-                }
-            }
-        }
-        _ => {}
+    if &*node.kind() != "macro_invocation" {
+        return;
+    }
+    let is_error_macro = node
+        .field("macro")
+        .is_some_and(|m| ERROR_MACROS.contains(&last_segment(&m.text())));
+    if is_error_macro {
+        out.extend(
+            node.dfs()
+                .filter_map(|n| string_literal_message(&n, cfg_test)),
+        );
     }
 }
 
@@ -257,11 +220,23 @@ pub fn extract_rust_symbols<D: Doc>(root: &AstGrep<D>, cfg_test: &CfgTestRanges)
                 symbols.impls.push(TraitImpl {
                     trait_name: bare_trait_name(&trait_ref.text()),
                     blanket: params.contains(&impl_type),
+                    self_type: bare_type_name(&impl_type),
                 });
+            }
+            "struct_item" | "enum_item" | "union_item" => {
+                if let Some(name) = node.field("name") {
+                    symbols.types.push(name.text().to_string());
+                }
             }
             _ => {}
         }
         collect_error_messages(&node, cfg_test, &mut symbols.error_messages);
+        assertion::collect(
+            &node,
+            cfg_test,
+            &mut symbols.helpers,
+            &mut symbols.unasserted_tests,
+        );
     }
     symbols
 }
@@ -273,6 +248,10 @@ pub struct SymbolIndex {
     /// Error-message content -> every occurrence, keyed by exact text so a
     /// literal repeated across files collides.
     error_messages: HashMap<String, Vec<(PathBuf, ErrorMessageLit)>>,
+    /// Bare type name -> every file declaring a struct, enum or union of that
+    /// name.
+    types: HashMap<String, Vec<PathBuf>>,
+    assertions: AssertionIndex,
 }
 
 #[derive(Debug, Default)]
@@ -280,7 +259,8 @@ struct TraitEntry {
     /// Every declaration seen for this name. More than one makes the name
     /// ambiguous and the trait is never reported.
     decls: Vec<(PathBuf, TraitDecl)>,
-    concrete_impls: usize,
+    /// Implementing type of each concrete impl.
+    concrete_impls: Vec<String>,
     blanket_impls: usize,
 }
 
@@ -297,7 +277,10 @@ impl SymbolIndex {
     {
         let mut traits: HashMap<String, TraitEntry> = HashMap::new();
         let mut error_messages: HashMap<String, Vec<(PathBuf, ErrorMessageLit)>> = HashMap::new();
+        let mut types: HashMap<String, Vec<PathBuf>> = HashMap::new();
+        let mut assertions = AssertionIndex::default();
         for (path, symbols) in contributions {
+            assertions.add(path, &symbols.helpers, &symbols.unasserted_tests);
             for decl in &symbols.traits {
                 traits
                     .entry(decl.name.clone())
@@ -310,8 +293,14 @@ impl SymbolIndex {
                 if imp.blanket {
                     entry.blanket_impls += 1;
                 } else {
-                    entry.concrete_impls += 1;
+                    entry.concrete_impls.push(imp.self_type.clone());
                 }
+            }
+            for name in &symbols.types {
+                types
+                    .entry(name.clone())
+                    .or_default()
+                    .push(path.to_path_buf());
             }
             for msg in &symbols.error_messages {
                 error_messages
@@ -323,48 +312,61 @@ impl SymbolIndex {
         Self {
             traits,
             error_messages,
+            types,
+            assertions,
         }
+    }
+
+    /// Whether `type_name` is a struct, enum or union declared in the same
+    /// crate as the file at `decl_path`: the only case where a trait's single
+    /// impl could have been inherent methods instead.
+    fn declares_local_type(&self, type_name: &str, decl_path: &Path) -> bool {
+        let decl_crate = crate_root(decl_path);
+        self.types
+            .get(type_name)
+            .is_some_and(|paths| paths.iter().any(|p| crate_root(p) == decl_crate))
     }
 }
 
-/// Which trait declarations a cross-file rule may report, derived from the
-/// rule's `files` / `ignores` globs and `skip_test_code`. Applied to the
-/// declaration site only: impls are counted wherever they are found.
+/// The directory of the crate a file belongs to: its nearest ancestor holding a
+/// `Cargo.toml`, or `None` when no manifest is reachable.
+fn crate_root(path: &Path) -> Option<&Path> {
+    path.ancestors()
+        .skip(1)
+        .find(|dir| dir.join("Cargo.toml").is_file())
+}
+
+/// Which findings a cross-file rule may report, derived from the rule's
+/// `files` / `ignores` globs, `skip_test_code` and options. Applied to the
+/// reported site only: impls are counted wherever they are found.
 pub struct DeclFilter {
     pub files: Option<GlobSet>,
     pub ignores: Option<GlobSet>,
     pub skip_test_code: bool,
     pub(crate) test_paths: TestPaths,
+    /// Names (globs) of external functions that assert, from the
+    /// `assert_functions` option of `no-assertion-free-test`.
+    pub assert_functions: Option<GlobSet>,
 }
 
 impl DeclFilter {
+    /// Whether `path` passes the rule's `files` and `ignores` globs.
+    pub fn allows_path(&self, path: &Path) -> bool {
+        self.files.as_ref().is_none_or(|g| g.is_match(path))
+            && !self.ignores.as_ref().is_some_and(|g| g.is_match(path))
+    }
+
     /// Whether a declaration found at `path` is in scope for the rule.
     pub fn allows(&self, path: &Path, decl: &TraitDecl) -> bool {
-        if !self.files.as_ref().is_none_or(|g| g.is_match(path)) {
-            return false;
-        }
-        if self.ignores.as_ref().is_some_and(|g| g.is_match(path)) {
-            return false;
-        }
-        if self.skip_test_code && (self.test_paths.is_test(path) || decl.in_cfg_test) {
-            return false;
-        }
-        true
+        self.allows_path(path)
+            && !(self.skip_test_code && (self.test_paths.is_test(path) || decl.in_cfg_test))
     }
 
     /// Whether an error-message literal found at `path` is in scope for the rule.
     /// Same globs and `skip_test_code` policy as [`DeclFilter::allows`].
     pub fn allows_message(&self, path: &Path, msg: &ErrorMessageLit) -> bool {
-        if !self.files.as_ref().is_none_or(|g| g.is_match(path)) {
-            return false;
-        }
-        if self.ignores.as_ref().is_some_and(|g| g.is_match(path)) {
-            return false;
-        }
-        if self.skip_test_code && (self.test_paths.is_test(path) || msg.in_cfg_test) {
-            return false;
-        }
-        true
+        self.allows_path(path)
+            && !(self.skip_test_code && (self.test_paths.is_test(path) || msg.in_cfg_test))
     }
 }
 
@@ -374,7 +376,13 @@ impl DeclFilter {
 /// one concrete impl and no blanket impl. Zero impls stays silent: the trait is
 /// probably implemented outside this crate. Two or more is a legitimate
 /// abstraction. A blanket impl covers a whole family of types, so it is never
-/// an over-abstraction. A name declared twice is ambiguous and abstains.
+/// an over-abstraction. A name declared twice is ambiguous and abstains. An
+/// impl for a type that is not a struct, enum or union of the trait's own
+/// crate is an extension trait (`impl VersionExt for semver::Version`, or a
+/// type from a sibling workspace crate): Rust only allows inherent methods in
+/// the type's crate, so the trait is the only way to add them and stays silent.
+///
+/// `assertion_free_test` is documented on [`assertion::evaluate`].
 ///
 /// The returned order follows `HashMap` iteration and is not stable; the caller
 /// (`normalize_findings`) sorts and dedups before the result is reported.
@@ -388,10 +396,13 @@ pub fn evaluate(
         CrossFileKind::SingleImplTrait => index
             .traits
             .values()
-            .filter(|entry| {
-                entry.decls.len() == 1 && entry.concrete_impls == 1 && entry.blanket_impls == 0
-            })
-            .filter_map(|entry| entry.decls.first())
+            .filter(|entry| entry.decls.len() == 1 && entry.blanket_impls == 0)
+            .filter_map(
+                |entry| match (entry.decls.first(), entry.concrete_impls.as_slice()) {
+                    (Some(decl), [only]) if index.declares_local_type(only, &decl.0) => Some(decl),
+                    _ => None,
+                },
+            )
             .filter(|(path, decl)| filter.allows(path, decl))
             .map(|(path, decl)| Finding {
                 rule_id: rule.id.clone(),
@@ -444,8 +455,11 @@ pub fn evaluate(
                     .collect()
             })
             .collect(),
+        CrossFileKind::AssertionFreeTest => assertion::evaluate(rule, &index.assertions, filter),
     }
 }
 
+#[cfg(test)]
+mod assertion_tests;
 #[cfg(test)]
 mod tests;

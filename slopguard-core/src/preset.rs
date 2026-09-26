@@ -33,22 +33,31 @@ const RULESETS_ALL_ON: &str = "[rulesets]\nslop = true\nsecurity = true\ncorrect
 const OUTPUT_BLOCK: &str = "[output]\nformat = \"text\"\ncolors = true\n";
 
 /// The `[rules]` and `[scan]` sections of the `default` and `ai` presets:
-/// opt-in rules off, nothing disabled, the standard scan comments.
-const DEFAULT_RULES_AND_SCAN: &str = r#"[rules]
-disable = []
-# Opt-in rules (disabled by default): pub-fn-needs-tracing, test-needs-timeout
-enable = []
-# custom_dirs = ["./my-rules"]
-
-[scan]
-ignores = []
-# cache_dir = ".slopguard-cache"
-"#;
+/// opt-in rules off and listed in a comment, nothing disabled, the standard
+/// scan comments. The list comes from the builtin ruleset, so it cannot drift.
+fn default_rules_and_scan() -> Result<String, RuleError> {
+    let mut out = String::from("[rules]\ndisable = []\n# Opt-in rules (disabled by default):\n");
+    for id in opt_in_rule_ids()? {
+        out.push_str(&format!("#   {id}\n"));
+    }
+    out.push_str(
+        "enable = []\n# custom_dirs = [\"./my-rules\"]\n\n\
+         # Test helpers from outside the project that assert, so a test\n\
+         # calling them is not reported by no-assertion-free-test:\n\
+         # [rules.options.no-assertion-free-test]\n\
+         # assert_functions = [\"run\", \"check_*\"]\n\n\
+         [scan]\nignores = []\n# cache_dir = \".slopguard-cache\"\n",
+    );
+    Ok(out)
+}
 
 /// The `[rulesets]`, `[rules]`, `[scan]` and `[output]` sections shared by the
 /// `default` and `ai` presets.
-fn common_body() -> String {
-    format!("{RULESETS_ALL_ON}\n{DEFAULT_RULES_AND_SCAN}\n{OUTPUT_BLOCK}")
+fn common_body() -> Result<String, RuleError> {
+    Ok(format!(
+        "{RULESETS_ALL_ON}\n{}\n{OUTPUT_BLOCK}",
+        default_rules_and_scan()?
+    ))
 }
 
 /// The commented-out `[ai]` block shipped by every preset that leaves AI off.
@@ -122,10 +131,10 @@ impl Preset {
     /// Render the preset as the full text of a `slopguard.toml`.
     pub fn render(&self) -> Result<String, RuleError> {
         let mut out = match self {
-            Preset::Default => render_default(),
+            Preset::Default => render_default()?,
             Preset::Strict => render_strict()?,
             Preset::Relaxed => render_relaxed()?,
-            Preset::Ai => render_ai(),
+            Preset::Ai => render_ai()?,
         };
         out.push_str(COMMENTED_ESCALATION_BODY);
         Ok(out)
@@ -191,16 +200,20 @@ fn correctness_warning_rule_ids() -> Result<Vec<String>, RuleError> {
     Ok(ids)
 }
 
-fn render_default() -> String {
-    format!(
+fn render_default() -> Result<String, RuleError> {
+    Ok(format!(
         "{}{}{COMMENTED_AI_BODY}",
         header(Preset::Default),
-        common_body()
-    )
+        common_body()?
+    ))
 }
 
-fn render_ai() -> String {
-    format!("{}{}{LIVE_AI_BODY}", header(Preset::Ai), common_body())
+fn render_ai() -> Result<String, RuleError> {
+    Ok(format!(
+        "{}{}{LIVE_AI_BODY}",
+        header(Preset::Ai),
+        common_body()?
+    ))
 }
 
 fn render_strict() -> Result<String, RuleError> {
@@ -388,6 +401,20 @@ mod tests {
         assert!(config.rules.disable.is_empty());
         assert_eq!(config.output, defaults.output);
         assert!(!config.ai.enabled);
+    }
+
+    // The comment used to hardcode two ids while the ruleset shipped more.
+    #[test]
+    fn default_preset_comment_lists_every_opt_in_rule() {
+        let text = Preset::Default.render().unwrap();
+        let ids = opt_in_rule_ids().unwrap();
+        assert!(ids.len() > 2, "expected several opt-in rules, got {ids:?}");
+        for id in ids {
+            assert!(
+                text.contains(&format!("#   {id}\n")),
+                "missing opt-in rule {id} in:\n{text}"
+            );
+        }
     }
 
     #[test]

@@ -79,6 +79,27 @@ pub struct RulesConfig {
     /// External rule sources: git repositories (cloned and cached) and extra
     /// local paths. Loaded as custom rules, with their provenance tracked.
     pub sources: Vec<RuleSource>,
+    /// Per-rule options, one `[rules.options.<id>]` table per rule that reads
+    /// any. An unknown rule id or key is a config error, not a silent no-op.
+    pub options: RuleOptions,
+}
+
+/// The options of the builtin rules that take some, keyed by rule id.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(default, deny_unknown_fields)]
+pub struct RuleOptions {
+    #[serde(rename = "no-assertion-free-test")]
+    pub no_assertion_free_test: AssertionFreeTestOptions,
+}
+
+/// `[rules.options.no-assertion-free-test]`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(default, deny_unknown_fields)]
+pub struct AssertionFreeTestOptions {
+    /// Bare names of functions, methods or macros that assert but live outside
+    /// the scanned project (test support from a dependency). `*` is a wildcard:
+    /// `["run", "check_*"]`. A test calling one of them is not reported.
+    pub assert_functions: Vec<String>,
 }
 
 /// One external rule source declared as `[[rules.sources]]`.
