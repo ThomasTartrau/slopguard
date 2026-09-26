@@ -34,6 +34,33 @@ fn scan_files_cached_keeps_other_entries() {
 }
 
 #[test]
+fn file_target_walk_keeps_other_entries() {
+    let src_dir = tempdir().unwrap();
+    let cache_dir = tempdir().unwrap();
+    let cache_path = cache_dir.path().join("cache");
+    let a = src_dir.path().join("a.rs");
+    write(&a, "fn a() {\n    foo().unwrap();\n}\n").unwrap();
+    write(
+        src_dir.path().join("b.rs"),
+        "fn b() {\n    bar().unwrap();\n}\n",
+    )
+    .unwrap();
+
+    let rules = [unwrap_rule()];
+    let config = Config::default();
+    let paths = [src_dir.path().to_path_buf()];
+
+    scan_cached(&paths, &rules, &config, &cache_path).unwrap();
+    // The pre-commit hook passes files as scan paths, not through `--diff`.
+    scan_cached(&[a], &rules, &config, &cache_path).unwrap();
+
+    let result = scan_cached(&paths, &rules, &config, &cache_path).unwrap();
+    let stats = result.cache_stats.as_ref().unwrap();
+    assert_eq!(stats.cached, 2, "a file target must not prune");
+    assert_eq!(stats.changed, 0);
+}
+
+#[test]
 fn scan_finds_file_lines_violation() {
     let dir = tempdir().unwrap();
     write(dir.path().join("big.rs"), rust_lines(12)).unwrap();
@@ -324,8 +351,16 @@ fn cross_file_single_impl_trait_reported() {
 fn cross_file_two_impls_not_reported() {
     let dir = tempdir().unwrap();
     write(dir.path().join("repo.rs"), "pub trait Repository {}\n").unwrap();
-    write(dir.path().join("pg.rs"), "impl Repository for Pg {}\n").unwrap();
-    write(dir.path().join("mem.rs"), "impl Repository for Mem {}\n").unwrap();
+    write(
+        dir.path().join("pg.rs"),
+        "pub struct Pg;\nimpl Repository for Pg {}\n",
+    )
+    .unwrap();
+    write(
+        dir.path().join("mem.rs"),
+        "pub struct Mem;\nimpl Repository for Mem {}\n",
+    )
+    .unwrap();
 
     let result = scan_dir(dir.path(), &[single_impl_trait_rule()]);
     assert_eq!(result.findings.len(), 0);
@@ -355,7 +390,11 @@ fn cross_file_duplicate_trait_name_not_reported() {
     let dir = tempdir().unwrap();
     write(dir.path().join("a.rs"), "pub trait Repository {}\n").unwrap();
     write(dir.path().join("b.rs"), "pub trait Repository {}\n").unwrap();
-    write(dir.path().join("pg.rs"), "impl Repository for Pg {}\n").unwrap();
+    write(
+        dir.path().join("pg.rs"),
+        "pub struct Pg;\nimpl Repository for Pg {}\n",
+    )
+    .unwrap();
 
     let result = scan_dir(dir.path(), &[single_impl_trait_rule()]);
     assert_eq!(result.findings.len(), 0);
@@ -369,7 +408,11 @@ fn cross_file_disable_comment_on_declaration() {
         "// slopguard-disable-next-line no-single-impl-trait\npub trait Repository {}\n",
     )
     .unwrap();
-    write(dir.path().join("pg.rs"), "impl Repository for Pg {}\n").unwrap();
+    write(
+        dir.path().join("pg.rs"),
+        "pub struct Pg;\nimpl Repository for Pg {}\n",
+    )
+    .unwrap();
 
     let result = scan_dir(dir.path(), &[single_impl_trait_rule()]);
     assert_eq!(
@@ -383,7 +426,11 @@ fn cross_file_disable_comment_on_declaration() {
 fn cross_file_cfg_test_mock_counts_as_second_impl() {
     let dir = tempdir().unwrap();
     write(dir.path().join("repo.rs"), "pub trait Repository {}\n").unwrap();
-    write(dir.path().join("pg.rs"), "impl Repository for Pg {}\n").unwrap();
+    write(
+        dir.path().join("pg.rs"),
+        "pub struct Pg;\nimpl Repository for Pg {}\n",
+    )
+    .unwrap();
     write(
         dir.path().join("mock.rs"),
         "#[cfg(test)]\nmod tests {\n    struct MockRepo;\n    impl Repository for MockRepo {}\n}\n",
@@ -404,30 +451,95 @@ fn cross_file_declaration_in_test_path_not_reported() {
     let tests_dir = dir.path().join("tests");
     create_dir(&tests_dir).unwrap();
     write(tests_dir.join("support.rs"), "pub trait Repository {}\n").unwrap();
-    write(tests_dir.join("pg.rs"), "impl Repository for Pg {}\n").unwrap();
+    write(
+        tests_dir.join("pg.rs"),
+        "pub struct Pg;\nimpl Repository for Pg {}\n",
+    )
+    .unwrap();
 
     let result = scan_dir(dir.path(), &[single_impl_trait_rule()]);
     assert_eq!(result.findings.len(), 0);
 }
 
-#[test]
-fn cross_file_not_run_for_scan_files() {
+/// A project (marked by `slopguard.toml`) whose trait has one impl per file in
+/// `impls`.
+fn repository_project(impls: &[&str]) -> tempfile::TempDir {
     let dir = tempdir().unwrap();
-    let repo = dir.path().join("repo.rs");
-    let pg = dir.path().join("pg.rs");
-    write(&repo, "pub trait Repository {}\n").unwrap();
-    write(&pg, "impl Repository for Pg {}\n").unwrap();
+    write(dir.path().join("slopguard.toml"), "").unwrap();
+    write(dir.path().join("repo.rs"), "pub trait Repository {}\n").unwrap();
+    for name in impls {
+        write(
+            dir.path().join(format!("{}.rs", name.to_lowercase())),
+            format!("pub struct {name};\nimpl Repository for {name} {{}}\n"),
+        )
+        .unwrap();
+    }
+    dir
+}
 
+#[test]
+fn scan_files_indexes_the_whole_project() {
+    // The second impl lives in a file outside the scanned list: a partial
+    // index would see one impl and report the trait.
+    let dir = repository_project(&["Pg", "Mem"]);
     let rules = [single_impl_trait_rule()];
-    let partial = scan_files(&[repo, pg], &rules, &Config::default()).unwrap();
+    let partial = scan_files(&[dir.path().join("repo.rs")], &rules, &Config::default()).unwrap();
+    assert!(partial.findings.is_empty(), "got: {:?}", partial.findings);
+}
+
+#[test]
+fn scan_files_reports_only_findings_in_the_given_files() {
+    let dir = repository_project(&["Pg"]);
+    let rules = [single_impl_trait_rule()];
+    let config = Config::default();
+
+    let on_decl = scan_files(&[dir.path().join("repo.rs")], &rules, &config).unwrap();
+    assert_eq!(on_decl.findings.len(), 1);
+    assert!(on_decl.findings[0].file.ends_with("repo.rs"));
+
+    let on_impl = scan_files(&[dir.path().join("pg.rs")], &rules, &config).unwrap();
+    assert!(
+        on_impl.findings.is_empty(),
+        "the finding sits in repo.rs, which was not scanned: {:?}",
+        on_impl.findings
+    );
+}
+
+#[test]
+fn file_target_of_a_walk_indexes_the_whole_project() {
+    // The pre-commit hook passes files as scan paths, not through `--diff`.
+    let dir = repository_project(&["Pg", "Mem"]);
+    let rules = [single_impl_trait_rule()];
+    let result = scan(&[dir.path().join("repo.rs")], &rules, &Config::default()).unwrap();
+    assert!(result.findings.is_empty(), "got: {:?}", result.findings);
+    assert_eq!(result.stats.files_scanned, 1);
+}
+
+#[test]
+fn cached_partial_scan_keeps_the_project_cache() {
+    let dir = repository_project(&["Pg", "Mem"]);
+    let cache_dir = tempdir().unwrap();
+    let cache_path = cache_dir.path().join("cache");
+    let rules = [single_impl_trait_rule()];
+    let config = Config::default();
+    let file_target = [dir.path().join("repo.rs")];
+
+    let first = scan_cached(&file_target, &rules, &config, &cache_path).unwrap();
+    assert!(first.findings.is_empty(), "got: {:?}", first.findings);
+    let second = scan_cached(&file_target, &rules, &config, &cache_path).unwrap();
+    assert!(second.findings.is_empty(), "got: {:?}", second.findings);
     assert_eq!(
-        partial.findings.len(),
-        0,
-        "an explicit file list has an incomplete project index"
+        second.cache_stats.map(|s| (s.cached, s.changed)),
+        Some((1, 0))
     );
 
-    let full = scan_dir(dir.path(), &rules);
-    assert_eq!(full.findings.len(), 1);
+    // The index-only files were scanned and stored by the partial runs, so a
+    // full scan finds every entry already cached.
+    let full = scan_cached(&[dir.path().to_path_buf()], &rules, &config, &cache_path).unwrap();
+    assert_eq!(
+        full.cache_stats.map(|s| (s.cached, s.changed)),
+        Some((3, 0))
+    );
 }
 
 #[test]
@@ -436,7 +548,11 @@ fn cross_file_survives_cache_round_trip() {
     let cache_dir = tempdir().unwrap();
     let cache_path = cache_dir.path().join("cache");
     write(src_dir.path().join("repo.rs"), "pub trait Repository {}\n").unwrap();
-    write(src_dir.path().join("pg.rs"), "impl Repository for Pg {}\n").unwrap();
+    write(
+        src_dir.path().join("pg.rs"),
+        "pub struct Pg;\nimpl Repository for Pg {}\n",
+    )
+    .unwrap();
 
     let rules = [single_impl_trait_rule()];
     let config = Config::default();
@@ -461,7 +577,11 @@ fn cross_file_survives_cache_round_trip() {
 fn cross_file_rule_with_no_ast_rules_still_parses_files() {
     let dir = tempdir().unwrap();
     write(dir.path().join("repo.rs"), "pub trait Repository {}\n").unwrap();
-    write(dir.path().join("pg.rs"), "impl Repository for Pg {}\n").unwrap();
+    write(
+        dir.path().join("pg.rs"),
+        "pub struct Pg;\nimpl Repository for Pg {}\n",
+    )
+    .unwrap();
 
     let result = scan_dir(dir.path(), &[single_impl_trait_rule()]);
     assert_eq!(

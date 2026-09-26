@@ -1,7 +1,7 @@
 //! Top-level scan orchestration: collect files, fan out per-file scans (cached
 //! or not), assemble cross-file findings, and shape the [`ScanResult`].
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -15,11 +15,11 @@ use crate::disable::unused_disable_findings;
 use crate::finding::{CacheStats, Finding, ScanResult, ScanStats};
 use crate::resolution::FileImports;
 use crate::rule::{Rule, Severity};
-use crate::test_filter::TestPaths;
 
+use super::project::{append_cross_file, index_only_files};
 use super::{
-    append_cross_file, append_resolution, build_glob_set, compile_rules, explicit_files, scan_file,
-    walk_files, CompiledRules, FileScan, ScanError,
+    append_resolution, build_glob_set, compile_rules, explicit_files, scan_file, walk_files,
+    CompiledRules, FileScan, ScanError,
 };
 
 /// Count errors and warnings in one pass.
@@ -43,20 +43,56 @@ fn normalize_findings(findings: &mut Vec<Finding>) {
     });
 }
 
-/// Scan an already-collected file list without touching the cache.
-///
-/// Symbol collection is driven by the active rules alone, never by
-/// `run_cross_file`: a partial scan must still cache a complete contribution.
-fn scan_collected(
+/// The files a scan reports on, plus the ones it only reads to complete the
+/// cross-file index (see [`index_only_files`]).
+struct ScanSet {
     files: Vec<(PathBuf, SupportLang)>,
-    compiled: &CompiledRules,
-    run_cross_file: bool,
-    apply_disable: bool,
-) -> ScanResult {
+    index_only: Vec<(PathBuf, SupportLang)>,
+}
+
+impl ScanSet {
+    /// A directory walk of `paths`. File targets among them widen the index to
+    /// their project.
+    fn walk(
+        paths: &[PathBuf],
+        compiled: &CompiledRules,
+        config: &Config,
+    ) -> Result<Self, ScanError> {
+        let ignores = build_glob_set(&config.scan.ignores)?;
+        let files = walk_files(paths, &ignores);
+        let index_only = index_only_files(compiled, paths, &files, &ignores);
+        Ok(Self { files, index_only })
+    }
+
+    /// An explicit file list (`--diff`). Every file widens the index to its
+    /// project.
+    fn explicit(
+        targets: &[PathBuf],
+        compiled: &CompiledRules,
+        config: &Config,
+    ) -> Result<Self, ScanError> {
+        let ignores = build_glob_set(&config.scan.ignores)?;
+        let files = explicit_files(targets, &ignores);
+        let index_only = index_only_files(compiled, targets, &files, &ignores);
+        Ok(Self { files, index_only })
+    }
+
+    /// The paths whose findings are reported.
+    fn reported(&self) -> HashSet<&Path> {
+        self.files.iter().map(|(path, _)| path.as_path()).collect()
+    }
+}
+
+/// Scan a collected file set without touching the cache.
+///
+/// Index-only files are parsed for their symbols alone: nothing of theirs is
+/// reported, and nothing is stored.
+fn scan_collected(set: &ScanSet, compiled: &CompiledRules, apply_disable: bool) -> ScanResult {
     let (per_file, project) = compiled.engines(apply_disable);
     let collect_symbols = project.iter().any(|e| e.needs_symbols());
     let collect_imports = !compiled.resolution.is_empty();
-    let scans: Vec<(PathBuf, FileScan)> = files
+    let scans: Vec<(PathBuf, FileScan)> = set
+        .files
         .par_iter()
         .map(|(path, lang)| {
             let scan = scan_file(
@@ -84,7 +120,19 @@ fn scan_collected(
             import_contributions.push((path, scan.imports));
         }
     }
-    append_cross_file(&mut findings, &project, run_cross_file, &contributions);
+    if collect_symbols {
+        let test_paths = &compiled.test_paths;
+        let extra: Vec<(PathBuf, FileSymbols)> = set
+            .index_only
+            .par_iter()
+            .map(|(path, lang)| {
+                let scan = scan_file(path, *lang, &[], test_paths, true, false, apply_disable);
+                (path.clone(), scan.symbols)
+            })
+            .collect();
+        contributions.extend(extra);
+    }
+    append_cross_file(&mut findings, &project, &contributions, &set.reported());
     append_resolution(
         &mut findings,
         compiled,
@@ -101,7 +149,7 @@ fn scan_collected(
             errors,
             warnings,
             total: errors + warnings,
-            files_scanned: files.len(),
+            files_scanned: set.files.len(),
             baseline_filtered: 0,
             diff_base: None,
             files_changed: None,
@@ -110,19 +158,22 @@ fn scan_collected(
     }
 }
 
-/// Scan an already-collected file list, reusing cached findings for files
-/// whose content hash is unchanged.
+/// Scan a collected file set, reusing cached findings for files whose content
+/// hash is unchanged.
+///
+/// Index-only files go through the cache like the others (a miss is scanned in
+/// full and stored, which warms the cache for the next run), but only their
+/// symbols are used and they are left out of the stats.
 ///
 /// `prune` drops cache entries that no longer correspond to a scanned file. A
 /// partial scan must pass `false`: it never saw the other files, so their
 /// entries are still valid.
 fn scan_collected_cached(
-    files: Vec<(PathBuf, SupportLang)>,
+    set: &ScanSet,
     compiled: &CompiledRules,
     rules: &[Rule],
     cache_dir: &Path,
     prune: bool,
-    run_cross_file: bool,
 ) -> ScanResult {
     // The cached path always applies disable comments: the raw pass used by
     // `--report-unused-disable` runs uncached, so the cache only ever stores
@@ -136,12 +187,26 @@ fn scan_collected_cached(
         .check_rules_changed(&current_rules_hash)
         .unwrap_or(true);
 
-    let file_contents: Vec<(PathBuf, SupportLang, Vec<u8>, String)> = files
-        .into_iter()
-        .filter_map(|(path, lang)| {
-            let content = fs::read(&path).ok()?;
-            let hash = file_content_hash(&content);
-            Some((path, lang, content, hash))
+    struct FileWork<'a> {
+        path: &'a Path,
+        lang: SupportLang,
+        hash: String,
+        /// False for an index-only file: its findings are not reported.
+        reported: bool,
+    }
+
+    let reported = set.files.iter().map(|file| (file, true));
+    let index_only = set.index_only.iter().map(|file| (file, false));
+    let work: Vec<FileWork> = reported
+        .chain(index_only)
+        .filter_map(|((path, lang), reported)| {
+            let content = fs::read(path).ok()?;
+            Some(FileWork {
+                path,
+                lang: *lang,
+                hash: file_content_hash(&content),
+                reported,
+            })
         })
         .collect();
 
@@ -150,78 +215,66 @@ fn scan_collected_cached(
     let mut all_findings: Vec<Finding> = Vec::new();
     let mut contributions: Vec<(PathBuf, FileSymbols)> = Vec::new();
     let mut import_contributions: Vec<(PathBuf, FileImports)> = Vec::new();
-
-    struct FileWork {
-        path: PathBuf,
-        lang: SupportLang,
-        hash: String,
-    }
-
-    let mut to_scan: Vec<FileWork> = Vec::new();
-
-    for (path, lang, _content, hash) in file_contents.iter() {
-        if !rules_changed {
-            if let Some(entry) = store.get(hash) {
-                cached_count += 1;
-                all_findings.extend(entry.findings);
-                if collect_symbols {
-                    contributions.push((path.clone(), entry.symbols));
-                }
-                if collect_imports {
-                    import_contributions.push((path.clone(), entry.imports));
-                }
-                continue;
+    let mut take = |file: &FileWork, entry: CacheEntry| {
+        if file.reported {
+            all_findings.extend(entry.findings);
+            if collect_imports {
+                import_contributions.push((file.path.to_path_buf(), entry.imports));
             }
         }
-        changed_count += 1;
-        to_scan.push(FileWork {
-            path: path.clone(),
-            lang: *lang,
-            hash: hash.clone(),
-        });
+        if collect_symbols {
+            contributions.push((file.path.to_path_buf(), entry.symbols));
+        }
+    };
+
+    let mut to_scan: Vec<&FileWork> = Vec::new();
+    for file in &work {
+        match (!rules_changed).then(|| store.get(&file.hash)).flatten() {
+            Some(entry) => {
+                cached_count += usize::from(file.reported);
+                take(file, entry);
+            }
+            None => {
+                changed_count += usize::from(file.reported);
+                to_scan.push(file);
+            }
+        }
     }
 
-    let scanned: Vec<(PathBuf, String, FileScan)> = to_scan
-        .par_iter()
-        .map(|work| {
+    let scanned: Vec<(&FileWork, FileScan)> = to_scan
+        .into_par_iter()
+        .map(|file| {
             let scan = scan_file(
-                &work.path,
-                work.lang,
+                file.path,
+                file.lang,
                 &per_file,
                 &compiled.test_paths,
                 collect_symbols,
                 collect_imports,
                 true,
             );
-            (work.path.clone(), work.hash.clone(), scan)
+            (file, scan)
         })
         .collect();
 
-    for (path, hash, scan) in scanned {
+    for (file, scan) in scanned {
         let entry = CacheEntry {
             findings: scan.findings,
             symbols: scan.symbols,
             imports: scan.imports,
         };
-        store.put(&hash, &entry).ok();
-        all_findings.extend(entry.findings);
-        if collect_symbols {
-            contributions.push((path.clone(), entry.symbols));
-        }
-        if collect_imports {
-            import_contributions.push((path, entry.imports));
-        }
+        store.put(&file.hash, &entry).ok();
+        take(file, entry);
     }
 
     // Cross-file and resolution evaluation are never cached: they re-run on every
     // scan (cross-file from the assembled index, resolution from the manifests on
     // disk, so a manifest edit is reflected even for an unchanged file).
-    append_cross_file(&mut all_findings, &project, run_cross_file, &contributions);
+    append_cross_file(&mut all_findings, &project, &contributions, &set.reported());
     append_resolution(&mut all_findings, compiled, &import_contributions, true);
 
     if prune {
-        let current_hashes: Vec<String> =
-            file_contents.iter().map(|(_, _, _, h)| h.clone()).collect();
+        let current_hashes: Vec<String> = work.iter().map(|file| file.hash.clone()).collect();
         store.cleanup(&current_hashes).ok();
     }
 
@@ -250,16 +303,13 @@ fn scan_collected_cached(
 }
 
 /// Scan the given paths for rule violations.
+///
+/// A file among `paths` (as the pre-commit hook passes them) is reported on its
+/// own, but the cross-file index still covers its whole project.
 pub fn scan(paths: &[PathBuf], rules: &[Rule], config: &Config) -> Result<ScanResult, ScanError> {
-    let test_paths = TestPaths::new(&config.scan.test_paths)?;
-    let compiled = compile_rules(rules, test_paths)?;
-    let ignores = build_glob_set(&config.scan.ignores)?;
-    Ok(scan_collected(
-        walk_files(paths, &ignores),
-        &compiled,
-        true,
-        true,
-    ))
+    let compiled = compile_rules(rules, config)?;
+    let set = ScanSet::walk(paths, &compiled, config)?;
+    Ok(scan_collected(&set, &compiled, true))
 }
 
 /// Scan with file-level caching. Files whose content hash matches a cached
@@ -270,22 +320,20 @@ pub fn scan(paths: &[PathBuf], rules: &[Rule], config: &Config) -> Result<ScanRe
 /// cache directory is specified (via `--cache-dir`, `SLOPGUARD_CACHE_DIR`,
 /// or `scan.cache_dir` in config), pass it directly. Otherwise pass the
 /// project root and use `CacheStore::new` which appends `.slopguard-cache`.
+///
+/// Stale entries are pruned only when every path is a directory: a file target
+/// (the pre-commit hook) is a partial scan and must keep the other entries.
 pub fn scan_cached(
     paths: &[PathBuf],
     rules: &[Rule],
     config: &Config,
     cache_dir: &Path,
 ) -> Result<ScanResult, ScanError> {
-    let test_paths = TestPaths::new(&config.scan.test_paths)?;
-    let compiled = compile_rules(rules, test_paths)?;
-    let ignores = build_glob_set(&config.scan.ignores)?;
+    let compiled = compile_rules(rules, config)?;
+    let set = ScanSet::walk(paths, &compiled, config)?;
+    let prune = paths.iter().all(|path| path.is_dir());
     Ok(scan_collected_cached(
-        walk_files(paths, &ignores),
-        &compiled,
-        rules,
-        cache_dir,
-        true,
-        true,
+        &set, &compiled, rules, cache_dir, prune,
     ))
 }
 
@@ -294,24 +342,17 @@ pub fn scan_cached(
 /// Used by `--diff`, where git already produced the exact file set. Paths that
 /// no longer exist or that slopguard cannot parse are silently skipped.
 ///
-/// Cross-file rules are not evaluated here. `--diff` sees only the changed
-/// files, so the project index would be incomplete and its impl counts wrong.
-/// Symbol contributions are still collected and cached, so a later full scan is
-/// not penalised.
+/// Cross-file rules still see the whole project: the index is completed from
+/// the project each file belongs to, and only the findings located in the
+/// given files are reported.
 pub fn scan_files(
     files: &[PathBuf],
     rules: &[Rule],
     config: &Config,
 ) -> Result<ScanResult, ScanError> {
-    let test_paths = TestPaths::new(&config.scan.test_paths)?;
-    let compiled = compile_rules(rules, test_paths)?;
-    let ignores = build_glob_set(&config.scan.ignores)?;
-    Ok(scan_collected(
-        explicit_files(files, &ignores),
-        &compiled,
-        false,
-        true,
-    ))
+    let compiled = compile_rules(rules, config)?;
+    let set = ScanSet::explicit(files, &compiled, config)?;
+    Ok(scan_collected(&set, &compiled, true))
 }
 
 /// Compute `unused-disable` findings for the given walked paths: a full raw scan
@@ -326,27 +367,24 @@ pub fn scan_unused_disables(
     rules: &[Rule],
     config: &Config,
 ) -> Result<Vec<Finding>, ScanError> {
-    let test_paths = TestPaths::new(&config.scan.test_paths)?;
-    let compiled = compile_rules(rules, test_paths)?;
-    let ignores = build_glob_set(&config.scan.ignores)?;
-    let files = walk_files(paths, &ignores);
-    let raw = scan_collected(files.clone(), &compiled, true, false);
-    Ok(unused_from_raw(&files, &raw.findings))
+    let compiled = compile_rules(rules, config)?;
+    let set = ScanSet::walk(paths, &compiled, config)?;
+    let raw = scan_collected(&set, &compiled, false);
+    Ok(unused_from_raw(&set.files, &raw.findings))
 }
 
-/// Explicit-file (diff) variant of [`scan_unused_disables`]. Cross-file rules do
-/// not run, matching [`scan_files`], so only the changed files are considered.
+/// Explicit-file (diff) variant of [`scan_unused_disables`]. Cross-file rules
+/// run over the whole project, as in [`scan_files`], and only the changed files
+/// are checked for unused directives.
 pub fn scan_files_unused_disables(
     files: &[PathBuf],
     rules: &[Rule],
     config: &Config,
 ) -> Result<Vec<Finding>, ScanError> {
-    let test_paths = TestPaths::new(&config.scan.test_paths)?;
-    let compiled = compile_rules(rules, test_paths)?;
-    let ignores = build_glob_set(&config.scan.ignores)?;
-    let collected = explicit_files(files, &ignores);
-    let raw = scan_collected(collected.clone(), &compiled, false, false);
-    Ok(unused_from_raw(&collected, &raw.findings))
+    let compiled = compile_rules(rules, config)?;
+    let set = ScanSet::explicit(files, &compiled, config)?;
+    let raw = scan_collected(&set, &compiled, false);
+    Ok(unused_from_raw(&set.files, &raw.findings))
 }
 
 /// Group raw findings by file and, for each collected file, report the disable
@@ -373,26 +411,15 @@ fn unused_from_raw(files: &[(PathBuf, SupportLang)], raw: &[Finding]) -> Vec<Fin
 
 /// Cached variant of [`scan_files`]. Cache pruning is skipped: a partial scan
 /// must not evict the entries of files it did not look at.
-///
-/// Cross-file rules are not evaluated here. `--diff` sees only the changed
-/// files, so the project index would be incomplete and its impl counts wrong.
-/// Symbol contributions are still collected and cached, so a later full scan is
-/// not penalised.
 pub fn scan_files_cached(
     files: &[PathBuf],
     rules: &[Rule],
     config: &Config,
     cache_dir: &Path,
 ) -> Result<ScanResult, ScanError> {
-    let test_paths = TestPaths::new(&config.scan.test_paths)?;
-    let compiled = compile_rules(rules, test_paths)?;
-    let ignores = build_glob_set(&config.scan.ignores)?;
+    let compiled = compile_rules(rules, config)?;
+    let set = ScanSet::explicit(files, &compiled, config)?;
     Ok(scan_collected_cached(
-        explicit_files(files, &ignores),
-        &compiled,
-        rules,
-        cache_dir,
-        false,
-        false,
+        &set, &compiled, rules, cache_dir, false,
     ))
 }

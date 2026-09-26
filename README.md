@@ -26,7 +26,8 @@
 [Configuration](#%EF%B8%8F-configuration) -
 [Severity Escalation](#-severity-escalation) -
 [Custom Rules](#-custom-rules) -
-[AI Rules](#-ai-rules)
+[AI Rules](#-ai-rules) -
+[Autofix](#autofix)
 
 </div>
 
@@ -36,9 +37,9 @@
 
 AI code generators produce recurring anti-patterns: trivial doc-comments, swallowed errors, silent fallbacks, filler words in comments, missing timeouts, redundant string conversions. These patterns are structurally detectable but no existing tool catches them systematically.
 
-slopguard fills that gap with builtin rules organized into three rulesets (**slop**, **security**, **correctness**), covering both **Rust and TypeScript**. Rules are defined in YAML using ast-grep pattern syntax, powered by tree-sitter for AST-level matching. Every rule ships with inline tests.
+slopguard fills that gap with 117 builtin rules (103 active by default) organized into three rulesets (**slop**, **security**, **correctness**), covering both **Rust and TypeScript**. Rules are defined in YAML using ast-grep pattern syntax, powered by tree-sitter for AST-level matching. Beyond single-node patterns, slopguard measures whole files, builds a project-wide index for cross-file rules, checks that imports resolve against your manifests, and can confirm ambiguous matches with an LLM.
 
-You can extend slopguard with your own YAML rules, disable rules per-line with inline suppression comments, and output findings as colored text (rustc-style), JSON, or SARIF for CI integration.
+You can extend slopguard with your own YAML rules or shared rulesets from git, disable rules per-line with inline suppression comments, apply safe rewrites with `--fix`, and output findings as colored text (rustc-style), JSON, SARIF or a standalone HTML report.
 
 ---
 
@@ -46,8 +47,8 @@ You can extend slopguard with your own YAML rules, disable rules per-line with i
 
 | Crate | Version | Role |
 | --- | --- | --- |
-| [`slopguard-cli`](https://crates.io/crates/slopguard-cli) | ![](https://img.shields.io/crates/v/slopguard-cli.svg?label=) | CLI binary: scan, init, test, list, explain commands |
-| [`slopguard-core`](https://crates.io/crates/slopguard-core) | ![](https://img.shields.io/crates/v/slopguard-core.svg?label=) | Analysis engine: scanner, config, rule loading, inline disable |
+| [`slopguard-cli`](https://crates.io/crates/slopguard-cli) | ![](https://img.shields.io/crates/v/slopguard-cli.svg?label=) | CLI binary: scan, stats, baseline, init, test, list, explain commands |
+| [`slopguard-core`](https://crates.io/crates/slopguard-core) | ![](https://img.shields.io/crates/v/slopguard-core.svg?label=) | Analysis engine: scanner, config, rule loading and sources, cache, baseline, autofix, import resolution |
 | [`slopguard-rules`](https://crates.io/crates/slopguard-rules) | ![](https://img.shields.io/crates/v/slopguard-rules.svg?label=) | Builtin YAML rules embedded at compile time |
 | [`slopguard-ai`](https://gitlab.com/ThomasTartrau/slopguard/-/tree/main/slopguard-ai) | - | AI confirmation pipeline: provider selection, prompt, cache |
 
@@ -58,16 +59,20 @@ You can extend slopguard with your own YAML rules, disable rules per-line with i
   file walker (ignore crate, respects .gitignore)
        |
        v
-  AST parser (tree-sitter via ast-grep-core)
+  AST parser (tree-sitter via ast-grep-core, one parse per file, cached)
        |
        v
-  rule matcher (pattern + kind + regex combinators)
+  per-file engines (ast patterns, file metrics) + import resolution,
+  inline disable (// slopguard-disable-next-line) applied per finding
        |
        v
-  inline disable filter (// slopguard-disable-next-line)
+  project pass (cross-file rules over a symbol index, full scans only)
        |
        v
-  findings
+  AI pass (LLM or classifier confirms AI rule candidates, optional)
+       |
+       v
+  baseline filter, severity escalation
        |
        v
   formatter (text / json / sarif / html)
@@ -148,7 +153,10 @@ slopguard scan --diff --base main     # only files changed vs main (three-dot di
 slopguard scan --fix                  # apply autofix-safe rewrites in place
 slopguard scan --fix --dry-run        # preview the rewrites as a unified diff, write nothing
 slopguard scan --fix --allow-dirty    # rewrite even with uncommitted changes (else refused)
-slopguard list                       # show active rules (with ast/ai type)
+slopguard scan --report-unused-disable  # also report disable comments that suppress nothing
+slopguard scan --offline              # never fetch git rule sources, reuse the cache
+slopguard list                       # show active rules with their type and source
+slopguard list --all                 # include the opt-in rules
 slopguard explain no-unwrap-in-prod  # rule details (prompt template for AI rules)
 slopguard test                       # validate all rule inline tests
 slopguard init                       # generate slopguard.toml
@@ -162,11 +170,21 @@ slopguard init --preset              # list the available presets
 
 | Ruleset | What it catches |
 | --------- | ----------------- |
-| **slop** | AI-generated code patterns: filler words, trivial doc-comments, restated comments, unnecessary manual impls |
-| **security** | Security anti-patterns: secrets in Debug, path traversal, URL injection, unsafe without SAFETY comment, HTTP clients without timeout |
-| **correctness** | Error handling issues: unwrap/expect in production, swallowed errors, silent fallbacks, ignored Results, float money |
+| **slop** | AI-generated code patterns: filler words, trivial doc-comments, restated comments, unnecessary manual impls, oversized files, single-impl traits |
+| **security** | Security anti-patterns: secrets in Debug or source, path traversal, URL and shell injection, unsafe without SAFETY comment, HTTP clients without timeout, SSRF |
+| **correctness** | Error handling and type safety: unwrap/expect in production, swallowed errors, silent fallbacks, ignored Results, `unknown`/`any` leaks, assertion-free tests, hallucinated imports |
 
-Run `slopguard list` for the full list with notes, or see [RULES.md](RULES.md) for detailed documentation.
+Every rule has a type, shown in the `type` column of `slopguard list`:
+
+| Type | Active | What it does |
+| ---- | ------ | ------------ |
+| `ast` | 84 | ast-grep pattern on the syntax tree |
+| `metric` | 8 | measures the whole file (lines, imports, functions, comment ratio) |
+| `cross-file` | 3 | evaluated once over a project-wide index |
+| `resolution` | 2 | checks imports against Cargo.toml / package.json |
+| `ai` | 6 | AST pre-filter confirmed by a model |
+
+14 more rules are opt-in (`slopguard list --all`). Run `slopguard explain <rule-id>` for a rule's details, or see [RULES.md](RULES.md) for the full reference.
 
 ---
 
@@ -184,6 +202,9 @@ correctness = true  # Error handling, type safety
 disable = ["no-glob-reexport"]
 enable = ["pub-fn-needs-tracing"]  # opt-in rules are off by default
 custom_dirs = ["./my-rules"]
+
+[rules.options.no-assertion-free-test]
+assert_functions = ["check_*"]  # test helpers from a dependency that assert
 
 [scan]
 ignores = ["target/", "generated/", "vendor/"]
@@ -244,6 +265,33 @@ custom_dirs = ["./slopguard-rules"]
 
 Run `slopguard test` to validate all rules (builtin + custom) against their inline tests.
 
+### Shared rulesets from git
+
+To share rules between projects without copying YAML, declare them as sources:
+
+```toml
+[[rules.sources]]
+git = "https://gitlab.com/your-org/slopguard-rules.git"
+ref = "v1.2.0"          # tag, branch or sha (default branch when omitted)
+path = "rules/"         # sub-directory inside the repository (default: root)
+
+[[rules.sources]]
+path = "../shared-rules"   # or a local directory
+```
+
+- Git sources are shallow-fetched with your own `git` (ssh-agent, credential
+  helpers and `~/.gitconfig` apply) into `~/.cache/slopguard/sources/` (Linux;
+  the platform cache directory elsewhere, `SLOPGUARD_SOURCES_CACHE` to
+  override). For a private https repository in CI, set `SLOPGUARD_GIT_TOKEN`;
+  it is never written to disk.
+- Each run refreshes the checkout. If the remote is unreachable, the cached copy
+  is used. `--offline` never fetches and fails when the cache is empty.
+- There is no lockfile yet: pin a tag or a sha for reproducible CI.
+- A source rule cannot reuse the id of a builtin rule for the same language;
+  that is an error, not an override.
+- `slopguard list` shows where each rule comes from in its `source` column, and
+  `slopguard test` validates source rules like any other.
+
 ---
 
 ## 🤖 AI Rules
@@ -299,6 +347,28 @@ export CLAUDE_CODE_OAUTH_TOKEN=...    # and `claude` on your PATH
 If a provider is enabled but its credentials are missing, slopguard prints a
 single clear warning naming the missing credential and continues with the AST
 findings only. It never fails the scan on a missing key.
+
+### Classifier (optional)
+
+Confirming a candidate is a yes/no question. Instead of a generative LLM,
+slopguard can ask a classifier (Jev, from TypeSafe) that returns a probability,
+and report the candidate when it reaches a threshold:
+
+```toml
+[ai.classifier]
+enabled = true
+transport = "direct"      # "direct" (TYPESAFE_API_KEY) or "openrouter" (OPENROUTER_API_KEY)
+threshold = 0.7           # fire when p >= threshold; rules can override it
+batch = true              # group candidates with overlapping context into one request
+```
+
+When the classifier is enabled it replaces the LLM confirmation for every AI
+rule. Two rules (`ai-ssrf-unvalidated-url`, `ai-open-redirect-unvalidated`) are
+marked `reason: generated`: once the classifier fires, they ask the `[ai]` LLM
+to explain that specific instance, and fall back to their static note when no
+LLM is configured. Probabilities are cached, and the threshold is applied after
+the cache, so tuning it never triggers new calls. The classifier is a
+proprietary SaaS and stays strictly opt-in.
 
 ### Skipping AI
 
@@ -414,6 +484,30 @@ slopguard list --format json | jq '[.[] | select(.type == "cross-file")] | lengt
 | Rule | Language | Kind |
 | ---- | -------- | ---- |
 | `no-single-impl-trait` | rust | `single_impl_trait` |
+| `no-duplicate-error-message` | rust | `duplicate_error_message` |
+| `no-assertion-free-test` | rust | `assertion_free_test` |
+
+`no-assertion-free-test` reports a `#[test]` that checks nothing: no
+`assert`/`panic`, no `?`, no `.unwrap()`/`.expect()`, no inline snapshot, no
+`#[should_panic]`. Delegating is fine: a test that calls, directly or through
+other helpers, test code that asserts (a `#[cfg(test)]` function,
+`tests/common/mod.rs`, a crate your workspace uses only as a dev-dependency
+such as `cargo-test-support`) is not reported. A production function with a
+precondition `assert!` does not count, and neither do compile-only tests
+(item declarations and typed `let _: T` bindings) or trybuild directories. For
+test helpers that come from a dependency, name them in the config:
+
+```toml
+[rules.options.no-assertion-free-test]
+assert_functions = ["run", "check_*"]   # bare names, * is a wildcard
+```
+
+`no-duplicate-error-message` reports an error message literal (from `bail!`,
+`anyhow!`, `eyre!`, `format_err!` or `ensure!`, 10 characters or more) that
+appears verbatim in two or more files: define it once as a constant or an error
+variant. An error value carries no location, so two sites with the same text
+cannot be told apart in a log. Panic messages (`panic!`, `.expect()`) are left
+out: a panic prints its own file and line.
 
 `no-single-impl-trait` fires only when a trait has **exactly 1 declaration,
 exactly 1 concrete implementation and 0 blanket implementations** in the scanned
@@ -426,6 +520,11 @@ project. It stays silent otherwise:
 - **a blanket `impl<T> Foo for T`** - the trait already covers a family of types.
 - **the same trait name declared twice** - matching is by bare name, so a
   homonym makes the project ambiguous and the rule abstains.
+- **an extension trait** - the single impl targets a type that is not a
+  struct, enum or union of the trait's own crate (`impl VersionExt for
+  semver::Version`, a type alias, or a type from a sibling workspace crate).
+  Rust only allows inherent methods in the type's crate, so the trait is the
+  only way to add them.
 
 The finding points at the declaration, not the impl, and is reported there:
 
@@ -438,10 +537,43 @@ pub trait Repository {
 
 ### One thing to know
 
-- **`--diff` never reports them.** Diff mode scans only the changed files, so
-  the project index would be missing the other implementations and the impl
-  counts would be wrong. The symbols of changed files are still collected and
-  cached, so the next full scan is not slowed down.
+- **Partial scans see the whole project.** `--diff` and the pre-commit hook
+  scan only some files, but the index is still built from the whole project
+  they belong to (the nearest directory with a `slopguard.toml` or a `.git`),
+  so the verdicts match a full scan. Only the findings located in the scanned
+  files are reported: adding the only impl of a trait whose file did not
+  change does not report the trait until its file is scanned.
+
+---
+
+## Import Resolution
+
+AI generators invent crates and packages. `unresolved-import` (Rust and
+TypeScript) checks that every import resolves, without compiling anything and
+without any network call:
+
+- **Rust**: the crate root of each `use` / `extern crate` must be declared in
+  the nearest `Cargo.toml` (dependencies, dev, build, `[workspace.dependencies]`,
+  `[target.*]`), be a standard crate (`std`, `core`, `alloc`, `proc_macro`,
+  `test`), a `crate` / `self` / `super` path, or a name the file already has in
+  scope: a `mod`, another `use` (`use crate::runtime::scheduler;` then
+  `use scheduler::Context;`), or an uppercase item name (`use Ordering::*`).
+  A module holding a non-std glob (`use super::*;`) is not asserted, since the
+  glob may bring the root into scope. Deep paths are not checked.
+- **TypeScript**: each `import` / `require` must be in `package.json`, a
+  relative file that exists, or a Node builtin.
+
+It stays silent when no manifest is found, on `import type`, on re-exports and
+on tsconfig `paths` aliases. The rule is per file, so it works under `--diff`.
+Editing a manifest is picked up on the next scan even for cached files.
+
+```text
+error[unresolved-import]: Unresolved import 'serde_jsonx': not a Cargo.toml dependency, a std crate, or a local module.
+  --> ./src/main.rs:1:1
+  |
+1 | use serde_jsonx::Value;
+  | ^^^^^^^^^^^^^^^^^^^^^^^
+```
 
 ---
 
@@ -456,6 +588,36 @@ let value = safe_call().unwrap();
 ```
 
 The first form suppresses all rules for the next line. The second form suppresses only the named rule.
+
+Disable comments rot: the code below changes, and the comment keeps hiding
+whatever lands there next. `slopguard scan --report-unused-disable` reports
+each directive that suppresses nothing as an `unused-disable` warning on the
+comment line. A directive on an AI rule candidate counts as used as soon as the
+AST pre-filter matches, whatever the model decides, so the report is the same
+with or without a provider.
+
+---
+
+## Autofix
+
+Rules marked `autofix_safe` carry a `rewrite` that `--fix` applies in place:
+
+```bash
+slopguard scan --fix --dry-run    # unified diff of the rewrites, nothing written
+slopguard scan --fix              # apply them
+```
+
+- Today `no-dbg-in-prod` and `no-unnecessary-clone` are autofixable
+  (`(autofix)` in [RULES.md](RULES.md)).
+- `--fix` refuses to run when the scanned paths have uncommitted changes, so
+  every rewrite can be reviewed and reverted with git. `--allow-dirty` bypasses
+  the check; outside a git repository there is nothing to check.
+- Findings you suppressed inline, recorded in the baseline, or located in test
+  code (for rules with `skip_test_code`) are never rewritten.
+- After rewriting, slopguard scans again and exits 1 if findings remain.
+
+To make a custom rule autofixable, add `rewrite` and `autofix_safe: true`, and
+prove the rewrite with `tests.should_fix` (`before` / `after` pairs).
 
 ---
 
@@ -697,6 +859,9 @@ slopguard actually parsed (a changed `README.md` is in the first, not the second
 Diff mode composes with every other flag: baseline filtering, `--format`,
 `--severity-threshold`, `--rule`, `--no-ai` and the cache all behave as usual. A
 partial scan never prunes cache entries for files it did not look at.
+Cross-file rules still index the whole project (the unchanged files come from
+the cache) and report the findings located in the changed files, so diff mode
+agrees with a full scan.
 
 GitLab CI, on merge requests only:
 
@@ -739,7 +904,7 @@ Add to your `.pre-commit-config.yaml`:
 ```yaml
 repos:
   - repo: https://gitlab.com/ThomasTartrau/slopguard
-    rev: v0.1.5
+    rev: slopguard-cli-v0.1.29   # any slopguard-cli-v* tag
     hooks:
       - id: slopguard
 ```

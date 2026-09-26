@@ -270,6 +270,74 @@ fn rust_local_module_resolves() {
     assert!(found.is_empty(), "got: {:?}", specifiers(&found));
 }
 
+/// Resolve `source` as `a.rs` in a crate that declares no dependency.
+fn rust_findings_without_deps(source: &str) -> Vec<Finding> {
+    let dir = project();
+    write_cargo(dir.path(), "[package]\nname = \"demo\"\n[dependencies]\n");
+    findings(dir.path(), "a.rs", source, Language::Rust, &rust_rule())
+}
+
+// Benchmark regression (tokio, cargo): a root bound by another `use` of the
+// same file, by its last segment, a `self` in a list, or an alias.
+#[test]
+fn rust_name_bound_by_another_use_resolves() {
+    let found = rust_findings_without_deps(
+        "use crate::runtime::scheduler::{self, Defer};\n\
+         use crate::sync::mpsc::chan;\n\
+         use crate::a::b as renamed;\n\
+         fn f() {\n    use scheduler::Context;\n    use chan::Semaphore;\n    use renamed::X;\n}\n",
+    );
+    assert!(found.is_empty(), "got: {:?}", specifiers(&found));
+}
+
+// Benchmark regression (cargo, serde): an uppercase root names an item in
+// scope, typically an enum whose variants are imported, never a crate.
+#[test]
+fn rust_uppercase_root_resolves() {
+    let found = rust_findings_without_deps(
+        "enum Edition { A, B }\nfn f() {\n    use Edition::*;\n    use Imported::Variant;\n}\n",
+    );
+    assert!(found.is_empty(), "got: {:?}", specifiers(&found));
+}
+
+// Benchmark regression (tokio): a module declared inside a macro body is a
+// token tree for tree-sitter, not a `mod_item`, but still binds the name.
+#[test]
+fn rust_module_declared_in_macro_resolves() {
+    let found = rust_findings_without_deps(
+        "cfg_if! {\n    if #[cfg(unix)] {\n        mod imp;\n    }\n}\npub(crate) use imp::AtomicU64;\n",
+    );
+    assert!(found.is_empty(), "got: {:?}", specifiers(&found));
+}
+
+// Benchmark regression (axum): a non-std glob may bring the root into scope,
+// so the imports of that module are not asserted. The glob stays scoped: the
+// file root, which has none, is still checked.
+#[test]
+fn rust_local_glob_silences_only_its_module() {
+    let found = rust_findings_without_deps(
+        "use made_up_crate::Thing;\n\
+         mod tests {\n    use super::*;\n    use body::Body;\n}\n",
+    );
+    assert_eq!(specifiers(&found), vec!["use made_up_crate::Thing;"]);
+}
+
+// A std glob only brings standard items into scope: it does not silence the
+// module, so an invented crate next to it is still reported.
+#[test]
+fn rust_std_glob_does_not_silence() {
+    let found = rust_findings_without_deps("use std::io::prelude::*;\nuse made_up_crate::Thing;\n");
+    assert_eq!(specifiers(&found), vec!["use made_up_crate::Thing;"]);
+}
+
+// A single-segment `use` binds the very name it imports: that name must not
+// vouch for itself, and a later path from it is still checked.
+#[test]
+fn rust_name_does_not_vouch_for_its_own_root() {
+    let found = rust_findings_without_deps("use made_up_crate;\nuse made_up_crate::Thing;\n");
+    assert_eq!(found.len(), 2, "got: {:?}", specifiers(&found));
+}
+
 // No manifest reachable: nothing can be asserted, so no finding.
 #[test]
 fn no_manifest_reports_nothing() {

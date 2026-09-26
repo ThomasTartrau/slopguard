@@ -1,28 +1,29 @@
 # Repos used for precision benchmarking.
-# Pin each repo to a specific commit so results are reproducible.
-# Last updated: 2026-09-12
+# Pin each repo to a specific commit so results are reproducible: two runs of
+# bench.sh compare rule changes on identical code.
+# Last updated: 2026-09-26 (the commits the 2026-09-13 run already used)
 
 [[repo]]
 name = "ripgrep"
 url = "https://github.com/BurntSushi/ripgrep.git"
-rev = "HEAD"
+rev = "3fce3b5bb0236da2df6d99672afb8a719642eca7"
 
 [[repo]]
 name = "axum"
 url = "https://github.com/tokio-rs/axum.git"
-rev = "HEAD"
+rev = "af1345b53a259b0990be1ff853f9b56c05040ef7"
 
 [[repo]]
 name = "serde"
 url = "https://github.com/serde-rs/serde.git"
-rev = "HEAD"
+rev = "a874a1b1bb1cc16cf5ee3b1b7b527af5705742bb"
 
 [[repo]]
 name = "tokio"
 url = "https://github.com/tokio-rs/tokio.git"
-rev = "HEAD"
+rev = "53542467a3b0fdfbcdcaff236e31f7ab2e9503f0"
 
 [[repo]]
 name = "cargo"
 url = "https://github.com/rust-lang/cargo.git"
-rev = "HEAD"
+rev = "7941be6fb416b4cd9666aef7b858dfea25587a8c"

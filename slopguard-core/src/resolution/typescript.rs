@@ -170,17 +170,17 @@ impl LanguageSupport for TypeScript {
         }
         FileImports {
             imports,
-            local_mods: Vec::new(),
+            local_names: Vec::new(),
         }
     }
 
     /// Whether a TypeScript import resolves against `package.json`, a relative
-    /// path on disk, a Node builtin, or a tsconfig path alias. `local_mods` is
+    /// path on disk, a Node builtin, or a tsconfig path alias. `local_names` is
     /// unused for TypeScript.
     fn resolves(
         &self,
         import: &ImportRef,
-        _local_mods: &[String],
+        _local_names: &[String],
         file_dir: &Path,
         manifests: &mut ManifestResolver,
     ) -> bool {
