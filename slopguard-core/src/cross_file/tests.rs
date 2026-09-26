@@ -246,6 +246,7 @@ fn open_filter() -> DeclFilter {
         ignores: None,
         skip_test_code: false,
         test_paths: TestPaths::default(),
+        assert_functions: None,
     }
 }
 
@@ -259,8 +260,8 @@ fn contribution(
         FileSymbols {
             traits,
             impls,
-            error_messages: Vec::new(),
             types: vec![LOCAL_TYPE.to_string()],
+            ..Default::default()
         },
     )
 }
@@ -424,10 +425,8 @@ fn decl_filter_drops_test_path_declaration() {
     assert_eq!(findings(&contributions, &open_filter()).len(), 1);
 
     let skipping = DeclFilter {
-        files: None,
-        ignores: None,
         skip_test_code: true,
-        test_paths: TestPaths::default(),
+        ..open_filter()
     };
     assert!(findings(&contributions, &skipping).is_empty());
 }

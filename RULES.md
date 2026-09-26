@@ -8,17 +8,17 @@ rule's full definition.
 
 | Type | Files | Active by default | Section |
 | ---- | ----- | ----------------- | ------- |
-| `ast` | 99 | 85 | [AST rules](#ast-rules-99) |
+| `ast` | 98 | 84 | [AST rules](#ast-rules-98) |
 | `ai` | 6 | 6 | [AI rules](#ai-rules-6) |
 | `metric` | 8 | 8 | [File-level rules](#file-level-rules-8) |
-| `cross-file` | 2 | 2 | [Cross-file rules](#cross-file-rules-2) |
+| `cross-file` | 3 | 3 | [Cross-file rules](#cross-file-rules-3) |
 | `resolution` | 2 | 2 | [Resolution rules](#resolution-rules-2) |
 
 A rule id is unique per language, not globally: most rules exist once for Rust
 and once for TypeScript under the same id, and a single `rules.disable` entry
 covers both variants.
 
-## AST rules (99)
+## AST rules (98)
 
 Plain ast-grep matchers. The "What it catches" column is the first sentence of
 the rule's `message`; `(autofix)` marks the rules `scan --fix` can rewrite.
@@ -103,16 +103,15 @@ Security anti-patterns.
 | `no-sql-string-concat` | error | on | SQL built by concatenation. |
 | `no-unsafe-json-parse` | error | on | JSON.parse without try/catch. |
 
-### correctness (47 rules, 42 on by default)
+### correctness (46 rules, 41 on by default)
 
 Error handling, type safety, test quality and correctness issues.
 
-#### Rust (22)
+#### Rust (21)
 
 | Rule | Severity | Default | What it catches |
 | ---- | -------- | ------- | --------------- |
 | `no-arc-mutex-prefer-rwlock` | warning | opt-in | Arc<Mutex<T>> when reads dominate writes. |
-| `no-assertion-free-test` | warning | on | Test function with no assertion. |
 | `no-box-dyn-error` | warning | on | Box<dyn Error> loses error context. |
 | `no-dbg-in-prod` (autofix) | error | on | dbg!() left in production code. |
 | `no-dead-branch` | warning | on | Tautological branch condition. |
@@ -206,16 +205,19 @@ greater than the threshold.
 | `high-comment-ratio` | rust | `comment_ratio` | 0.4 | Code narrated line by line instead of explained |
 | `high-comment-ratio-ts` | typescript | `comment_ratio` | 0.4 | Same, for TypeScript |
 
-## Cross-file rules (2)
+## Cross-file rules (3)
 
 These carry a `cross_file` kind instead of an AST `rule` or a `metric`. They are
-evaluated once per full scan (never under `--diff`), against a project-wide
-index built from every scanned file, so they see facts no single file can show.
+evaluated against a project-wide index, so they see facts no single file can
+show. A partial scan (`--diff`, or the files a pre-commit hook passes) still
+indexes the whole project and reports the findings located in the scanned
+files.
 
 | Rule | Language | Kind | What it catches |
 | ---- | -------- | ---- | --------------- |
 | `no-single-impl-trait` | rust | `single_impl_trait` | A trait with exactly one implementor: an indirection that adds no choice |
 | `no-duplicate-error-message` | rust | `duplicate_error_message` | The same error value message (`bail!`, `anyhow!`, `eyre!`, `format_err!`, `ensure!`) copied into two or more files |
+| `no-assertion-free-test` | rust | `assertion_free_test` | A test that checks nothing itself and calls no test code that does |
 
 `no-single-impl-trait` stays silent when the trait has no local impl (it is
 implemented outside the crate), two or more impls, a blanket `impl<T> Foo for T`,
@@ -231,6 +233,23 @@ the only option.
 ignores duplication inside a single file, and skips test code. Panic messages
 (`panic!`, `.expect()`, `unreachable!`) are not considered: a panic prints its
 file and line, so a repeated message is still traced to its site.
+
+`no-assertion-free-test` treats as an assertion any `assert`/`panic`, `?`,
+`.unwrap()`/`.expect()` (and their `_err` forms), inline snapshot (`str![..]`,
+`expect![..]`) or `#[should_panic]`. A test without one is still fine when it
+calls, directly or through other helpers, test code that has one: a function or
+`macro_rules!` inside `#[cfg(test)]`, under a test path (`tests/`, `benches/`,
+`scan.test_paths`), or in a crate the workspace pulls in only as a
+dev-dependency (`cargo-test-support`). Helpers are matched by bare name. A
+production function with a precondition `assert!` does not count. Compile-only
+tests (item declarations and typed `let _: T = ..` bindings only) and trybuild
+directories (`tests/ui`, `tests/fail`, `tests/pass`) are skipped. For test
+helpers that live outside the project, list them in the config:
+
+```toml
+[rules.options.no-assertion-free-test]
+assert_functions = ["run", "check_*"]   # bare names, * is a wildcard
+```
 
 ## Resolution rules (2)
 

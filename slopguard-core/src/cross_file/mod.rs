@@ -16,8 +16,12 @@ use crate::finding::Finding;
 use crate::rule::Rule;
 use crate::test_filter::{CfgTestRanges, TestPaths};
 
+mod assertion;
 mod names;
+mod test_support;
 
+use assertion::AssertionIndex;
+pub use assertion::{TestHelper, UnassertedTest};
 use names::{bare_trait_name, bare_type_name, generic_param_names, last_segment};
 
 /// Cross-file analyses a rule can request. Builtin only: a custom YAML may
@@ -29,6 +33,7 @@ use names::{bare_trait_name, bare_type_name, generic_param_names, last_segment};
 pub enum CrossFileKind {
     SingleImplTrait,
     DuplicateErrorMessage,
+    AssertionFreeTest,
 }
 
 /// Below this length (message content, quotes excluded) a repeated string is
@@ -101,6 +106,10 @@ pub struct FileSymbols {
     /// that can take inherent methods. A type alias cannot (its target may be
     /// foreign), so it is left out.
     pub types: Vec<String>,
+    /// Functions and macros a test may delegate its assertions to.
+    pub helpers: Vec<TestHelper>,
+    /// Tests that check nothing on their own.
+    pub unasserted_tests: Vec<UnassertedTest>,
 }
 
 impl FileSymbols {
@@ -110,6 +119,8 @@ impl FileSymbols {
             && self.impls.is_empty()
             && self.error_messages.is_empty()
             && self.types.is_empty()
+            && self.helpers.is_empty()
+            && self.unasserted_tests.is_empty()
     }
 }
 
@@ -220,6 +231,12 @@ pub fn extract_rust_symbols<D: Doc>(root: &AstGrep<D>, cfg_test: &CfgTestRanges)
             _ => {}
         }
         collect_error_messages(&node, cfg_test, &mut symbols.error_messages);
+        assertion::collect(
+            &node,
+            cfg_test,
+            &mut symbols.helpers,
+            &mut symbols.unasserted_tests,
+        );
     }
     symbols
 }
@@ -234,6 +251,7 @@ pub struct SymbolIndex {
     /// Bare type name -> every file declaring a struct, enum or union of that
     /// name.
     types: HashMap<String, Vec<PathBuf>>,
+    assertions: AssertionIndex,
 }
 
 #[derive(Debug, Default)]
@@ -260,7 +278,9 @@ impl SymbolIndex {
         let mut traits: HashMap<String, TraitEntry> = HashMap::new();
         let mut error_messages: HashMap<String, Vec<(PathBuf, ErrorMessageLit)>> = HashMap::new();
         let mut types: HashMap<String, Vec<PathBuf>> = HashMap::new();
+        let mut assertions = AssertionIndex::default();
         for (path, symbols) in contributions {
+            assertions.add(path, &symbols.helpers, &symbols.unasserted_tests);
             for decl in &symbols.traits {
                 traits
                     .entry(decl.name.clone())
@@ -293,6 +313,7 @@ impl SymbolIndex {
             traits,
             error_messages,
             types,
+            assertions,
         }
     }
 
@@ -315,44 +336,37 @@ fn crate_root(path: &Path) -> Option<&Path> {
         .find(|dir| dir.join("Cargo.toml").is_file())
 }
 
-/// Which trait declarations a cross-file rule may report, derived from the
-/// rule's `files` / `ignores` globs and `skip_test_code`. Applied to the
-/// declaration site only: impls are counted wherever they are found.
+/// Which findings a cross-file rule may report, derived from the rule's
+/// `files` / `ignores` globs, `skip_test_code` and options. Applied to the
+/// reported site only: impls are counted wherever they are found.
 pub struct DeclFilter {
     pub files: Option<GlobSet>,
     pub ignores: Option<GlobSet>,
     pub skip_test_code: bool,
     pub(crate) test_paths: TestPaths,
+    /// Names (globs) of external functions that assert, from the
+    /// `assert_functions` option of `no-assertion-free-test`.
+    pub assert_functions: Option<GlobSet>,
 }
 
 impl DeclFilter {
+    /// Whether `path` passes the rule's `files` and `ignores` globs.
+    pub fn allows_path(&self, path: &Path) -> bool {
+        self.files.as_ref().is_none_or(|g| g.is_match(path))
+            && !self.ignores.as_ref().is_some_and(|g| g.is_match(path))
+    }
+
     /// Whether a declaration found at `path` is in scope for the rule.
     pub fn allows(&self, path: &Path, decl: &TraitDecl) -> bool {
-        if !self.files.as_ref().is_none_or(|g| g.is_match(path)) {
-            return false;
-        }
-        if self.ignores.as_ref().is_some_and(|g| g.is_match(path)) {
-            return false;
-        }
-        if self.skip_test_code && (self.test_paths.is_test(path) || decl.in_cfg_test) {
-            return false;
-        }
-        true
+        self.allows_path(path)
+            && !(self.skip_test_code && (self.test_paths.is_test(path) || decl.in_cfg_test))
     }
 
     /// Whether an error-message literal found at `path` is in scope for the rule.
     /// Same globs and `skip_test_code` policy as [`DeclFilter::allows`].
     pub fn allows_message(&self, path: &Path, msg: &ErrorMessageLit) -> bool {
-        if !self.files.as_ref().is_none_or(|g| g.is_match(path)) {
-            return false;
-        }
-        if self.ignores.as_ref().is_some_and(|g| g.is_match(path)) {
-            return false;
-        }
-        if self.skip_test_code && (self.test_paths.is_test(path) || msg.in_cfg_test) {
-            return false;
-        }
-        true
+        self.allows_path(path)
+            && !(self.skip_test_code && (self.test_paths.is_test(path) || msg.in_cfg_test))
     }
 }
 
@@ -367,6 +381,8 @@ impl DeclFilter {
 /// crate is an extension trait (`impl VersionExt for semver::Version`, or a
 /// type from a sibling workspace crate): Rust only allows inherent methods in
 /// the type's crate, so the trait is the only way to add them and stays silent.
+///
+/// `assertion_free_test` is documented on [`assertion::evaluate`].
 ///
 /// The returned order follows `HashMap` iteration and is not stable; the caller
 /// (`normalize_findings`) sorts and dedups before the result is reported.
@@ -439,8 +455,11 @@ pub fn evaluate(
                     .collect()
             })
             .collect(),
+        CrossFileKind::AssertionFreeTest => assertion::evaluate(rule, &index.assertions, filter),
     }
 }
 
+#[cfg(test)]
+mod assertion_tests;
 #[cfg(test)]
 mod tests;

@@ -178,9 +178,9 @@ Every rule has a type, shown in the `type` column of `slopguard list`:
 
 | Type | Active | What it does |
 | ---- | ------ | ------------ |
-| `ast` | 85 | ast-grep pattern on the syntax tree |
+| `ast` | 84 | ast-grep pattern on the syntax tree |
 | `metric` | 8 | measures the whole file (lines, imports, functions, comment ratio) |
-| `cross-file` | 2 | evaluated once over a project-wide index |
+| `cross-file` | 3 | evaluated once over a project-wide index |
 | `resolution` | 2 | checks imports against Cargo.toml / package.json |
 | `ai` | 6 | AST pre-filter confirmed by a model |
 
@@ -202,6 +202,9 @@ correctness = true  # Error handling, type safety
 disable = ["no-glob-reexport"]
 enable = ["pub-fn-needs-tracing"]  # opt-in rules are off by default
 custom_dirs = ["./my-rules"]
+
+[rules.options.no-assertion-free-test]
+assert_functions = ["check_*"]  # test helpers from a dependency that assert
 
 [scan]
 ignores = ["target/", "generated/", "vendor/"]
@@ -482,6 +485,22 @@ slopguard list --format json | jq '[.[] | select(.type == "cross-file")] | lengt
 | ---- | -------- | ---- |
 | `no-single-impl-trait` | rust | `single_impl_trait` |
 | `no-duplicate-error-message` | rust | `duplicate_error_message` |
+| `no-assertion-free-test` | rust | `assertion_free_test` |
+
+`no-assertion-free-test` reports a `#[test]` that checks nothing: no
+`assert`/`panic`, no `?`, no `.unwrap()`/`.expect()`, no inline snapshot, no
+`#[should_panic]`. Delegating is fine: a test that calls, directly or through
+other helpers, test code that asserts (a `#[cfg(test)]` function,
+`tests/common/mod.rs`, a crate your workspace uses only as a dev-dependency
+such as `cargo-test-support`) is not reported. A production function with a
+precondition `assert!` does not count, and neither do compile-only tests
+(item declarations and typed `let _: T` bindings) or trybuild directories. For
+test helpers that come from a dependency, name them in the config:
+
+```toml
+[rules.options.no-assertion-free-test]
+assert_functions = ["run", "check_*"]   # bare names, * is a wildcard
+```
 
 `no-duplicate-error-message` reports an error message literal (from `bail!`,
 `anyhow!`, `eyre!`, `format_err!` or `ensure!`, 10 characters or more) that
@@ -518,10 +537,12 @@ pub trait Repository {
 
 ### One thing to know
 
-- **`--diff` never reports them.** Diff mode scans only the changed files, so
-  the project index would be missing the other implementations and the impl
-  counts would be wrong. The symbols of changed files are still collected and
-  cached, so the next full scan is not slowed down.
+- **Partial scans see the whole project.** `--diff` and the pre-commit hook
+  scan only some files, but the index is still built from the whole project
+  they belong to (the nearest directory with a `slopguard.toml` or a `.git`),
+  so the verdicts match a full scan. Only the findings located in the scanned
+  files are reported: adding the only impl of a trait whose file did not
+  change does not report the trait until its file is scanned.
 
 ---
 
@@ -838,6 +859,9 @@ slopguard actually parsed (a changed `README.md` is in the first, not the second
 Diff mode composes with every other flag: baseline filtering, `--format`,
 `--severity-threshold`, `--rule`, `--no-ai` and the cache all behave as usual. A
 partial scan never prunes cache entries for files it did not look at.
+Cross-file rules still index the whole project (the unchanged files come from
+the cache) and report the findings located in the changed files, so diff mode
+agrees with a full scan.
 
 GitLab CI, on merge requests only:
 

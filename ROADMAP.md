@@ -72,7 +72,9 @@
 - [x] Ajuster les regles bruyantes (opt-in pour pub-fn-needs-tracing, test-needs-timeout)
 - [x] `--enable`/`--disable` CLI flags et `rules.enable` config
 - [x] Benchmark 2026-09-26 (commits epingles, `bench.sh` sans IA ni config du repo) : faux positifs corriges sur unresolved-import (38 -> 0), no-shell-format-arg (21 -> 0), no-assertion-free-test (3626 -> 680), no-duplicate-error-message (111 -> 29), no-single-impl-trait (21 -> 5)
-- [ ] no-assertion-free-test : les 680 restants delegent surtout leurs assertions a des helpers locaux, invisibles pour une regle ast-grep (opt-in, ou resolution des helpers du meme fichier)
+- [x] no-assertion-free-test devient cross-file et suit les helpers de test du projet, crates dev-dependency comprises, avec l'option `[rules.options.no-assertion-free-test] assert_functions` (680 -> 26, D38)
+- [x] Scans partiels (`--diff`, pre-commit) : index cross-file construit sur tout le projet, findings rapportes seulement dans les fichiers scannes (D39)
+- [ ] no-assertion-free-test : traiter les verifications de bornes a la compilation ecrites comme des appels (`is_send::<T>()`), qui restent signalees
 
 ### Nouvelles regles ([#15](https://gitlab.com/ThomasTartrau/slopguard/-/issues/15))
 

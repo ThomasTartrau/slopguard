@@ -17,7 +17,7 @@ const CACHE_GITIGNORE: &str = "*\n";
 /// Version of the on-disk entry format. Mixed into the rules hash so a bump
 /// drops every stale entry instead of trying to deserialize it into the new
 /// shape.
-const CACHE_SCHEMA_VERSION: &str = "v4";
+const CACHE_SCHEMA_VERSION: &str = "v5";
 
 /// What one scanned file leaves in the cache: its findings, the symbols it
 /// contributes to the cross-file index, and the imports it contributes to the
@@ -230,7 +230,7 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
-    use crate::cross_file::{TraitDecl, TraitImpl};
+    use crate::cross_file::{TestHelper, TraitDecl, TraitImpl, UnassertedTest};
     use crate::resolution::ImportRef;
     use crate::rule::{parse_rule, RuleId, Severity};
 
@@ -328,6 +328,20 @@ rule:
                 }],
                 error_messages: Vec::new(),
                 types: vec!["PostgresRepository".to_string()],
+                helpers: vec![TestHelper {
+                    name: "check".to_string(),
+                    asserts: true,
+                    calls: vec!["parse".to_string()],
+                    in_cfg_test: true,
+                }],
+                unasserted_tests: vec![UnassertedTest {
+                    line: 3,
+                    column: 1,
+                    end_line: 5,
+                    end_column: 2,
+                    text: "fn t() {\n    check();\n}".to_string(),
+                    calls: vec!["check".to_string()],
+                }],
             },
         };
 
@@ -342,6 +356,21 @@ rule:
         assert!(!cached.symbols.impls[0].blanket);
         assert_eq!(cached.symbols.impls[0].self_type, "PostgresRepository");
         assert_eq!(cached.symbols.types, vec!["PostgresRepository".to_string()]);
+        assert_eq!(cached.symbols.helpers.len(), 1);
+        assert_eq!(cached.symbols.helpers[0].name, "check");
+        assert!(cached.symbols.helpers[0].asserts);
+        assert_eq!(cached.symbols.helpers[0].calls, vec!["parse".to_string()]);
+        assert!(cached.symbols.helpers[0].in_cfg_test);
+        assert_eq!(cached.symbols.unasserted_tests.len(), 1);
+        assert_eq!(cached.symbols.unasserted_tests[0].line, 3);
+        assert_eq!(
+            cached.symbols.unasserted_tests[0].text,
+            "fn t() {\n    check();\n}"
+        );
+        assert_eq!(
+            cached.symbols.unasserted_tests[0].calls,
+            vec!["check".to_string()]
+        );
     }
 
     #[test]

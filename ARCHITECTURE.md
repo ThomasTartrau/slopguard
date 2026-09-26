@@ -10,8 +10,9 @@ slopguard scan [path]
   +-- Phase 1: per-file pass, one parse per file (deterministic, cached)
   |     ast + metric engines, import extraction, symbol extraction
   |
-  +-- Phase 2: project pass (full scans only, never under --diff)
-  |     cross-file engine over the symbol index
+  +-- Phase 2: project pass
+  |     cross-file engine over the symbol index of the whole project,
+  |     reporting only in the scanned files (also under --diff)
   |
   +-- Import resolution against the manifests on disk (re-run every scan)
   |
@@ -59,7 +60,8 @@ The library crate. Responsible for:
   and hands the tree to every per-file engine
 - File-level metrics (metric.rs)
 - Project-wide (cross-file) analysis: per-file symbol extraction and the index
-  they are folded into (cross_file/). A cache entry carries the file's symbol
+  they are folded into (cross_file/), and which files feed the index in a
+  partial scan (scanner/project.rs). A cache entry carries the file's symbol
   contribution alongside its findings, so a cache hit feeds the cross-file pass
   without reparsing.
 - Import resolution against Cargo.toml / package.json / tsconfig.json
@@ -192,17 +194,23 @@ Absolute paths and `..` components are rejected.
 ### Cross-file rules
 
 `cross_file` replaces `rule` and `metric` and is mutually exclusive with both.
-It names a builtin analysis. Two kinds exist: `single_impl_trait` (a trait
-with exactly one implementor of the trait's own crate, D29) and
+It names a builtin analysis. Three kinds exist: `single_impl_trait` (a trait
+with exactly one implementor of the trait's own crate, D29),
 `duplicate_error_message` (the same error value message of 10 characters or
 more, passed to `bail!`, `anyhow!`, `eyre!`, `format_err!` or `ensure!`, in two
-or more files, D37).
+or more files, D37) and `assertion_free_test` (a test that checks nothing and
+calls no test code that asserts, D38).
 
 ```yaml
-cross_file: single_impl_trait  # or duplicate_error_message
+cross_file: single_impl_trait  # or duplicate_error_message, assertion_free_test
 skip_test_code: true           # applies to the declaration site
 ignores: ["**/target/**"]      # applies to the declaration site
 ```
+
+A kind may read options from `[rules.options.<id>]` in the config, a typed
+table where an unknown rule id or key is a config error. Today only
+`assertion_free_test` has one: `assert_functions`, the names (globs) of
+functions from outside the project that assert.
 
 The logic behind a kind is builtin Rust keyed on the discriminant, so a custom
 YAML can retune a rule's severity, message, `files` / `ignores` and
@@ -210,15 +218,21 @@ YAML can retune a rule's severity, message, `files` / `ignores` and
 parse error. A cross-file rule carries no `tests` block, since no snippet can
 exercise it, and `slopguard test` reports it as untested.
 
-The pass runs after the per-file scan, over the walked paths only. Each scanned
-Rust file contributes a `FileSymbols` (its trait declarations, its
-`impl Trait for Type` headers with the implementing type, the structs, enums
-and unions it declares, and its error message literals) from the same
-parse that produced its findings; those contributions are folded into a
-project-wide `SymbolIndex` and every active cross-file rule is evaluated
-against it. `--diff` and any explicit file list skip evaluation, because their
-index would be incomplete, but they still collect and cache contributions so a
-later full scan is not penalised.
+The pass runs after the per-file scan. Each scanned Rust file contributes a
+`FileSymbols` (its trait declarations, its `impl Trait for Type` headers with
+the implementing type, the structs, enums and unions it declares, its error
+message literals, its unasserted tests and the functions and macros a test may
+delegate to, each with the names it calls) from the same parse that produced
+its findings; those contributions are folded into a project-wide `SymbolIndex`
+and every active cross-file rule is evaluated against it.
+
+A directory walk indexes what it walks. A file target (`--diff`, or the files
+the pre-commit hook passes) widens the index to its project, the nearest
+ancestor holding a `slopguard.toml` or a `.git` (D39): those extra files go
+through the cache like any other but only contribute symbols, and a
+project-level finding is reported only when it lies in a scanned file
+(`scanner/project.rs`). A partial scan therefore gives the same verdicts as a
+full one, restricted to the files it was asked about.
 
 ### Resolution rules
 
@@ -276,6 +290,9 @@ custom_dirs = ["./my-rules"]
 
 [[rules.sources]]                   # see "Rule sources"
 git = "https://gitlab.com/org/slopguard-rules.git"
+
+[rules.options.no-assertion-free-test]   # per-rule options (D38)
+assert_functions = ["run", "check_*"]    # external helpers that assert
 
 [scan]
 ignores = ["target/", "generated/", "*.generated.rs"]

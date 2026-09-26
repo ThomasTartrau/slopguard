@@ -42,6 +42,10 @@ fn default_rules_and_scan() -> Result<String, RuleError> {
     }
     out.push_str(
         "enable = []\n# custom_dirs = [\"./my-rules\"]\n\n\
+         # Test helpers from outside the project that assert, so a test\n\
+         # calling them is not reported by no-assertion-free-test:\n\
+         # [rules.options.no-assertion-free-test]\n\
+         # assert_functions = [\"run\", \"check_*\"]\n\n\
          [scan]\nignores = []\n# cache_dir = \".slopguard-cache\"\n",
     );
     Ok(out)

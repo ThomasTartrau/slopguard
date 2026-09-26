@@ -6,7 +6,7 @@ A Rust CLI tool that catches AI-generated code patterns ("slop") and common corr
 
 Read these files before working:
 - ARCHITECTURE.md - workspace structure, crate responsibilities, data flow
-- DECISIONS.md - all design decisions with rationale (D1-D37)
+- DECISIONS.md - all design decisions with rationale (D1-D39)
 - ROADMAP.md - what to build and in what order
 - RULES.md - the builtin rules, their YAML format, and ast-grep syntax gotchas
 
@@ -16,7 +16,8 @@ The project ships as a 4-crate workspace with roughly 22k lines of Rust. The sca
 
 Delivered features:
 - 103 active rules (`slopguard list`), across the `slop`, `security`, and `correctness` rulesets, covering Rust and TypeScript. 117 rule YAML files ship on disk; 14 are opt-in (`enabled: false`), shown by `slopguard list --all`.
-- Five rule types: `ast` (85 active), `metric` (8, file-level), `cross-file` (2, project-wide index), `resolution` (2, import resolution against manifests), `ai` (6, AST pre-filter plus model confirmation).
+- Five rule types: `ast` (84 active), `metric` (8, file-level), `cross-file` (3, project-wide index), `resolution` (2, import resolution against manifests), `ai` (6, AST pre-filter plus model confirmation).
+- Per-rule options: `[rules.options.<id>]` (today only `no-assertion-free-test`'s `assert_functions`).
 - Autofix: `slopguard scan --fix` applies in-place rewrites for rules marked `autofix_safe` (`--fix --dry-run` to preview without writing, `--allow-dirty` to bypass the clean-tree guard).
 - AI pipeline: LLM-backed rules run when a provider is configured; `slopguard scan --no-ai` skips them. An optional classifier (`[ai.classifier]`, Jev) can replace the LLM confirmation.
 - Cache: per-file findings keyed by content hash, AI results under `<cache-dir>/ai/` (`--no-cache`, `--cache-dir`).
@@ -24,7 +25,7 @@ Delivered features:
 - `scan --report-unused-disable` reports inline disables that suppress nothing.
 - Metrics: `slopguard stats` summarizes findings (top rules, top files).
 - Baseline: `slopguard baseline` captures current findings; `scan --baseline`/`--no-baseline` control suppression.
-- Diff mode: `slopguard scan --diff` scans only git-changed files (`--base <ref>` for a three-dot diff).
+- Diff mode: `slopguard scan --diff` scans only git-changed files (`--base <ref>` for a three-dot diff). A partial scan (`--diff`, or explicit files as the pre-commit hook passes them) still builds the cross-file index from the whole project and reports only the findings in the scanned files.
 - Severity escalation (`scan --no-escalation` to disable).
 - Output formats: `text`, `json`, `sarif`, `html` (`scan --format`).
 

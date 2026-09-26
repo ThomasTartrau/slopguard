@@ -371,7 +371,7 @@ fn all_builtin_rules_compile() {
         rules.len()
     );
     let compiled =
-        compile_rules(&rules, TestPaths::default()).expect("all builtin rules should compile");
+        compile_rules(&rules, &Config::default()).expect("all builtin rules should compile");
     let ast_rule_count = rules
         .iter()
         .filter(|r| !r.is_metric() && !r.is_cross_file() && !r.is_resolution())
