@@ -1,15 +1,10 @@
 <div align="center">
 
-```text
-     _                                       _
- ___| | ___  _ __   __ _ _   _  __ _ _ __ __| |
-/ __| |/ _ \| '_ \ / _` | | | |/ _` | '__/ _` |
-\__ \ | (_) | |_) | (_| | |_| | (_| | | | (_| |
-|___/_|\___/| .__/ \__, |\__,_|\__,_|_|  \__,_|
-            |_|    |___/
-```
-
-# slopguard
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/logo/slopguard-logo-dark.svg">
+  <source media="(prefers-color-scheme: light)" srcset="assets/logo/slopguard-logo-light.svg">
+  <img alt="slopguard" src="assets/logo/slopguard-banner.png" width="560">
+</picture>
 
 [![pipeline status](https://img.shields.io/gitlab/pipeline-status/ThomasTartrau%2Fslopguard?branch=main&style=for-the-badge&logo=gitlab&logoColor=white)](https://gitlab.com/ThomasTartrau/slopguard/-/pipelines)
 [![slopguard-cli](https://img.shields.io/crates/v/slopguard-cli.svg?style=for-the-badge&logo=rust&logoColor=white&label=cli)](https://crates.io/crates/slopguard-cli)
