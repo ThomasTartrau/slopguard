@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.1.29](https://gitlab.com/ThomasTartrau/slopguard/compare/slopguard-core-v0.1.28...slopguard-core-v0.1.29) - 2026-10-03
+
+### Fixed
+
+- #43 simplify repo config trust checks and consolidate warnings
+
+- #43 ignore sensitive keys from the scanned repo's slopguard.toml
+
 ## [0.1.28](https://gitlab.com/ThomasTartrau/slopguard/compare/slopguard-core-v0.1.27...slopguard-core-v0.1.28) - 2026-09-26
 
 ### Added
