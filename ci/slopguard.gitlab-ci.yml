@@ -6,6 +6,14 @@
 #     - remote: 'https://gitlab.com/ThomasTartrau/slopguard/-/raw/main/ci/slopguard.gitlab-ci.yml'
 #
 # Or copy this file into your project.
+#
+# Trust model: AI and classifier settings ([ai], [ai.classifier]) and
+# scan.cache_dir are ignored in the scanned repo's slopguard.toml, with a
+# warning. Put them in the runner's global config
+# (~/.config/slopguard/config.toml, or $XDG_CONFIG_HOME/slopguard/config.toml),
+# or add --trust-repo-config to the scan command for repositories you trust
+# (never on merge requests from forks). The cache dir is passed explicitly
+# below with --cache-dir.
 
 slopguard:
   image: rust:latest

@@ -25,7 +25,7 @@ use ironflow_core::providers::http::typesafe::{
 };
 use ironflow_core::providers::http::TypeSafeProvider;
 use serde_json::json;
-use slopguard_core::config::{ClassifierConfig, ClassifierTransport};
+use slopguard_core::config::{ClassifierConfig, ClassifierTransport, MAX_AI_CONCURRENCY};
 use slopguard_core::finding::Finding;
 use slopguard_core::rule::ReasonMode;
 use thiserror::Error;
@@ -412,7 +412,7 @@ pub fn run_classifier_pass(
         }
 
         let clusters = build_clusters(&misses, &cluster_caps);
-        let permits = Arc::new(Semaphore::new(concurrency.max(1)));
+        let permits = Arc::new(Semaphore::new(concurrency.clamp(1, MAX_AI_CONCURRENCY)));
 
         // Batched decision calls: one request per cluster, bounded on clusters.
         let cluster_tasks = clusters.iter().map(|cluster| {

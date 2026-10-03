@@ -614,3 +614,27 @@ fn batch_disabled_one_call_per_candidate() {
         "batch = false = one call per candidate"
     );
 }
+
+#[test]
+fn huge_concurrency_does_not_panic() {
+    // Above `Semaphore::MAX_PERMITS` the runner used to panic.
+    let content = many_lines(120);
+    for concurrency in [usize::MAX, 0] {
+        let decider = MockDecider::new(0.9);
+        let findings = run_classifier_pass(
+            &decider,
+            None,
+            vec![
+                candidate_at("rule-a", 2, &content),
+                candidate_at("rule-a", 100, &content),
+            ],
+            "jev-latest",
+            0.7,
+            concurrency,
+            batch(),
+            None,
+        );
+        assert_eq!(findings.len(), 2, "concurrency {concurrency}");
+        assert_eq!(decider.calls.load(Ordering::SeqCst), 2);
+    }
+}
