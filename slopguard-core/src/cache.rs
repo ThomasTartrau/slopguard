@@ -12,6 +12,8 @@ use crate::resolution::FileImports;
 use crate::rule::Rule;
 
 const RULES_HASH_FILE: &str = "rules.hash";
+/// Extension of every cache entry file.
+const CACHE_ENTRY_EXT: &str = "bin";
 const CACHE_GITIGNORE: &str = "*\n";
 
 /// Version of the on-disk entry format. Mixed into the rules hash so a bump
@@ -160,22 +162,32 @@ impl CacheStore {
         }
     }
 
+    /// Remove every cache entry, sparing anything slopguard did not write.
+    ///
+    /// The directory may be user-supplied (`--cache-dir`, env var, config), so
+    /// a directory without the `rules.hash` manifest is not treated as a cache
+    /// and is left untouched. Inside a cache, only regular files named like an
+    /// entry are removed: symlinks, sub-directories and foreign files survive.
     fn invalidate_all(&self) -> Result<(), CacheError> {
-        if self.dir.exists() {
-            for entry in fs::read_dir(&self.dir)? {
-                let entry = entry?;
-                let name = entry.file_name();
-                let name_str = name.to_string_lossy();
-                if name_str != ".gitignore" && name_str != RULES_HASH_FILE {
-                    fs::remove_file(entry.path())?;
-                }
+        if !self.dir.join(RULES_HASH_FILE).is_file() {
+            return Ok(());
+        }
+        for entry in fs::read_dir(&self.dir)? {
+            let entry = entry?;
+            // `file_type` does not follow symlinks.
+            if !entry.file_type()?.is_file() {
+                continue;
+            }
+            if is_cache_entry_name(&entry.file_name().to_string_lossy()) {
+                fs::remove_file(entry.path())?;
             }
         }
         Ok(())
     }
 
     fn entry_path(&self, file_hash: &str) -> PathBuf {
-        self.dir.join(format!("{}{file_hash}.bin", self.key_prefix))
+        self.dir
+            .join(format!("{}{file_hash}.{CACHE_ENTRY_EXT}", self.key_prefix))
     }
 
     /// Look up a file's cached scan result by its content hash.
@@ -204,15 +216,18 @@ impl CacheStore {
             let entry = entry?;
             let name = entry.file_name();
             let name_str = name.to_string_lossy();
-            if name_str == ".gitignore" || name_str == RULES_HASH_FILE {
+            // Like `invalidate_all`, never touch what slopguard did not write.
+            if !entry.file_type()?.is_file() || !is_cache_entry_name(&name_str) {
                 continue;
             }
             // Only prune entries written for the active ruleset. Entries from a
             // different ruleset carry a different prefix and are left alone.
-            let Some(rest) = name_str.strip_prefix(&self.key_prefix) else {
+            let Some(hash) = name_str
+                .strip_prefix(&self.key_prefix)
+                .and_then(strip_entry_ext)
+            else {
                 continue;
             };
-            let hash = rest.trim_end_matches(".bin");
             if !current_hashes.iter().any(|h| h == hash) {
                 fs::remove_file(entry.path())?;
                 removed += 1;
@@ -222,8 +237,23 @@ impl CacheStore {
     }
 }
 
+/// `name` without its `.bin` extension, or `None` when it has another one.
+fn strip_entry_ext(name: &str) -> Option<&str> {
+    name.strip_suffix(CACHE_ENTRY_EXT)?.strip_suffix('.')
+}
+
+/// Whether `name` is shaped like a cache entry: `{rules_hash}-{file_hash}.bin`
+/// or `{file_hash}.bin`, with a non-empty stem of hex digits and dashes.
+fn is_cache_entry_name(name: &str) -> bool {
+    strip_entry_ext(name).is_some_and(|stem| {
+        !stem.is_empty() && stem.chars().all(|c| c.is_ascii_hexdigit() || c == '-')
+    })
+}
+
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    use std::os::unix::fs::symlink;
     use std::path::PathBuf;
     use std::slice;
 
@@ -445,6 +475,104 @@ rule:
             store.get(&content_hash).is_none(),
             "cache entries should be invalidated when rules change"
         );
+    }
+
+    #[test]
+    fn invalidate_all_spares_foreign_files() {
+        let dir = tempdir().unwrap();
+        let store = CacheStore::with_dir(dir.path().to_path_buf());
+        let hash_v1 = rules_hash(&[test_rule()]);
+        let scoped = CacheStore::with_dir(dir.path().to_path_buf()).scoped_to_rules(&hash_v1);
+
+        let content_hash = file_content_hash(b"fn main() {}");
+        scoped.put(&content_hash, &entry_with(Vec::new())).unwrap();
+        store.write_rules_hash(&hash_v1).unwrap();
+        let entry = scoped.entry_path(&content_hash);
+        assert!(entry.is_file());
+
+        let foreign = ["notes.txt", "data.bin", "keep.rs", "Cargo.toml"];
+        for name in foreign {
+            fs::write(dir.path().join(name), b"user data").unwrap();
+        }
+        fs::create_dir(dir.path().join("subdir")).unwrap();
+
+        store.check_rules_changed("new-rules-hash").unwrap();
+
+        assert!(!entry.exists(), "the real cache entry must be invalidated");
+        for name in foreign {
+            assert!(dir.path().join(name).is_file(), "{name} must survive");
+        }
+        assert!(dir.path().join("subdir").is_dir());
+        assert_eq!(
+            fs::read_to_string(dir.path().join(RULES_HASH_FILE)).unwrap(),
+            "new-rules-hash"
+        );
+    }
+
+    #[test]
+    fn invalidate_all_does_nothing_without_manifest() {
+        let dir = tempdir().unwrap();
+        let store = CacheStore::with_dir(dir.path().to_path_buf());
+        let lookalike = dir.path().join("abc123-def456.bin");
+        fs::write(&lookalike, b"not ours").unwrap();
+
+        assert!(store.check_rules_changed("rules-hash").unwrap());
+
+        assert!(
+            lookalike.is_file(),
+            "a directory without manifest is not a cache"
+        );
+        assert_eq!(
+            fs::read_to_string(dir.path().join(RULES_HASH_FILE)).unwrap(),
+            "rules-hash"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn invalidate_all_does_not_follow_symlinks() {
+        let dir = tempdir().unwrap();
+        let outside = tempdir().unwrap();
+        let target = outside.path().join("precious.txt");
+        fs::write(&target, b"precious").unwrap();
+
+        let store = CacheStore::with_dir(dir.path().to_path_buf());
+        store.write_rules_hash("old-hash").unwrap();
+        let link = dir.path().join("abc123-def456.bin");
+        symlink(&target, &link).unwrap();
+
+        store.check_rules_changed("new-hash").unwrap();
+
+        assert!(target.is_file(), "the symlink target must survive");
+        assert!(link.symlink_metadata().is_ok(), "the symlink is skipped");
+    }
+
+    #[test]
+    fn cleanup_spares_foreign_files() {
+        let dir = tempdir().unwrap();
+        let store = CacheStore::with_dir(dir.path().to_path_buf());
+        let hash = file_content_hash(b"file a");
+        store.put(&hash, &entry_with(Vec::new())).unwrap();
+        fs::write(dir.path().join("notes.txt"), b"user data").unwrap();
+        fs::create_dir(dir.path().join("subdir")).unwrap();
+
+        let removed = store.cleanup(&[]).unwrap();
+
+        assert_eq!(removed, 1, "only the stale entry is pruned");
+        assert!(dir.path().join("notes.txt").is_file());
+        assert!(dir.path().join("subdir").is_dir());
+    }
+
+    #[test]
+    fn cache_entry_name_shape() {
+        assert!(is_cache_entry_name("abc123.bin"));
+        assert!(is_cache_entry_name("abc123-def456.bin"));
+        assert!(!is_cache_entry_name(".bin"));
+        assert!(!is_cache_entry_name("data.bin"));
+        assert!(!is_cache_entry_name("abc123.txt"));
+        assert!(!is_cache_entry_name("abc123bin"));
+        assert!(!is_cache_entry_name(RULES_HASH_FILE));
+        assert!(!is_cache_entry_name(".gitignore"));
     }
 
     #[test]

@@ -14,12 +14,16 @@ enable = []
 
 [scan]
 ignores = []
+# cache_dir is a user-only key (user config or --trust-repo-config):
 # cache_dir = ".slopguard-cache"
 
 [output]
 format = "text"
 colors = true
 
+# [ai] and [ai.classifier] are user-only keys: a scan ignores them here, with
+# a warning, unless --trust-repo-config is passed. Without the flag, set them
+# in ~/.config/slopguard/config.toml instead.
 [ai.classifier]
 enabled = true                 # active Jev
 transport = "openrouter"

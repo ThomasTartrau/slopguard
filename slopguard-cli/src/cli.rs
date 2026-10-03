@@ -13,6 +13,11 @@ use slopguard_core::preset::{parse_preset, Preset};
 pub struct Cli {
     #[command(subcommand)]
     pub command: Command,
+
+    /// Honor user-only keys ([ai], scan.cache_dir) and out-of-repo rule paths
+    /// from the scanned repo's slopguard.toml. Only use on repos you trust.
+    #[arg(long, global = true)]
+    pub trust_repo_config: bool,
 }
 
 #[derive(Clone, ValueEnum)]

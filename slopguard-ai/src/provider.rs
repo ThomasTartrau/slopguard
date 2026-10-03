@@ -156,6 +156,10 @@ pub fn provider_kind(ai: &AiConfig) -> Result<ProviderKind, ProviderError> {
 
 /// Build a boxed [`AgentProvider`] from `[ai]` config.
 ///
+/// `ai` must come from a trusted source (user config, `--config`, CLI flags):
+/// it picks the endpoint and the credentials. The config loader drops `[ai]`
+/// from an untrusted repo `slopguard.toml` for that reason.
+///
 /// # Errors
 ///
 /// Returns [`ProviderError::Disabled`] when AI is off, or

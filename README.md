@@ -209,7 +209,7 @@ enabled = false     # opt-in, see Severity Escalation below
 threshold = 5
 ```
 
-Hierarchical config: `~/.config/slopguard/config.toml` (global defaults) is overridden by project-level `slopguard.toml`, which is overridden by CLI flags.
+Hierarchical config: `~/.config/slopguard/config.toml` (global defaults) is overridden by project-level `slopguard.toml`, which is overridden by CLI flags. A few keys are reserved to the global config, see [Trust model](#trust-model).
 
 ### Presets
 
@@ -223,6 +223,29 @@ Hierarchical config: `~/.config/slopguard/config.toml` (global defaults) is over
 | `ai` | Default rules plus the AI confirmation pass (`api` provider, haiku model). |
 
 The rule id lists in `strict` and `relaxed` are generated from the builtin ruleset, so they never name a rule that no longer ships.
+
+### Trust model
+
+The `slopguard.toml` of the scanned repository is untrusted input: anyone who
+can open a merge request can edit it. slopguard therefore only honors the keys
+that tune the scan itself (`[rulesets]`, `[rules]`, `[scan].ignores`,
+`[scan].test_paths`, `[output]`, `[escalation]`) from that file. The rest is
+reserved to the user:
+
+- **`[ai]` and `[ai.classifier]`** (provider, endpoint, model, API key,
+  concurrency) and **`scan.cache_dir`** are ignored when they appear in the
+  repo file, with one `warning: ignored 'ai.enabled' in slopguard.toml ...`
+  line per key on stderr. Values are never printed. Set them in
+  `~/.config/slopguard/config.toml`, a `--config` file, or with CLI flags and
+  env vars (`--cache-dir`, `SLOPGUARD_CACHE_DIR`).
+- **`rules.custom_dirs` and local `[[rules.sources]] path`** must resolve
+  inside the repository (symlinks included). A path that escapes it is a
+  configuration error (exit code 2). Git sources are not affected.
+- **`[ai].concurrency`** must be between 1 and 64 in every config file.
+
+`--trust-repo-config` (accepted by every subcommand) lifts the first two
+restrictions for repositories you trust. A file passed with `--config` is
+chosen by you and is always trusted.
 
 ---
 
@@ -313,7 +336,10 @@ rule is `ast` and never triggers a network call.
 
 ### Configuration
 
-AI is **off by default**. Enable it in `slopguard.toml`:
+AI is **off by default**. Enable it in your user config,
+`~/.config/slopguard/config.toml` (or a `--config` file). `[ai]` in a repo
+`slopguard.toml` is ignored unless you pass `--trust-repo-config`, see
+[Trust model](#trust-model):
 
 ```toml
 [ai]
@@ -363,7 +389,8 @@ marked `reason: generated`: once the classifier fires, they ask the `[ai]` LLM
 to explain that specific instance, and fall back to their static note when no
 LLM is configured. Probabilities are cached, and the threshold is applied after
 the cache, so tuning it never triggers new calls. The classifier is a
-proprietary SaaS and stays strictly opt-in.
+proprietary SaaS and stays strictly opt-in. Like `[ai]`, `[ai.classifier]`
+belongs in the user config (see [Trust model](#trust-model)).
 
 ### Skipping AI
 
@@ -908,7 +935,9 @@ repos:
 
 slopguard supports a `--cache-dir` flag (and `SLOPGUARD_CACHE_DIR` env var) to persist scan cache across CI runs. The templates above configure this automatically.
 
-Resolution order: `--cache-dir` (CLI) > `SLOPGUARD_CACHE_DIR` (env) > `cache_dir` in `slopguard.toml` > `.slopguard-cache/` in the working directory.
+Resolution order: `--cache-dir` (CLI) > `SLOPGUARD_CACHE_DIR` (env) > `cache_dir` in the user config (or a trusted `slopguard.toml`) > `.slopguard-cache/` in the working directory.
+
+Invalidation only deletes slopguard's own entry files, and only in a directory that holds its `rules.hash` manifest, so pointing `--cache-dir` at an existing directory never wipes foreign files.
 
 ---
 

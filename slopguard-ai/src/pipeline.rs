@@ -22,6 +22,7 @@ use tokio::runtime::Builder;
 use futures::future::join_all;
 use ironflow_core::operations::agent::Agent;
 use ironflow_core::provider::AgentProvider;
+use slopguard_core::config::MAX_AI_CONCURRENCY;
 use slopguard_core::finding::Finding;
 use slopguard_core::rule::ReasonMode;
 use tokio::sync::Semaphore;
@@ -150,7 +151,7 @@ where
     };
 
     runtime.block_on(async {
-        let permits = Arc::new(Semaphore::new(concurrency.max(1)));
+        let permits = Arc::new(Semaphore::new(concurrency.clamp(1, MAX_AI_CONCURRENCY)));
         let check = &check;
         let tasks = candidates.iter().map(|candidate| {
             let permits = Arc::clone(&permits);
@@ -294,6 +295,27 @@ mod tests {
             None,
         );
         assert!(findings.is_empty(), "is_issue=false must drop the finding");
+    }
+
+    #[test]
+    fn huge_concurrency_does_not_panic() {
+        // Above `Semaphore::MAX_PERMITS` the runner used to panic; 0 used to be
+        // the only bound handled.
+        for concurrency in [usize::MAX, 0] {
+            let provider = MockProvider::new(json!({
+                "is_issue": true,
+                "reason": "bounded",
+                "confidence": 0.9
+            }));
+            let findings = run_ai_pass(
+                &provider,
+                vec![candidate(1, "a\nb\n"), candidate(2, "a\nb\n")],
+                concurrency,
+                None,
+            );
+            assert_eq!(findings.len(), 2, "concurrency {concurrency}");
+            assert_eq!(provider.calls.load(Ordering::SeqCst), 2);
+        }
     }
 
     #[test]

@@ -10,13 +10,14 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::sync::OnceLock;
 
 use clap::Parser;
 use strsim::normalized_levenshtein;
 use thiserror::Error;
 
 use slopguard_core::baseline::BaselineError;
-use slopguard_core::config::{load_config, load_config_file, Config, ConfigError};
+use slopguard_core::config::{load_config, load_config_file, Config, ConfigError, ProjectTrust};
 use slopguard_core::git::GitError;
 use slopguard_core::preset::{presets_help, Preset};
 use slopguard_core::rule::{
@@ -100,6 +101,18 @@ pub(crate) fn resolve_cache_dir(cli_flag: Option<PathBuf>, config: &Config) -> P
         })
 }
 
+/// Trust granted to the scanned repo's `slopguard.toml`, set once from
+/// `--trust-repo-config` so every subcommand loads config the same way.
+static REPO_TRUST: OnceLock<ProjectTrust> = OnceLock::new();
+
+/// The trust set by `--trust-repo-config`, untrusted by default.
+fn repo_trust() -> ProjectTrust {
+    REPO_TRUST.get().copied().unwrap_or_default()
+}
+
+/// Load the config: the explicit `--config` file (trusted, chosen by the
+/// user), or the global config merged with the repo's `slopguard.toml`.
+/// Reserved keys dropped from an untrusted repo file are reported on stderr.
 pub(crate) fn resolve_config(config_path: Option<&Path>) -> Result<Config, AppError> {
     match config_path {
         Some(path) => Ok(load_config_file(path)?),
@@ -110,7 +123,11 @@ pub(crate) fn resolve_config(config_path: Option<&Path>) -> Result<Config, AppEr
                     source: e,
                 })
             })?;
-            Ok(load_config(&cwd)?)
+            let loaded = load_config(&cwd, repo_trust())?;
+            for warning in &loaded.warnings {
+                eprintln!("warning: {warning}");
+            }
+            Ok(loaded.config)
         }
     }
 }
@@ -361,6 +378,13 @@ fn run_init(force: bool, preset: Option<Option<Preset>>) -> Result<(), AppError>
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
+    let trust = if cli.trust_repo_config {
+        ProjectTrust::Trusted
+    } else {
+        ProjectTrust::Untrusted
+    };
+    // Stored before any subcommand loads config.
+    REPO_TRUST.get_or_init(|| trust);
 
     match cli.command {
         Command::Scan {

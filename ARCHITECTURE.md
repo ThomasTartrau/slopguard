@@ -46,7 +46,7 @@ The binary crate. Responsible for:
 - Subcommands: scan, stats, baseline, explain, init, test, list
 - Output formatting (text with colors, JSON, SARIF, HTML)
 - Exit code logic (0 = clean, 1 = findings, 2 = config error)
-- Reading config from slopguard.toml (hierarchical: global + project)
+- Reading config from slopguard.toml (hierarchical: global + project, repo file untrusted unless `--trust-repo-config`)
 
 Dependencies: clap, slopguard-core, slopguard-ai, serde_json, strsim (rule id suggestions), similar (the `--fix --dry-run` diff). Colors are raw ANSI escapes and SARIF is built with serde_json, with no dedicated crate.
 
@@ -331,6 +331,12 @@ Hierarchical resolution:
 1. `~/.config/slopguard/config.toml` (global defaults)
 2. `slopguard.toml` at project root (overrides global)
 3. CLI flags (override everything)
+
+The project file is untrusted by default (D40): `[ai]` and `scan.cache_dir`
+are dropped from it with a warning, and its `rules.custom_dirs` / local
+`[[rules.sources]] path` must resolve inside the repository.
+`--trust-repo-config` lifts both restrictions; a `--config` file is always
+trusted. `[ai].concurrency` must lie in `1..=64` in every file.
 
 ## Output formats
 

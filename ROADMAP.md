@@ -10,6 +10,7 @@
 - [x] AST scanner: run rules against source files, collect findings
 - [x] Inline disable: parse `// slopguard-disable-next-line [rule-id]` comments
 - [x] Config: parse slopguard.toml (hierarchical global + project)
+- [x] Config trust boundary: the scanned repo's slopguard.toml cannot set `[ai]` / `scan.cache_dir` or point rule paths outside the repo (D40, `--trust-repo-config`)
 - [x] File walker: gitignore-aware traversal via `ignore` crate, respect `files`/`ignores` globs
 
 ### CLI (clap)

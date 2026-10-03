@@ -46,7 +46,10 @@ fn default_rules_and_scan() -> Result<String, RuleError> {
          # calling them is not reported by no-assertion-free-test:\n\
          # [rules.options.no-assertion-free-test]\n\
          # assert_functions = [\"run\", \"check_*\"]\n\n\
-         [scan]\nignores = []\n# cache_dir = \".slopguard-cache\"\n",
+         [scan]\nignores = []\n\
+         # cache_dir is read from the user config (~/.config/slopguard/config.toml),\n\
+         # not from a repo slopguard.toml unless --trust-repo-config is passed:\n\
+         # cache_dir = \".slopguard-cache\"\n",
     );
     Ok(out)
 }
@@ -62,6 +65,8 @@ fn common_body() -> Result<String, RuleError> {
 
 /// The commented-out `[ai]` block shipped by every preset that leaves AI off.
 const COMMENTED_AI_BODY: &str = r#"
+# [ai] is read from the user config (~/.config/slopguard/config.toml), not
+# from a repo slopguard.toml unless --trust-repo-config is passed.
 # [ai]
 # enabled = false
 # provider = "api"        # "api" (HTTP) | "cli" (local claude)
@@ -82,6 +87,8 @@ const COMMENTED_AI_BODY: &str = r#"
 /// The live `[ai]` block of the `ai` preset. The model is the same default the
 /// AI pipeline uses; `slopguard-core` must not depend on `slopguard-ai`.
 const LIVE_AI_BODY: &str = r#"
+# [ai] is read from the user config (~/.config/slopguard/config.toml), not
+# from a repo slopguard.toml unless --trust-repo-config is passed.
 [ai]
 enabled = true
 provider = "api"        # "api" (HTTP) | "cli" (local claude)

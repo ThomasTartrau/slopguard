@@ -1,8 +1,41 @@
 use std::fs::{create_dir_all, write};
+#[cfg(unix)]
+use std::os::unix::fs::symlink;
 
 use tempfile::tempdir;
 
 use super::*;
+
+/// Load with a trusted repo file, so the parsing tests see every key.
+fn load(global: Option<&Path>, root: &Path) -> Config {
+    let loaded = load_config_from(global, root, ProjectTrust::Trusted);
+    loaded.unwrap().config
+}
+
+/// The error of a trusted load.
+fn load_err(global: Option<&Path>, root: &Path) -> ConfigError {
+    let loaded = load_config_from(global, root, ProjectTrust::Trusted);
+    loaded.unwrap_err()
+}
+
+/// Load with an untrusted repo file (the default trust of a scan).
+fn load_untrusted(global: Option<&Path>, root: &Path) -> LoadedConfig {
+    let loaded = load_config_from(global, root, ProjectTrust::Untrusted);
+    loaded.unwrap()
+}
+
+/// The error of an untrusted load.
+fn load_untrusted_err(global: Option<&Path>, root: &Path) -> ConfigError {
+    let loaded = load_config_from(global, root, ProjectTrust::Untrusted);
+    loaded.unwrap_err()
+}
+
+/// Write `content` as the global config under `global_dir`.
+fn write_global(global_dir: &Path, content: &str) {
+    let dir = global_dir.join("slopguard");
+    create_dir_all(&dir).unwrap();
+    write(dir.join("config.toml"), content).unwrap();
+}
 
 #[test]
 fn parse_complete_config() {
@@ -43,7 +76,7 @@ no-magic-number = 2
 "#;
     write(dir.path().join("slopguard.toml"), toml).unwrap();
 
-    let cfg = load_config_from(None, dir.path()).unwrap();
+    let cfg = load(None, dir.path());
     assert!(!cfg.rulesets.slop);
     assert!(cfg.rulesets.security);
     assert!(!cfg.rulesets.correctness);
@@ -77,7 +110,7 @@ slop = false
 "#;
     write(dir.path().join("slopguard.toml"), toml).unwrap();
 
-    let cfg = load_config_from(None, dir.path()).unwrap();
+    let cfg = load(None, dir.path());
     assert!(!cfg.rulesets.slop);
     assert!(cfg.rulesets.security);
     assert!(cfg.rulesets.correctness);
@@ -126,7 +159,7 @@ format = "sarif"
 "#;
     write(project_dir.path().join("slopguard.toml"), project_toml).unwrap();
 
-    let cfg = load_config_from(Some(global_dir.path()), project_dir.path()).unwrap();
+    let cfg = load(Some(global_dir.path()), project_dir.path());
 
     // project overrides global for slop
     assert!(cfg.rulesets.slop);
@@ -148,7 +181,7 @@ fn invalid_toml_error() {
     let bad_toml = "this is not [valid toml {{{";
     write(dir.path().join("slopguard.toml"), bad_toml).unwrap();
 
-    let err = load_config_from(None, dir.path()).unwrap_err();
+    let err = load_err(None, dir.path());
     let msg = err.to_string();
     assert!(
         msg.contains("slopguard.toml"),
@@ -169,7 +202,7 @@ format = "xml"
 "#;
     write(dir.path().join("slopguard.toml"), toml).unwrap();
 
-    let err = load_config_from(None, dir.path()).unwrap_err();
+    let err = load_err(None, dir.path());
     let msg = err.to_string();
     assert!(
         matches!(err, ConfigError::Parse { .. }),
@@ -200,7 +233,7 @@ fn load_config_with_temp_dirs() {
     )
     .unwrap();
 
-    let cfg = load_config_from(Some(global_dir.path()), project_dir.path()).unwrap();
+    let cfg = load(Some(global_dir.path()), project_dir.path());
     assert!(!cfg.rulesets.slop);
     assert_eq!(cfg.output.format, OutputFormat::Json);
     assert!(cfg.output.colors);
@@ -221,7 +254,7 @@ fn load_config_global_only() {
     .unwrap();
 
     // No slopguard.toml in project dir
-    let cfg = load_config_from(Some(global_dir.path()), project_dir.path()).unwrap();
+    let cfg = load(Some(global_dir.path()), project_dir.path());
     assert!(cfg.rulesets.slop);
     assert!(cfg.rulesets.security);
     assert!(!cfg.rulesets.correctness);
@@ -260,7 +293,7 @@ fn escalation_section_defaults_threshold() {
     )
     .unwrap();
 
-    let cfg = load_config_from(None, dir.path()).unwrap();
+    let cfg = load(None, dir.path());
     assert!(cfg.escalation.enabled);
     assert_eq!(cfg.escalation.threshold, 5);
 }
@@ -284,7 +317,7 @@ fn escalation_rules_merge_global_and_project() {
     )
     .unwrap();
 
-    let cfg = load_config_from(Some(global_dir.path()), project_dir.path()).unwrap();
+    let cfg = load(Some(global_dir.path()), project_dir.path());
     assert!(cfg.escalation.enabled);
     assert_eq!(cfg.escalation.rules.get("a"), Some(&3));
     assert_eq!(cfg.escalation.rules.get("b"), Some(&7));
@@ -299,7 +332,7 @@ fn invalid_escalation_threshold_is_an_error() {
     )
     .unwrap();
 
-    let err = load_config_from(None, dir.path()).unwrap_err();
+    let err = load_err(None, dir.path());
     let msg = err.to_string();
     assert!(
         matches!(err, ConfigError::Parse { .. }),
@@ -320,7 +353,7 @@ cache_dir = ".cache/slopguard"
 "#;
     write(dir.path().join("slopguard.toml"), toml).unwrap();
 
-    let cfg = load_config_from(None, dir.path()).unwrap();
+    let cfg = load(None, dir.path());
     assert_eq!(cfg.scan.cache_dir, Some(PathBuf::from(".cache/slopguard")));
 }
 
@@ -333,7 +366,7 @@ ignores = ["target/"]
 "#;
     write(dir.path().join("slopguard.toml"), toml).unwrap();
 
-    let cfg = load_config_from(None, dir.path()).unwrap();
+    let cfg = load(None, dir.path());
     assert!(cfg.scan.cache_dir.is_none());
 }
 
@@ -346,7 +379,7 @@ fn parses_html_output_format() {
     )
     .unwrap();
 
-    let cfg = load_config_from(None, dir.path()).unwrap();
+    let cfg = load(None, dir.path());
     assert_eq!(cfg.output.format, OutputFormat::Html);
 }
 
@@ -377,7 +410,7 @@ threshold = 0.85
 "#;
     write(dir.path().join("slopguard.toml"), toml).unwrap();
 
-    let cfg = load_config_from(None, dir.path()).unwrap();
+    let cfg = load(None, dir.path());
     assert!(cfg.ai.classifier.enabled);
     assert_eq!(cfg.ai.classifier.transport, ClassifierTransport::Openrouter);
     assert_eq!(
@@ -405,7 +438,7 @@ fn classifier_batch_overrides_parse() {
     )
     .unwrap();
 
-    let cfg = load_config_from(None, dir.path()).unwrap();
+    let cfg = load(None, dir.path());
     assert!(!cfg.ai.classifier.batch);
     assert_eq!(cfg.ai.classifier.batch_max_questions, 3);
     assert_eq!(cfg.ai.classifier.batch_max_state_lines, 120);
@@ -432,7 +465,7 @@ fn classifier_partial_keeps_defaults() {
     )
     .unwrap();
 
-    let cfg = load_config_from(None, dir.path()).unwrap();
+    let cfg = load(None, dir.path());
     assert!(cfg.ai.classifier.enabled);
     assert_eq!(cfg.ai.classifier.transport, ClassifierTransport::Direct);
     assert!((cfg.ai.classifier.threshold - 0.7).abs() < f64::EPSILON);
@@ -447,7 +480,7 @@ fn invalid_classifier_transport_is_an_error() {
     )
     .unwrap();
 
-    let err = load_config_from(None, dir.path()).unwrap_err();
+    let err = load_err(None, dir.path());
     assert!(
         matches!(err, ConfigError::Parse { .. }),
         "expected Parse error for an unknown transport, got: {err:?}"
@@ -468,7 +501,7 @@ path = "../shared-rules"
 "#;
     write(dir.path().join("slopguard.toml"), toml).unwrap();
 
-    let cfg = load_config_from(None, dir.path()).unwrap();
+    let cfg = load(None, dir.path());
     assert_eq!(cfg.rules.sources.len(), 2);
 
     let git = &cfg.rules.sources[0];
@@ -496,7 +529,7 @@ fn rule_source_without_git_or_path_is_rejected() {
     )
     .unwrap();
 
-    let err = load_config_from(None, dir.path()).unwrap_err();
+    let err = load_err(None, dir.path());
     assert!(
         matches!(err, ConfigError::InvalidSource(_)),
         "expected InvalidSource for a source without git or path, got: {err:?}"
@@ -512,7 +545,7 @@ fn rule_source_ref_without_git_is_rejected() {
     )
     .unwrap();
 
-    let err = load_config_from(None, dir.path()).unwrap_err();
+    let err = load_err(None, dir.path());
     assert!(
         matches!(err, ConfigError::InvalidSource(_)),
         "expected InvalidSource for a ref without git, got: {err:?}"
@@ -528,7 +561,7 @@ fn assertion_free_test_options_are_parsed() {
     )
     .unwrap();
 
-    let cfg = load_config_from(None, dir.path()).unwrap();
+    let cfg = load(None, dir.path());
     assert_eq!(
         cfg.rules.options.no_assertion_free_test.assert_functions,
         vec!["run", "check_*"]
@@ -538,7 +571,7 @@ fn assertion_free_test_options_are_parsed() {
 #[test]
 fn options_default_to_empty() {
     let dir = tempdir().unwrap();
-    let cfg = load_config_from(None, dir.path()).unwrap();
+    let cfg = load(None, dir.path());
     assert!(cfg
         .rules
         .options
@@ -556,7 +589,7 @@ fn options_for_an_unknown_rule_are_rejected() {
     )
     .unwrap();
 
-    let err = load_config_from(None, dir.path()).unwrap_err();
+    let err = load_err(None, dir.path());
     assert!(
         matches!(err, ConfigError::Parse { .. }) && err.to_string().contains("no-such-rule"),
         "expected a parse error naming the unknown rule, got: {err}"
@@ -572,9 +605,354 @@ fn unknown_option_key_is_rejected() {
     )
     .unwrap();
 
-    let err = load_config_from(None, dir.path()).unwrap_err();
+    let err = load_err(None, dir.path());
     assert!(
         matches!(err, ConfigError::Parse { .. }) && err.to_string().contains("assert_function"),
         "expected a parse error naming the misspelled key, got: {err}"
+    );
+}
+
+#[test]
+fn repo_config_cannot_enable_ai() {
+    let dir = tempdir().unwrap();
+    write(
+        dir.path().join("slopguard.toml"),
+        "[ai]\nenabled = true\napi_key = \"k\"\n",
+    )
+    .unwrap();
+
+    let loaded = load_untrusted(None, dir.path());
+    assert!(!loaded.config.ai.enabled);
+    assert_eq!(loaded.config.ai.api_key, None);
+    assert_eq!(loaded.warnings.len(), 2, "{:?}", loaded.warnings);
+    assert!(loaded.warnings[0].contains("'ai.api_key'"));
+    assert!(loaded.warnings[1].contains("'ai.enabled'"));
+    assert!(loaded.warnings.iter().all(|w| w.contains("ignored")));
+    assert!(
+        loaded
+            .warnings
+            .iter()
+            .all(|w| !w.contains("\"k\"") && !w.contains("= k")),
+        "warnings must not echo the api key: {:?}",
+        loaded.warnings
+    );
+}
+
+#[test]
+fn repo_config_cannot_enable_classifier() {
+    let dir = tempdir().unwrap();
+    write(
+        dir.path().join("slopguard.toml"),
+        "[ai.classifier]\nenabled = true\ntransport = \"openrouter\"\n",
+    )
+    .unwrap();
+
+    let loaded = load_untrusted(None, dir.path());
+    assert!(!loaded.config.ai.classifier.enabled);
+    assert_eq!(
+        loaded.config.ai.classifier.transport,
+        ClassifierTransport::Direct
+    );
+    assert_eq!(loaded.warnings.len(), 2, "{:?}", loaded.warnings);
+    assert!(loaded.warnings[0].contains("'ai.classifier.enabled'"));
+    assert!(loaded.warnings[1].contains("'ai.classifier.transport'"));
+}
+
+#[test]
+fn repo_config_cannot_set_cache_dir() {
+    let dir = tempdir().unwrap();
+    write(
+        dir.path().join("slopguard.toml"),
+        "[scan]\ncache_dir = \"/home/victim\"\nignores = [\"target/\"]\n",
+    )
+    .unwrap();
+
+    let loaded = load_untrusted(None, dir.path());
+    assert_eq!(loaded.config.scan.cache_dir, None);
+    assert_eq!(loaded.config.scan.ignores, vec!["target/"]);
+    assert_eq!(loaded.warnings.len(), 1, "{:?}", loaded.warnings);
+    assert!(loaded.warnings[0].contains("'scan.cache_dir'"));
+    assert!(!loaded.warnings[0].contains("/home/victim"));
+}
+
+#[test]
+fn global_ai_settings_survive_repo_override() {
+    let global_dir = tempdir().unwrap();
+    let project_dir = tempdir().unwrap();
+    write_global(
+        global_dir.path(),
+        "[ai]\nenabled = true\nconcurrency = 8\n\n[scan]\ncache_dir = \"/global/cache\"\n",
+    );
+    write(
+        project_dir.path().join("slopguard.toml"),
+        "[ai]\nenabled = false\nconcurrency = 99\n\n[scan]\ncache_dir = \"/repo/cache\"\n",
+    )
+    .unwrap();
+
+    let loaded = load_untrusted(Some(global_dir.path()), project_dir.path());
+    assert!(loaded.config.ai.enabled);
+    assert_eq!(loaded.config.ai.concurrency, 8);
+    assert_eq!(
+        loaded.config.scan.cache_dir,
+        Some(PathBuf::from("/global/cache"))
+    );
+    assert_eq!(loaded.warnings.len(), 3, "{:?}", loaded.warnings);
+}
+
+#[test]
+fn trust_repo_config_restores_repo_ai_settings() {
+    let dir = tempdir().unwrap();
+    write(
+        dir.path().join("slopguard.toml"),
+        "[ai]\nenabled = true\n\n[scan]\ncache_dir = \".cache/slopguard\"\n",
+    )
+    .unwrap();
+
+    let loaded = load_config_from(None, dir.path(), ProjectTrust::Trusted);
+    let loaded = loaded.unwrap();
+    assert!(loaded.config.ai.enabled);
+    assert_eq!(
+        loaded.config.scan.cache_dir,
+        Some(PathBuf::from(".cache/slopguard"))
+    );
+    assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
+}
+
+#[test]
+fn repo_rules_keys_still_apply() {
+    let dir = tempdir().unwrap();
+    write(
+        dir.path().join("slopguard.toml"),
+        "[rulesets]\nslop = false\n\n[rules]\ndisable = [\"no-magic-number\"]\n\n\
+         [scan]\nignores = [\"generated/\"]\n",
+    )
+    .unwrap();
+
+    let loaded = load_untrusted(None, dir.path());
+    assert!(!loaded.config.rulesets.slop);
+    assert_eq!(loaded.config.rules.disable, vec!["no-magic-number"]);
+    assert_eq!(loaded.config.scan.ignores, vec!["generated/"]);
+    assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
+}
+
+#[test]
+fn repo_config_without_reserved_keys_has_no_warning() {
+    let dir = tempdir().unwrap();
+    assert!(load_untrusted(None, dir.path()).warnings.is_empty());
+
+    write(dir.path().join("slopguard.toml"), "").unwrap();
+    assert!(load_untrusted(None, dir.path()).warnings.is_empty());
+}
+
+#[test]
+fn custom_dir_outside_repo_is_rejected() {
+    let dir = tempdir().unwrap();
+    write(
+        dir.path().join("slopguard.toml"),
+        "[rules]\ncustom_dirs = [\"../elsewhere\"]\n",
+    )
+    .unwrap();
+    let err = load_untrusted_err(None, dir.path());
+    assert!(
+        matches!(&err, ConfigError::PathOutsideRepo { key, .. } if key == "rules.custom_dirs"),
+        "expected PathOutsideRepo, got: {err:?}"
+    );
+    assert!(err.to_string().contains("outside the repository root"));
+
+    let outside = tempdir().unwrap();
+    let outside_path = outside.path().display().to_string();
+    let toml = format!("[rules]\ncustom_dirs = [{outside_path:?}]\n");
+    write(dir.path().join("slopguard.toml"), toml).unwrap();
+    let err = load_untrusted_err(None, dir.path());
+    assert!(
+        matches!(err, ConfigError::PathOutsideRepo { .. }),
+        "expected PathOutsideRepo for an absolute path, got: {err:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn custom_dir_symlink_escaping_repo_is_rejected() {
+    let dir = tempdir().unwrap();
+    let outside = tempdir().unwrap();
+    symlink(outside.path(), dir.path().join("rules")).unwrap();
+    write(
+        dir.path().join("slopguard.toml"),
+        "[rules]\ncustom_dirs = [\"./rules\"]\n",
+    )
+    .unwrap();
+
+    let err = load_untrusted_err(None, dir.path());
+    assert!(
+        matches!(err, ConfigError::PathOutsideRepo { .. }),
+        "expected PathOutsideRepo for an escaping symlink, got: {err:?}"
+    );
+}
+
+#[test]
+fn custom_dir_inside_repo_is_accepted() {
+    let dir = tempdir().unwrap();
+    create_dir_all(dir.path().join("rules")).unwrap();
+    write(
+        dir.path().join("slopguard.toml"),
+        "[rules]\ncustom_dirs = [\"./rules\", \"./missing\"]\n",
+    )
+    .unwrap();
+
+    let loaded = load_untrusted(None, dir.path());
+    assert_eq!(
+        loaded.config.rules.custom_dirs,
+        vec![PathBuf::from("./rules"), PathBuf::from("./missing")]
+    );
+}
+
+#[test]
+fn custom_dir_inside_repo_is_accepted_from_relative_root() {
+    let dir = tempdir().unwrap();
+    let repo = dir.path().join("repo");
+    create_dir_all(repo.join("rules")).unwrap();
+    write(
+        repo.join("slopguard.toml"),
+        "[rules]\ncustom_dirs = [\"rules\"]\n",
+    )
+    .unwrap();
+
+    // A root with a `..` hop still canonicalizes to the repository.
+    let root = repo.join("rules").join("..");
+    let loaded = load_untrusted(None, &root);
+    assert_eq!(
+        loaded.config.rules.custom_dirs,
+        vec![PathBuf::from("rules")]
+    );
+}
+
+#[test]
+fn local_rule_source_outside_repo_is_rejected() {
+    let dir = tempdir().unwrap();
+    write(
+        dir.path().join("slopguard.toml"),
+        "[[rules.sources]]\npath = \"/tmp/x\"\n",
+    )
+    .unwrap();
+
+    let err = load_untrusted_err(None, dir.path());
+    assert!(
+        matches!(&err, ConfigError::PathOutsideRepo { key, .. } if key == "rules.sources.path"),
+        "expected PathOutsideRepo, got: {err:?}"
+    );
+}
+
+#[test]
+fn git_rule_source_path_is_not_checked() {
+    let dir = tempdir().unwrap();
+    write(
+        dir.path().join("slopguard.toml"),
+        "[[rules.sources]]\ngit = \"https://gitlab.com/org/rules.git\"\npath = \"../rules\"\n",
+    )
+    .unwrap();
+
+    let loaded = load_untrusted(None, dir.path());
+    assert_eq!(loaded.config.rules.sources.len(), 1);
+}
+
+#[test]
+fn trusted_repo_may_use_external_custom_dir() {
+    let dir = tempdir().unwrap();
+    write(
+        dir.path().join("slopguard.toml"),
+        "[rules]\ncustom_dirs = [\"../elsewhere\"]\n\n[[rules.sources]]\npath = \"/tmp/x\"\n",
+    )
+    .unwrap();
+
+    let cfg = load(None, dir.path());
+    assert_eq!(cfg.rules.custom_dirs, vec![PathBuf::from("../elsewhere")]);
+    assert_eq!(cfg.rules.sources[0].path, Some(PathBuf::from("/tmp/x")));
+}
+
+#[test]
+fn global_custom_dirs_are_not_restricted() {
+    let global_dir = tempdir().unwrap();
+    let project_dir = tempdir().unwrap();
+    write_global(
+        global_dir.path(),
+        "[rules]\ncustom_dirs = [\"/opt/rules\"]\n",
+    );
+
+    let loaded = load_untrusted(Some(global_dir.path()), project_dir.path());
+    assert_eq!(
+        loaded.config.rules.custom_dirs,
+        vec![PathBuf::from("/opt/rules")]
+    );
+}
+
+#[test]
+fn ai_concurrency_zero_is_rejected() {
+    let dir = tempdir().unwrap();
+    let toml = "[ai]\nconcurrency = 0\n";
+    write(dir.path().join("slopguard.toml"), toml).unwrap();
+
+    let err = load_err(None, dir.path());
+    assert!(
+        matches!(err, ConfigError::InvalidConcurrency(0)),
+        "expected InvalidConcurrency, got: {err:?}"
+    );
+    assert!(err.to_string().contains("between 1 and 64"));
+}
+
+#[test]
+fn ai_concurrency_above_64_is_rejected() {
+    for value in ["65", "9223372036854775807"] {
+        let dir = tempdir().unwrap();
+        write(
+            dir.path().join("slopguard.toml"),
+            format!("[ai]\nconcurrency = {value}\n"),
+        )
+        .unwrap();
+
+        let err = load_err(None, dir.path());
+        assert!(
+            matches!(err, ConfigError::InvalidConcurrency(_)),
+            "expected InvalidConcurrency for {value}, got: {err:?}"
+        );
+    }
+}
+
+#[test]
+fn ai_concurrency_bounds_are_accepted() {
+    for value in [1, MAX_AI_CONCURRENCY] {
+        let dir = tempdir().unwrap();
+        write(
+            dir.path().join("slopguard.toml"),
+            format!("[ai]\nconcurrency = {value}\n"),
+        )
+        .unwrap();
+
+        assert_eq!(load(None, dir.path()).ai.concurrency, value);
+    }
+}
+
+#[test]
+fn ai_concurrency_in_global_config_is_rejected() {
+    let global_dir = tempdir().unwrap();
+    let project_dir = tempdir().unwrap();
+    write_global(global_dir.path(), "[ai]\nconcurrency = 0\n");
+
+    let err = load_untrusted_err(Some(global_dir.path()), project_dir.path());
+    assert!(
+        matches!(err, ConfigError::InvalidConcurrency(0)),
+        "expected InvalidConcurrency from the global config, got: {err:?}"
+    );
+}
+
+#[test]
+fn ai_concurrency_in_explicit_config_file_is_rejected() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("custom.toml");
+    write(&path, "[ai]\nconcurrency = 65\n").unwrap();
+
+    let err = load_config_file(&path).unwrap_err();
+    assert!(
+        matches!(err, ConfigError::InvalidConcurrency(65)),
+        "expected InvalidConcurrency from --config, got: {err:?}"
     );
 }
