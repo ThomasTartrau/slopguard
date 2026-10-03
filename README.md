@@ -234,8 +234,9 @@ reserved to the user:
 
 - **`[ai]` and `[ai.classifier]`** (provider, endpoint, model, API key,
   concurrency) and **`scan.cache_dir`** are ignored when they appear in the
-  repo file, with one `warning: ignored 'ai.enabled' in slopguard.toml ...`
-  line per key on stderr. Values are never printed. Set them in
+  repo file, with a single `warning: ignored 'ai.api_key', 'ai.enabled' in
+  slopguard.toml ...` line on stderr naming every dropped key. Values are
+  never printed. Set them in
   `~/.config/slopguard/config.toml`, a `--config` file, or with CLI flags and
   env vars (`--cache-dir`, `SLOPGUARD_CACHE_DIR`).
 - **`rules.custom_dirs` and local `[[rules.sources]] path`** must resolve

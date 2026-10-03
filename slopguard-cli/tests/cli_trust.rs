@@ -93,8 +93,9 @@ fn repo_config_ai_keys_are_ignored_with_a_warning() {
         .assert()
         .success()
         .stdout(predicate::str::contains("0 errors, 0 warnings"))
-        .stderr(predicate::str::contains("ignored 'ai.enabled'"))
-        .stderr(predicate::str::contains("ignored 'ai.api_key'"))
+        .stderr(predicate::str::contains(
+            "warning: ignored 'ai.api_key', 'ai.enabled', 'ai.provider', 'ai.vendor' in slopguard.toml",
+        ))
         .stderr(predicate::str::contains("AI is disabled"))
         .stderr(predicate::str::contains("ANTHROPIC_API_KEY").not())
         // The secret value is never echoed.

@@ -300,108 +300,112 @@ fn validate_concurrency(config: &Config) -> Result<(), ConfigError> {
     }
 }
 
-/// Remove the user-only keys from an untrusted repo table and return one
-/// warning per removed leaf key, sorted. Values are never echoed: `api_key`
-/// is a secret.
-fn strip_reserved_keys(project: &mut Table) -> Vec<String> {
+/// Keys an untrusted repo file cannot set, as dotted paths into its table.
+const RESERVED_KEYS: [&str; 2] = ["ai", "scan.cache_dir"];
+
+/// Remove the user-only keys from an untrusted repo table and return a single
+/// warning naming every removed leaf key, sorted. Values are never echoed:
+/// `api_key` is a secret.
+fn strip_reserved_keys(project: &mut Table) -> Option<String> {
     let mut removed = Vec::new();
-    match project.remove("ai") {
-        Some(Value::Table(ai)) => {
-            for (key, value) in ai {
-                match value {
-                    Value::Table(sub) => {
-                        removed.extend(sub.keys().map(|leaf| format!("ai.{key}.{leaf}")));
-                    }
-                    _ => removed.push(format!("ai.{key}")),
-                }
-            }
+    for key in RESERVED_KEYS {
+        if let Some(value) = remove_dotted(project, key) {
+            push_leaf_keys(key.to_string(), value, &mut removed);
         }
-        Some(_) => removed.push("ai".to_string()),
-        None => {}
     }
-    if let Some(Value::Table(scan)) = project.get_mut("scan") {
-        if scan.remove("cache_dir").is_some() {
-            removed.push("scan.cache_dir".to_string());
-        }
+    if removed.is_empty() {
+        return None;
     }
     removed.sort();
-    removed
-        .into_iter()
-        .map(|key| {
-            format!(
-                "ignored '{key}' in slopguard.toml: this key is reserved to the user config \
-                 (use ~/.config/slopguard/config.toml or CLI flags, or pass --trust-repo-config)"
-            )
-        })
-        .collect()
+    let keys = removed
+        .iter()
+        .map(|key| format!("'{key}'"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    Some(format!(
+        "ignored {keys} in slopguard.toml: reserved to the user config \
+         (set them in ~/.config/slopguard/config.toml or with CLI flags, or pass --trust-repo-config)"
+    ))
 }
 
-/// The rule directories an untrusted repo table points at, keyed by the
-/// config key that names them. Git sources are skipped: their `path` is a
-/// sub-directory of the clone, not of the filesystem.
-fn repo_rule_paths(project: &Table) -> Vec<(&'static str, &str)> {
-    let Some(Value::Table(rules)) = project.get("rules") else {
-        return Vec::new();
-    };
-    let custom_dirs = rules
-        .get("custom_dirs")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_str)
-        .map(|path| ("rules.custom_dirs", path));
-    let sources = rules
-        .get("sources")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_table)
-        .filter(|source| !source.contains_key("git"))
-        .filter_map(|source| source.get("path").and_then(Value::as_str))
-        .map(|path| ("rules.sources.path", path));
-    custom_dirs.chain(sources).collect()
+/// Remove the value at a dotted `path` (`"scan.cache_dir"`) from `table`.
+fn remove_dotted(table: &mut Table, path: &str) -> Option<Value> {
+    match path.split_once('.') {
+        None => table.remove(path),
+        Some((head, rest)) => match table.get_mut(head)? {
+            Value::Table(sub) => remove_dotted(sub, rest),
+            _ => None,
+        },
+    }
+}
+
+/// Push the dotted path of every leaf under `value` (itself when not a table).
+fn push_leaf_keys(prefix: String, value: Value, out: &mut Vec<String>) {
+    match value {
+        Value::Table(table) => {
+            for (key, sub) in table {
+                push_leaf_keys(format!("{prefix}.{key}"), sub, out);
+            }
+        }
+        _ => out.push(prefix),
+    }
 }
 
 /// Reject a repo-supplied rule path that resolves outside `root`.
 ///
-/// Existing paths are canonicalized, so a symlink escaping the root is caught.
-/// A missing path (skipped at load time) gets a lexical check: no `..`
-/// component, and an absolute path must sit under the canonical root.
-fn check_repo_paths(project: &Table, root: &Path) -> Result<(), ConfigError> {
-    let paths = repo_rule_paths(project);
-    if paths.is_empty() {
+/// Only `rules.custom_dirs` and local `[[rules.sources]]` are checked: the
+/// `path` of a git source is a sub-directory of the clone, not of the
+/// filesystem.
+fn check_repo_paths(rules: &RulesConfig, root: &Path) -> Result<(), ConfigError> {
+    let custom_dirs = rules
+        .custom_dirs
+        .iter()
+        .map(|dir| ("rules.custom_dirs", dir.as_path()));
+    let sources = rules
+        .sources
+        .iter()
+        .filter(|source| !source.is_git())
+        .filter_map(|source| source.path.as_deref())
+        .map(|path| ("rules.sources.path", path));
+    let mut paths = custom_dirs.chain(sources).peekable();
+    if paths.peek().is_none() {
         return Ok(());
     }
     let canonical_root = root.canonicalize().map_err(|source| ConfigError::Io {
         path: root.display().to_string(),
         source,
     })?;
-    for (key, raw) in paths {
-        let joined = canonical_root.join(raw);
-        let inside = match joined.canonicalize() {
-            Ok(canonical) => canonical.starts_with(&canonical_root),
-            Err(err) if err.kind() == io::ErrorKind::NotFound => {
-                let has_parent = Path::new(raw)
-                    .components()
-                    .any(|c| matches!(c, Component::ParentDir));
-                !has_parent && joined.starts_with(&canonical_root)
-            }
-            Err(source) => {
-                return Err(ConfigError::Io {
-                    path: joined.display().to_string(),
-                    source,
-                });
-            }
-        };
+    for (key, path) in paths {
+        let inside = resolves_inside(path, &canonical_root).map_err(|source| ConfigError::Io {
+            path: canonical_root.join(path).display().to_string(),
+            source,
+        })?;
         if !inside {
             return Err(ConfigError::PathOutsideRepo {
                 key: key.to_string(),
-                path: raw.to_string(),
+                path: path.display().to_string(),
                 root: canonical_root.display().to_string(),
             });
         }
     }
     Ok(())
+}
+
+/// Whether `path`, taken relative to the canonical `root`, stays inside it.
+///
+/// An existing path is canonicalized, so a symlink escaping the root is caught.
+/// A missing one (skipped at load time) gets a lexical check: no `..`
+/// component, and an absolute path must sit under the root.
+fn resolves_inside(path: &Path, root: &Path) -> io::Result<bool> {
+    let joined = root.join(path);
+    match joined.canonicalize() {
+        Ok(canonical) => Ok(canonical.starts_with(root)),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {
+            let has_parent = path.components().any(|c| c == Component::ParentDir);
+            Ok(!has_parent && joined.starts_with(root))
+        }
+        Err(err) => Err(err),
+    }
 }
 
 /// Validate every `[[rules.sources]]` entry, returning the first invalid one.
@@ -427,11 +431,12 @@ fn merge_tables(base: &mut Table, over: Table) {
     }
 }
 
-/// Read one config file as a raw table. A missing file yields an empty table.
-/// The file is validated on its own so that errors name the file they come from.
-fn load_table(path: &Path) -> Result<Table, ConfigError> {
+/// Read one config file as a raw table, plus the config it alone describes.
+/// A missing file yields an empty table and the default config. The file is
+/// validated on its own so that errors name the file they come from.
+fn load_table(path: &Path) -> Result<(Table, Config), ConfigError> {
     if !path.is_file() {
-        return Ok(Table::new());
+        return Ok((Table::new(), Config::default()));
     }
     let display = path.display().to_string();
     let content = fs::read_to_string(path).map_err(|source| ConfigError::Io {
@@ -442,14 +447,14 @@ fn load_table(path: &Path) -> Result<Table, ConfigError> {
         path: display.clone(),
         source,
     })?;
-    table
+    let config = table
         .clone()
         .try_into::<Config>()
         .map_err(|source| ConfigError::Parse {
             path: display,
             source,
         })?;
-    Ok(table)
+    Ok((table, config))
 }
 
 /// Load config with explicit paths (for testing).
@@ -464,14 +469,14 @@ pub fn load_config_from(
 ) -> Result<LoadedConfig, ConfigError> {
     let mut merged = Table::new();
     if let Some(dir) = global_dir {
-        let global = load_table(&dir.join("slopguard").join("config.toml"))?;
+        let (global, _) = load_table(&dir.join("slopguard").join("config.toml"))?;
         merge_tables(&mut merged, global);
     }
-    let mut project = load_table(&project_root.join("slopguard.toml"))?;
+    let (mut project, project_config) = load_table(&project_root.join("slopguard.toml"))?;
     let warnings = match trust {
         ProjectTrust::Untrusted => {
-            check_repo_paths(&project, project_root)?;
-            strip_reserved_keys(&mut project)
+            check_repo_paths(&project_config.rules, project_root)?;
+            strip_reserved_keys(&mut project).into_iter().collect()
         }
         ProjectTrust::Trusted => Vec::new(),
     };

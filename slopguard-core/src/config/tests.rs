@@ -624,10 +624,8 @@ fn repo_config_cannot_enable_ai() {
     let loaded = load_untrusted(None, dir.path());
     assert!(!loaded.config.ai.enabled);
     assert_eq!(loaded.config.ai.api_key, None);
-    assert_eq!(loaded.warnings.len(), 2, "{:?}", loaded.warnings);
-    assert!(loaded.warnings[0].contains("'ai.api_key'"));
-    assert!(loaded.warnings[1].contains("'ai.enabled'"));
-    assert!(loaded.warnings.iter().all(|w| w.contains("ignored")));
+    assert_eq!(loaded.warnings.len(), 1, "{:?}", loaded.warnings);
+    assert!(loaded.warnings[0].starts_with("ignored 'ai.api_key', 'ai.enabled' in slopguard.toml"));
     assert!(
         loaded
             .warnings
@@ -653,9 +651,10 @@ fn repo_config_cannot_enable_classifier() {
         loaded.config.ai.classifier.transport,
         ClassifierTransport::Direct
     );
-    assert_eq!(loaded.warnings.len(), 2, "{:?}", loaded.warnings);
-    assert!(loaded.warnings[0].contains("'ai.classifier.enabled'"));
-    assert!(loaded.warnings[1].contains("'ai.classifier.transport'"));
+    assert_eq!(loaded.warnings.len(), 1, "{:?}", loaded.warnings);
+    assert!(loaded.warnings[0].starts_with(
+        "ignored 'ai.classifier.enabled', 'ai.classifier.transport' in slopguard.toml"
+    ));
 }
 
 #[test]
@@ -671,7 +670,7 @@ fn repo_config_cannot_set_cache_dir() {
     assert_eq!(loaded.config.scan.cache_dir, None);
     assert_eq!(loaded.config.scan.ignores, vec!["target/"]);
     assert_eq!(loaded.warnings.len(), 1, "{:?}", loaded.warnings);
-    assert!(loaded.warnings[0].contains("'scan.cache_dir'"));
+    assert!(loaded.warnings[0].starts_with("ignored 'scan.cache_dir' in slopguard.toml"));
     assert!(!loaded.warnings[0].contains("/home/victim"));
 }
 
@@ -696,7 +695,9 @@ fn global_ai_settings_survive_repo_override() {
         loaded.config.scan.cache_dir,
         Some(PathBuf::from("/global/cache"))
     );
-    assert_eq!(loaded.warnings.len(), 3, "{:?}", loaded.warnings);
+    assert_eq!(loaded.warnings.len(), 1, "{:?}", loaded.warnings);
+    assert!(loaded.warnings[0]
+        .starts_with("ignored 'ai.concurrency', 'ai.enabled', 'scan.cache_dir' in slopguard.toml"));
 }
 
 #[test]
