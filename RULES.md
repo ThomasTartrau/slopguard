@@ -312,11 +312,16 @@ fix: "Use X instead"              # textual suggestion (human message, never app
 # `fix`, which stays a human message.
 rewrite: "$R"                      # replacement template, optional
 autofix_safe: true                 # opt-in; default false. Without it `rewrite` is inert.
+                                   # On an external rule (custom_dirs, rules.sources) it
+                                   # also needs the id in the user config's
+                                   # `[fix] allow_external`.
 
 # Optional: a dedicated fix matcher, when detection must be broader than the fix
 # (detect broadly, fix narrowly). When set, `scan --fix` locates nodes with this
 # matcher instead of `rule`, and detection `constraints` are not applied to it,
 # so it must be self-contained. `null` (default) means --fix reuses `rule`.
+# A match of `autofix_rule` is rewritten only when it lies inside a match of the
+# detection `rule` (with its `constraints`): it narrows, never widens, the fix.
 # Example: flag every dbg!() but only auto-rewrite a single comma-free argument,
 # since rewriting dbg!() or dbg!(a, b) would not compile.
 autofix_rule:

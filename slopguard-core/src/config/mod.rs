@@ -223,6 +223,18 @@ pub struct EscalationConfig {
     pub rules: HashMap<String, usize>,
 }
 
+/// `scan --fix` policy. Builtin rules marked `autofix_safe` are always
+/// rewritten; a rule from `rules.custom_dirs` or `[[rules.sources]]` is
+/// rewritten only when its id is listed in `allow_external`, so a third-party
+/// ruleset cannot rewrite source files on its own say-so. User-only: an
+/// untrusted repo `slopguard.toml` cannot set it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(default, deny_unknown_fields)]
+pub struct FixConfig {
+    /// Ids of external rules whose `autofix_safe` rewrite `--fix` may apply.
+    pub allow_external: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct Config {
@@ -232,6 +244,7 @@ pub struct Config {
     pub output: OutputConfig,
     pub ai: AiConfig,
     pub escalation: EscalationConfig,
+    pub fix: FixConfig,
 }
 
 #[derive(Debug, Error)]
@@ -273,7 +286,7 @@ pub const MAX_AI_CONCURRENCY: usize = 64;
 
 /// Whether the scanned repository's `slopguard.toml` is trusted.
 ///
-/// An untrusted repo file cannot set the user-only keys (`[ai]`,
+/// An untrusted repo file cannot set the user-only keys (`[ai]`, `[fix]`,
 /// `scan.cache_dir`) and its rule paths must stay inside the repository.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ProjectTrust {
@@ -301,7 +314,7 @@ fn validate_concurrency(config: &Config) -> Result<(), ConfigError> {
 }
 
 /// Keys an untrusted repo file cannot set, as dotted paths into its table.
-const RESERVED_KEYS: [&str; 2] = ["ai", "scan.cache_dir"];
+const RESERVED_KEYS: [&str; 3] = ["ai", "fix", "scan.cache_dir"];
 
 /// Remove the user-only keys from an untrusted repo table and return a single
 /// warning naming every removed leaf key, sorted. Values are never echoed:
@@ -460,7 +473,7 @@ fn load_table(path: &Path) -> Result<(Table, Config), ConfigError> {
 /// Load config with explicit paths (for testing).
 ///
 /// With [`ProjectTrust::Untrusted`], the repo file's rule paths must stay
-/// inside `project_root` and its user-only keys (`[ai]`, `scan.cache_dir`)
+/// inside `project_root` and its user-only keys (`[ai]`, `[fix]`, `scan.cache_dir`)
 /// are dropped with a warning. The global file is always trusted.
 pub fn load_config_from(
     global_dir: Option<&Path>,
@@ -513,7 +526,7 @@ pub fn load_config_file(path: &Path) -> Result<Config, ConfigError> {
 /// 2. `slopguard.toml` at `project_root` (project overrides)
 ///
 /// Unless `trust` is [`ProjectTrust::Trusted`], the project file cannot set
-/// the user-only keys (`[ai]`, `scan.cache_dir`) and its rule paths must stay
+/// the user-only keys (`[ai]`, `[fix]`, `scan.cache_dir`) and its rule paths must stay
 /// inside `project_root`. See [`load_config_from`].
 pub fn load_config(project_root: &Path, trust: ProjectTrust) -> Result<LoadedConfig, ConfigError> {
     let global_dir = dirs::config_dir();
