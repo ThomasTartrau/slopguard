@@ -33,8 +33,21 @@ detect_platform() {
     esac
 }
 
+validate_version() {
+    case "$VERSION" in
+    '' | *[!0-9.v]*) error "invalid version: refusing characters outside [0-9.v]" ;;
+    esac
+
+    if ! printf '%s' "$VERSION" | grep -Eq '^v?[0-9]+\.[0-9]+\.[0-9]+$'; then
+        error "invalid version: ${VERSION} (expected MAJOR.MINOR.PATCH)"
+    fi
+
+    VERSION="${VERSION#v}"
+}
+
 fetch_latest_version() {
     if [ -n "${VERSION:-}" ]; then
+        validate_version
         return
     fi
 
@@ -48,25 +61,90 @@ fetch_latest_version() {
     fi
 
     VERSION="${LATEST_TAG#slopguard-cli-v}"
+    validate_version
     echo "v${VERSION}"
+}
+
+verify_checksum() {
+    if [ ! -s "${WORKDIR}/SHA256SUMS" ]; then
+        error "SHA256SUMS is empty"
+    fi
+
+    awk -v f="$ARCHIVE" '$2 == f' "${WORKDIR}/SHA256SUMS" > "${WORKDIR}/expected"
+    MATCHES=$(wc -l < "${WORKDIR}/expected" | tr -d ' ')
+    if [ "$MATCHES" != "1" ]; then
+        error "SHA256SUMS must list ${ARCHIVE} exactly once (found ${MATCHES})"
+    fi
+
+    if command -v sha256sum >/dev/null 2>&1; then
+        (cd "$WORKDIR" && sha256sum -c expected >/dev/null 2>&1) || error "checksum verification failed"
+    elif command -v shasum >/dev/null 2>&1; then
+        (cd "$WORKDIR" && shasum -a 256 -c expected >/dev/null 2>&1) || error "checksum verification failed"
+    else
+        error "no sha256 tool found (need sha256sum or shasum)"
+    fi
+}
+
+check_archive() {
+    PREFIX="slopguard-${VERSION}-${TARGET}"
+
+    tar -tzf "$ARCHIVE_PATH" > "${WORKDIR}/entries" 2>/dev/null || error "could not list archive contents"
+    tar -tvzf "$ARCHIVE_PATH" > "${WORKDIR}/entries-verbose" 2>/dev/null || error "could not list archive contents"
+
+    if [ "$(wc -l < "${WORKDIR}/entries" | tr -d ' ')" != "$(wc -l < "${WORKDIR}/entries-verbose" | tr -d ' ')" ]; then
+        error "unsafe archive: unexpected entry names"
+    fi
+
+    # Only regular files and directories are allowed (no symlinks, hardlinks, devices).
+    if cut -c1 "${WORKDIR}/entries-verbose" | grep -q '[^-d]'; then
+        error "unsafe archive: contains links or special files"
+    fi
+
+    while IFS= read -r entry; do
+        case "$entry" in
+        /* | .. | ../* | */../* | */..)
+            error "unsafe archive entry: ${entry}"
+            ;;
+        "$PREFIX" | "$PREFIX"/*) ;;
+        *)
+            error "unexpected archive entry: ${entry}"
+            ;;
+        esac
+    done < "${WORKDIR}/entries"
 }
 
 download_and_install() {
     ARCHIVE="slopguard-${VERSION}-${TARGET}.tar.gz"
-    URL="https://gitlab.com/api/v4/projects/${REPO_ENCODED}/packages/generic/slopguard/${VERSION}/${ARCHIVE}"
+    BASE_URL="https://gitlab.com/api/v4/projects/${REPO_ENCODED}/packages/generic/slopguard/${VERSION}"
+    URL="${BASE_URL}/${ARCHIVE}"
+    SUMS_URL="${BASE_URL}/SHA256SUMS"
 
     echo "Downloading slopguard v${VERSION} for ${TARGET}..."
 
-    TMPDIR=$(mktemp -d)
-    trap 'rm -rf "$TMPDIR"' EXIT
+    WORKDIR=$(mktemp -d)
+    trap 'rm -rf "$WORKDIR"' EXIT
+    ARCHIVE_PATH="${WORKDIR}/${ARCHIVE}"
 
-    if ! curl -fsSL "$URL" -o "${TMPDIR}/${ARCHIVE}"; then
+    if ! curl -fsSL "$URL" -o "$ARCHIVE_PATH"; then
         error "download failed. Check that v${VERSION} has a binary for ${TARGET}"
     fi
 
-    tar -xzf "${TMPDIR}/${ARCHIVE}" -C "$TMPDIR"
+    if ! curl -fsSL "$SUMS_URL" -o "${WORKDIR}/SHA256SUMS"; then
+        error "could not download SHA256SUMS for v${VERSION}; refusing to install an unverified binary"
+    fi
+
+    verify_checksum
+    check_archive
+
+    BINARY="${WORKDIR}/slopguard-${VERSION}-${TARGET}/slopguard"
+    tar -xzf "$ARCHIVE_PATH" -C "$WORKDIR" "slopguard-${VERSION}-${TARGET}/slopguard" || error "could not extract the binary"
+
+    if [ ! -f "$BINARY" ] || [ -L "$BINARY" ]; then
+        error "archive does not contain a regular slopguard binary"
+    fi
+
     mkdir -p "$INSTALL_DIR"
-    install -m 755 "${TMPDIR}/slopguard-${VERSION}-${TARGET}/slopguard" "${INSTALL_DIR}/slopguard"
+    install -m 755 "$BINARY" "${INSTALL_DIR}/slopguard"
 }
 
 print_success() {
