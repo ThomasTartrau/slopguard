@@ -91,6 +91,8 @@ Or install a specific version:
 curl -fsSL https://gitlab.com/ThomasTartrau/slopguard/-/raw/main/install.sh | VERSION=0.1.0 sh
 ```
 
+The installer verifies the SHA-256 of the downloaded archive against the `SHA256SUMS` file published with each release, rejects versions that are not plain semver, and refuses archives containing unsafe tar entries (absolute paths, `..` segments, links, files outside the release directory). Nothing is installed if a check fails.
+
 By default, the binary is installed to `~/.local/bin/`. Override with `INSTALL_DIR`:
 
 ```bash

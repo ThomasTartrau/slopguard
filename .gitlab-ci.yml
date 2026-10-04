@@ -291,5 +291,37 @@ build-binaries:
         --data-urlencode "name=${DIST}.tar.gz" \
         --data-urlencode "url=${PKG_URL}" \
         --data-urlencode "link_type=package"
+  artifacts:
+    paths:
+      - dist/*.tar.gz
+    expire_in: 1 day
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^slopguard-cli-v/'
+
+publish-checksums:
+  stage: release
+  image: $CI_RUST_IMAGE
+  needs:
+    - job: build-binaries
+      artifacts: true
+  script:
+    - VERSION="${CI_COMMIT_TAG#slopguard-cli-v}"
+    - PROJ_API="${CI_API_V4_URL}/projects/${CI_PROJECT_ID}"
+    - PKG_URL="${PROJ_API}/packages/generic/slopguard/${VERSION}/SHA256SUMS"
+    - LINKS_URL="${PROJ_API}/releases/${CI_COMMIT_TAG}/assets/links"
+    - cd dist
+    - sha256sum *.tar.gz > SHA256SUMS
+    - cat SHA256SUMS
+    - |
+      curl --fail --header "JOB-TOKEN: $CI_JOB_TOKEN" \
+        --upload-file SHA256SUMS \
+        "${PKG_URL}"
+    - |
+      curl --fail --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
+        --request POST \
+        "${LINKS_URL}" \
+        --data-urlencode "name=SHA256SUMS" \
+        --data-urlencode "url=${PKG_URL}" \
+        --data-urlencode "link_type=other"
   rules:
     - if: '$CI_COMMIT_TAG =~ /^slopguard-cli-v/'
