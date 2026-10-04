@@ -134,7 +134,7 @@
 ### Cache
 
 - [x] Cache AI results by file content hash + rule version
-- [x] Store in .slopguard-cache/ (gitignored)
+- [x] Store in the user cache dir, entries signed with a per-user key (D41)
 - [x] `--no-cache` flag to force re-analysis
 
 ---

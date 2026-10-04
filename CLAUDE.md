@@ -6,7 +6,7 @@ A Rust CLI tool that catches AI-generated code patterns ("slop") and common corr
 
 Read these files before working:
 - ARCHITECTURE.md - workspace structure, crate responsibilities, data flow
-- DECISIONS.md - all design decisions with rationale (D1-D40)
+- DECISIONS.md - all design decisions with rationale (D1-D41)
 - ROADMAP.md - what to build and in what order
 - RULES.md - the builtin rules, their YAML format, and ast-grep syntax gotchas
 
@@ -20,7 +20,7 @@ Delivered features:
 - Per-rule options: `[rules.options.<id>]` (today only `no-assertion-free-test`'s `assert_functions`).
 - Autofix: `slopguard scan --fix` applies in-place rewrites for rules marked `autofix_safe` (`--fix --dry-run` to preview without writing, `--allow-dirty` to bypass the clean-tree guard, which also refuses outside git). An external rule (`custom_dirs`, `[[rules.sources]]`) is rewritten only when its id is listed in the user-only `[fix] allow_external`.
 - AI pipeline: LLM-backed rules run when a provider is configured; `slopguard scan --no-ai` skips them. An optional classifier (`[ai.classifier]`, Jev) can replace the LLM confirmation.
-- Cache: per-file findings keyed by content hash, AI results under `<cache-dir>/ai/` (`--no-cache`, `--cache-dir`).
+- Cache: per-file findings keyed by content hash, AI results under `<cache-dir>/ai/` keyed on the exact match (`--no-cache`, `--cache-dir`). Default dir `<user cache>/slopguard/projects/<hash>`; every entry is HMAC-signed with `<user cache>/slopguard/cache.key`, unsigned entries are ignored (D41).
 - External rule sources: `[[rules.sources]]` loads rules from git repositories or local paths (`--offline` to skip fetching).
 - `scan --report-unused-disable` reports inline disables that suppress nothing.
 - Metrics: `slopguard stats` summarizes findings (top rules, top files).

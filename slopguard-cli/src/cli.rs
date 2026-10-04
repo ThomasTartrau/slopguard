@@ -96,7 +96,8 @@ pub enum Command {
         #[arg(long)]
         no_cache: bool,
 
-        /// Directory to store the scan cache (overrides SLOPGUARD_CACHE_DIR and config)
+        /// Directory to store the scan cache (overrides SLOPGUARD_CACHE_DIR and config;
+        /// default: a per-project directory under <user cache>/slopguard)
         #[arg(long, value_name = "PATH")]
         cache_dir: Option<PathBuf>,
 
@@ -178,7 +179,8 @@ pub enum Command {
         #[arg(long)]
         no_cache: bool,
 
-        /// Directory to store the scan cache (overrides SLOPGUARD_CACHE_DIR and config)
+        /// Directory to store the scan cache (overrides SLOPGUARD_CACHE_DIR and config;
+        /// default: a per-project directory under <user cache>/slopguard)
         #[arg(long, value_name = "PATH")]
         cache_dir: Option<PathBuf>,
 
@@ -228,7 +230,8 @@ pub enum Command {
         #[arg(long)]
         no_cache: bool,
 
-        /// Directory to store the scan cache
+        /// Directory to store the scan cache (default: a per-project directory under
+        /// <user cache>/slopguard)
         #[arg(long, value_name = "PATH")]
         cache_dir: Option<PathBuf>,
 

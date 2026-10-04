@@ -85,6 +85,20 @@ pub(crate) async fn call_llm(
     result.json::<AiVerdict>().ok()
 }
 
+/// The parts identifying one match in the cache key: rule id, file path and
+/// line/column span. Without them, two matches of one rule in one file would
+/// share a verdict.
+pub(crate) fn match_identity(finding: &Finding) -> [String; 6] {
+    [
+        finding.rule_id.as_str().to_string(),
+        finding.file.display().to_string(),
+        finding.line.to_string(),
+        finding.column.to_string(),
+        finding.end_line.to_string(),
+        finding.end_column.to_string(),
+    ]
+}
+
 /// Confirm a single candidate, consulting the cache first when provided.
 async fn confirm(
     provider: &dyn AgentProvider,
@@ -103,7 +117,14 @@ async fn confirm(
         &filename,
         &candidate.rule_context,
     );
-    let key = cache_key(&[&candidate.file_content, &prompt, &candidate.model]);
+    let mut parts = vec![
+        candidate.file_content.as_str(),
+        prompt.as_str(),
+        candidate.model.as_str(),
+    ];
+    let identity = match_identity(&candidate.finding);
+    parts.extend(identity.iter().map(String::as_str));
+    let key = cache_key(&parts);
 
     let verdict = match cache.and_then(|c| c.get(&key)) {
         Some(cached) => cached,
@@ -180,12 +201,14 @@ pub fn run_ai_pass(
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use ironflow_core::error::AgentError;
     use ironflow_core::provider::{AgentConfig, AgentOutput, AgentProvider, InvokeFuture};
     use serde_json::json;
+    use slopguard_core::cache::CacheKey;
     use slopguard_core::rule::{Category, RuleId, Severity};
     use tempfile::tempdir;
 
@@ -227,6 +250,10 @@ mod tests {
                 })
             })
         }
+    }
+
+    fn test_key() -> CacheKey {
+        CacheKey::from_bytes([7; 32])
     }
 
     fn candidate(line: usize, content: &str) -> AiCandidate {
@@ -327,7 +354,7 @@ mod tests {
     #[test]
     fn cache_prevents_second_llm_call() {
         let dir = tempdir().unwrap();
-        let cache = AiCache::new(dir.path());
+        let cache = AiCache::new(dir.path(), test_key());
         let provider = MockProvider::new(json!({
             "is_issue": true,
             "reason": "cached",
@@ -359,5 +386,80 @@ mod tests {
             1,
             "second pass must be served from cache, no new LLM call"
         );
+    }
+
+    #[test]
+    fn cache_key_differs_per_match_position() {
+        let dir = tempdir().unwrap();
+        let cache = AiCache::new(dir.path(), test_key());
+        let provider = MockProvider::new(json!({
+            "is_issue": true,
+            "reason": "per match",
+            "confidence": 0.7
+        }));
+        // Same rule, same file, same line (so the same prompt): only the
+        // column tells the two matches apart.
+        let candidates = || {
+            let first = candidate(1, "let a = x; let b = x;\n");
+            let mut second = candidate(1, "let a = x; let b = x;\n");
+            second.finding.column = 20;
+            second.finding.end_column = 21;
+            vec![first, second]
+        };
+
+        let first = run_ai_pass(&provider, candidates(), 4, Some(&cache));
+        assert_eq!(first.len(), 2);
+        assert_eq!(
+            provider.calls.load(Ordering::SeqCst),
+            2,
+            "each match gets its own verdict"
+        );
+
+        let second = run_ai_pass(&provider, candidates(), 4, Some(&cache));
+        assert_eq!(second.len(), 2);
+        assert_eq!(
+            provider.calls.load(Ordering::SeqCst),
+            2,
+            "both verdicts are served from the cache"
+        );
+    }
+
+    #[test]
+    fn forged_cache_verdict_triggers_new_llm_call() {
+        let dir = tempdir().unwrap();
+        let cache = AiCache::new(dir.path(), test_key());
+        let provider = MockProvider::new(json!({
+            "is_issue": true,
+            "reason": "real issue",
+            "confidence": 0.9
+        }));
+
+        let first = run_ai_pass(
+            &provider,
+            vec![candidate(1, "// SAFETY: x\n")],
+            4,
+            Some(&cache),
+        );
+        assert_eq!(first.len(), 1);
+
+        // Overwrite the stored verdict with an unsigned "not an issue".
+        let mut forged = 0;
+        for entry in fs::read_dir(cache.dir()).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().is_some_and(|ext| ext == "json") {
+                fs::write(&path, br#"{"is_issue":false,"reason":"","confidence":0.0}"#).unwrap();
+                forged += 1;
+            }
+        }
+        assert_eq!(forged, 1);
+
+        let second = run_ai_pass(
+            &provider,
+            vec![candidate(1, "// SAFETY: x\n")],
+            4,
+            Some(&cache),
+        );
+        assert_eq!(second.len(), 1, "the forged verdict must be ignored");
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 2);
     }
 }

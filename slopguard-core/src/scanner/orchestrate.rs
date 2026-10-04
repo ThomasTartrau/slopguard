@@ -6,9 +6,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use ast_grep_language::SupportLang;
+use log::debug;
 use rayon::prelude::*;
 
-use crate::cache::{file_content_hash, rules_hash, CacheEntry, CacheStore};
+use crate::cache::{file_content_hash, rules_hash, CacheEntry, CacheKey, CacheStore};
 use crate::config::Config;
 use crate::cross_file::FileSymbols;
 use crate::disable::unused_disable_findings;
@@ -173,6 +174,7 @@ fn scan_collected_cached(
     compiled: &CompiledRules,
     rules: &[Rule],
     cache_dir: &Path,
+    key: CacheKey,
     prune: bool,
 ) -> ScanResult {
     // The cached path always applies disable comments: the raw pass used by
@@ -182,7 +184,8 @@ fn scan_collected_cached(
     let collect_symbols = project.iter().any(|e| e.needs_symbols());
     let collect_imports = !compiled.resolution.is_empty();
     let current_rules_hash = rules_hash(rules);
-    let store = CacheStore::with_dir(cache_dir.to_path_buf()).scoped_to_rules(&current_rules_hash);
+    let store =
+        CacheStore::with_dir(cache_dir.to_path_buf(), key).scoped_to_rules(&current_rules_hash);
     let rules_changed = store
         .check_rules_changed(&current_rules_hash)
         .unwrap_or(true);
@@ -316,10 +319,11 @@ pub fn scan(paths: &[PathBuf], rules: &[Rule], config: &Config) -> Result<ScanRe
 /// entry (and whose rules have not changed) return cached findings without
 /// reparsing.
 ///
-/// `cache_dir` is the directory where cache files are stored. When a custom
-/// cache directory is specified (via `--cache-dir`, `SLOPGUARD_CACHE_DIR`,
-/// or `scan.cache_dir` in config), pass it directly. Otherwise pass the
-/// project root and use `CacheStore::new` which appends `.slopguard-cache`.
+/// `cache_dir` is the directory where cache files are stored, used as is (the
+/// CLI defaults it to a per-project directory under the user cache, see
+/// [`crate::cache::project_cache_dir`]). Entries are signed with the user's
+/// [`CacheKey`]; when that key cannot be loaded or created, the scan runs
+/// uncached rather than trusting unsigned entries.
 ///
 /// Stale entries are pruned only when every path is a directory: a file target
 /// (the pre-commit hook) is a partial scan and must keep the other entries.
@@ -329,11 +333,28 @@ pub fn scan_cached(
     config: &Config,
     cache_dir: &Path,
 ) -> Result<ScanResult, ScanError> {
+    match CacheKey::load_or_create_default() {
+        Ok(key) => scan_cached_with_key(paths, rules, config, cache_dir, key),
+        Err(err) => {
+            debug!("cache key unavailable ({err}), scanning without cache");
+            scan(paths, rules, config)
+        }
+    }
+}
+
+/// [`scan_cached`] with an explicit signing key instead of the user's.
+pub fn scan_cached_with_key(
+    paths: &[PathBuf],
+    rules: &[Rule],
+    config: &Config,
+    cache_dir: &Path,
+    key: CacheKey,
+) -> Result<ScanResult, ScanError> {
     let compiled = compile_rules(rules, config)?;
     let set = ScanSet::walk(paths, &compiled, config)?;
     let prune = paths.iter().all(|path| path.is_dir());
     Ok(scan_collected_cached(
-        &set, &compiled, rules, cache_dir, prune,
+        &set, &compiled, rules, cache_dir, key, prune,
     ))
 }
 
@@ -410,16 +431,35 @@ fn unused_from_raw(files: &[(PathBuf, SupportLang)], raw: &[Finding]) -> Vec<Fin
 }
 
 /// Cached variant of [`scan_files`]. Cache pruning is skipped: a partial scan
-/// must not evict the entries of files it did not look at.
+/// must not evict the entries of files it did not look at. Like
+/// [`scan_cached`], it runs uncached when the user's [`CacheKey`] is
+/// unavailable.
 pub fn scan_files_cached(
     files: &[PathBuf],
     rules: &[Rule],
     config: &Config,
     cache_dir: &Path,
 ) -> Result<ScanResult, ScanError> {
+    match CacheKey::load_or_create_default() {
+        Ok(key) => scan_files_cached_with_key(files, rules, config, cache_dir, key),
+        Err(err) => {
+            debug!("cache key unavailable ({err}), scanning without cache");
+            scan_files(files, rules, config)
+        }
+    }
+}
+
+/// [`scan_files_cached`] with an explicit signing key instead of the user's.
+pub fn scan_files_cached_with_key(
+    files: &[PathBuf],
+    rules: &[Rule],
+    config: &Config,
+    cache_dir: &Path,
+    key: CacheKey,
+) -> Result<ScanResult, ScanError> {
     let compiled = compile_rules(rules, config)?;
     let set = ScanSet::explicit(files, &compiled, config)?;
     Ok(scan_collected_cached(
-        &set, &compiled, rules, cache_dir, false,
+        &set, &compiled, rules, cache_dir, key, false,
     ))
 }

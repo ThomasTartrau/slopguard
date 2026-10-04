@@ -15,7 +15,7 @@ enable = []
 [scan]
 ignores = []
 # cache_dir is a user-only key (user config or --trust-repo-config):
-# cache_dir = ".slopguard-cache"
+# cache_dir = "/path/to/cache"   # default: <user cache>/slopguard/projects/<hash>
 
 [output]
 format = "text"
