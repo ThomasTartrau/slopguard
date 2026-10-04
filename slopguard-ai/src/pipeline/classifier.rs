@@ -37,7 +37,7 @@ use crate::provider::non_empty_env;
 
 use super::context::{extract_context, extract_numbered, CONTEXT_RADIUS};
 use super::prompt::render_prompt;
-use super::{call_llm, AiCandidate};
+use super::{call_llm, match_identity, AiCandidate};
 
 /// What replaces `{{code}}` in the noul instructions: the code itself travels
 /// as the request `state` (line-numbered), not inline in the instructions.
@@ -156,16 +156,22 @@ fn cluster_instructions(candidate: &AiCandidate) -> String {
     )
 }
 
-/// The per-candidate cache key. Structure unchanged
-/// (`[file_content, rule_id, instructions, jev_model]`); the instructions now
-/// carry the candidate line, so distinct candidates get distinct keys.
+/// The per-candidate cache key: `[file_content, rule_id, instructions,
+/// jev_model]` followed by the match identity (path and line/column span, see
+/// [`match_identity`]), so two matches of one rule in one file never share a
+/// cached probability, even on the same line.
 fn candidate_key(candidate: &AiCandidate, jev_model: &str) -> String {
-    cache_key(&[
-        &candidate.file_content,
+    let instructions = cluster_instructions(candidate);
+    let mut parts = vec![
+        candidate.file_content.as_str(),
         candidate.finding.rule_id.as_str(),
-        &cluster_instructions(candidate),
+        instructions.as_str(),
         jev_model,
-    ])
+    ];
+    let identity = match_identity(&candidate.finding);
+    // The rule id is already part of the structure above.
+    parts.extend(identity[1..].iter().map(String::as_str));
+    cache_key(&parts)
 }
 
 /// The deterministic question key for the `index`th member of a cluster.

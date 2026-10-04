@@ -2,6 +2,7 @@
 //! implementation module stays small (repo convention: `config/tests.rs`,
 //! `rule/parse_tests.rs`).
 
+use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -11,6 +12,7 @@ use ironflow_core::decision::{
 use ironflow_core::error::AgentError;
 use ironflow_core::provider::{AgentConfig, AgentOutput, InvokeFuture};
 use serde_json::json;
+use slopguard_core::cache::CacheKey;
 use slopguard_core::rule::{Category, RuleId, Severity};
 use tempfile::tempdir;
 
@@ -65,6 +67,11 @@ impl DecisionProvider for FailingDecider {
             })
         })
     }
+}
+
+/// A fixed signing key for the AI cache.
+fn test_key() -> CacheKey {
+    CacheKey::from_bytes([7; 32])
 }
 
 /// The default batching caps (mirrors `[ai.classifier]` defaults).
@@ -285,7 +292,7 @@ fn raw_probability_cached_threshold_applied_after_cache() {
     // the cache, with NO new decider call. This proves the threshold is
     // applied after the cache, not baked into it.
     let dir = tempdir().unwrap();
-    let cache = AiCache::new(dir.path());
+    let cache = AiCache::new(dir.path(), test_key());
     let decider = MockDecider::new(0.8);
 
     let first = run_classifier_pass(
@@ -499,7 +506,7 @@ fn cache_hit_skips_call_only_miss_batched() {
     // miss triggers a network call.
     let content = many_lines(120);
     let dir = tempdir().unwrap();
-    let cache = AiCache::new(dir.path());
+    let cache = AiCache::new(dir.path(), test_key());
     let hit = candidate_at("rule-a", 2, &content);
     let miss = candidate_at("rule-a", 100, &content);
     cache
@@ -539,7 +546,7 @@ fn two_candidates_same_rule_distinct_keys() {
     );
 
     let dir = tempdir().unwrap();
-    let cache = AiCache::new(dir.path());
+    let cache = AiCache::new(dir.path(), test_key());
     let key_a = candidate_key(&a, "jev-latest");
     let key_b = candidate_key(&b, "jev-latest");
     let decider = MockDecider::new(0.9);
@@ -637,4 +644,52 @@ fn huge_concurrency_does_not_panic() {
         assert_eq!(findings.len(), 2, "concurrency {concurrency}");
         assert_eq!(decider.calls.load(Ordering::SeqCst), 2);
     }
+}
+
+#[test]
+fn cache_key_differs_per_column_on_same_line() {
+    // Two matches of one rule on one line: the instructions are identical, so
+    // only the column span tells them apart.
+    let content = many_lines(30);
+    let a = candidate_at("rule-a", 5, &content);
+    let mut b = candidate_at("rule-a", 5, &content);
+    b.finding.column = 9;
+    b.finding.end_column = 12;
+    assert_ne!(
+        candidate_key(&a, "jev-latest"),
+        candidate_key(&b, "jev-latest"),
+        "two matches on the same line must not share a cached probability"
+    );
+}
+
+#[test]
+fn forged_cache_probability_is_ignored() {
+    // An unsigned probability of 0.0, as a repository could ship to silence a
+    // rule, must not be read: the decider is called and the candidate fires.
+    let content = many_lines(30);
+    let dir = tempdir().unwrap();
+    let cache = AiCache::new(dir.path(), test_key());
+    let target = candidate_at("rule-a", 5, &content);
+    fs::create_dir_all(cache.dir()).unwrap();
+    fs::write(
+        cache
+            .dir()
+            .join(format!("{}.json", candidate_key(&target, "jev-latest"))),
+        b"0.0",
+    )
+    .unwrap();
+
+    let decider = MockDecider::new(0.9);
+    let findings = run_classifier_pass(
+        &decider,
+        None,
+        vec![target],
+        "jev-latest",
+        0.7,
+        4,
+        batch(),
+        Some(&cache),
+    );
+    assert_eq!(findings.len(), 1, "the forged probability is ignored");
+    assert_eq!(decider.calls.load(Ordering::SeqCst), 1);
 }

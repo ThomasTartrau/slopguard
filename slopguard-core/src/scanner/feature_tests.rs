@@ -1,12 +1,76 @@
 use std::collections::HashSet;
-use std::fs::{create_dir, write};
+use std::fs::{create_dir, read_dir, write};
+use std::path::{Path, PathBuf};
 
 use tempfile::tempdir;
 
 use super::test_support::*;
 use super::*;
+use crate::cache::{CacheEntry, CacheKey};
 use crate::config::Config;
-use crate::rule::RuleId;
+use crate::finding::ScanResult;
+use crate::rule::{Rule, RuleId};
+
+fn test_cache_key() -> CacheKey {
+    CacheKey::from_bytes([7; 32])
+}
+
+// Shadow the public entry points so the tests sign with a fixed key instead of
+// creating one in the user's cache directory.
+fn scan_cached(
+    paths: &[PathBuf],
+    rules: &[Rule],
+    config: &Config,
+    cache_dir: &Path,
+) -> Result<ScanResult, ScanError> {
+    scan_cached_with_key(paths, rules, config, cache_dir, test_cache_key())
+}
+
+fn scan_files_cached(
+    files: &[PathBuf],
+    rules: &[Rule],
+    config: &Config,
+    cache_dir: &Path,
+) -> Result<ScanResult, ScanError> {
+    scan_files_cached_with_key(files, rules, config, cache_dir, test_cache_key())
+}
+
+#[test]
+fn scan_cache_ignores_forged_empty_entry() {
+    let src_dir = tempdir().unwrap();
+    let cache_dir = tempdir().unwrap();
+    let cache_path = cache_dir.path().join("cache");
+    write(
+        src_dir.path().join("main.rs"),
+        "fn main() {\n    foo().unwrap();\n}\n",
+    )
+    .unwrap();
+    let rules = [unwrap_rule()];
+    let config = Config::default();
+    let paths = [src_dir.path().to_path_buf()];
+
+    let first = scan_cached(&paths, &rules, &config, &cache_path).unwrap();
+    assert_eq!(first.findings.len(), 1);
+
+    // Replace every entry with an unsigned one claiming the file is clean, as a
+    // repository shipping its own cache could.
+    let forged = rmp_serde::to_vec_named(&CacheEntry::default()).unwrap();
+    let mut replaced = 0;
+    for entry in read_dir(&cache_path).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().is_some_and(|ext| ext == "bin") {
+            write(&path, &forged).unwrap();
+            replaced += 1;
+        }
+    }
+    assert_eq!(replaced, 1);
+
+    let second = scan_cached(&paths, &rules, &config, &cache_path).unwrap();
+    assert_eq!(second.findings.len(), 1, "the forged entry must be ignored");
+    let stats = second.cache_stats.as_ref().unwrap();
+    assert_eq!(stats.cached, 0);
+    assert_eq!(stats.changed, 1);
+}
 
 #[test]
 fn scan_files_cached_keeps_other_entries() {

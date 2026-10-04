@@ -16,6 +16,7 @@ use slopguard_ai::{
     run_classifier_pass, AiCache, AiCandidate, BatchConfig, DEFAULT_MODEL,
 };
 use slopguard_core::baseline::{project_root, Baseline};
+use slopguard_core::cache::CacheKey;
 use slopguard_core::config::{Config, OutputFormat};
 use slopguard_core::escalation::apply_escalation;
 use slopguard_core::finding::{Finding, ScanResult};
@@ -719,6 +720,24 @@ fn cap_ai_candidates(
     (kept, overflow)
 }
 
+/// The AI verdict cache, unless `--no-cache` is set. Entries are signed with
+/// the user's cache key; when that key is unavailable the cache is skipped and
+/// verdicts are recomputed rather than read unsigned.
+fn ai_cache(no_cache: bool, cache_dir: &Path) -> Option<AiCache> {
+    if no_cache {
+        return None;
+    }
+    match CacheKey::load_or_create_default() {
+        Ok(key) => Some(AiCache::new(cache_dir, key)),
+        Err(err) => {
+            // CLI diagnostic to stderr, not application logging.
+            // slopguard-disable-next-line no-println-in-prod
+            eprintln!("warning: AI cache disabled ({err})");
+            None
+        }
+    }
+}
+
 /// Classify candidates with the System One provider (Jev).
 ///
 /// When the classifier cannot be built (disabled, missing key), a single
@@ -752,7 +771,7 @@ fn run_classifier_phase(
         .iter()
         .any(|c| c.reason_mode == ReasonMode::Generated);
     let llm = needs_llm.then(|| build_provider(&config.ai).ok()).flatten();
-    let cache = (!no_cache).then(|| AiCache::new(cache_dir));
+    let cache = ai_cache(no_cache, cache_dir);
     let jev_model = resolve_jev_model(&config.ai.classifier);
     findings.extend(run_classifier_pass(
         &*decider,
@@ -796,7 +815,7 @@ fn run_llm_phase(
         return Ok(Vec::new());
     }
     let (candidates, mut findings) = cap_ai_candidates(candidates, config);
-    let cache = (!no_cache).then(|| AiCache::new(cache_dir));
+    let cache = ai_cache(no_cache, cache_dir);
     findings.extend(run_ai_pass(
         &*provider,
         candidates,

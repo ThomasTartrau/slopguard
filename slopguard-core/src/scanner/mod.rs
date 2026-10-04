@@ -34,8 +34,8 @@ mod orchestrate;
 mod project;
 
 pub use orchestrate::{
-    count_severities, scan, scan_cached, scan_files, scan_files_cached, scan_files_unused_disables,
-    scan_unused_disables,
+    count_severities, scan, scan_cached, scan_cached_with_key, scan_files, scan_files_cached,
+    scan_files_cached_with_key, scan_files_unused_disables, scan_unused_disables,
 };
 
 #[derive(Debug, Error)]

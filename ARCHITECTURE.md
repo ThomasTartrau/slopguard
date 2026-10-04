@@ -66,7 +66,8 @@ The library crate. Responsible for:
   without reparsing.
 - Import resolution against Cargo.toml / package.json / tsconfig.json
   (resolution/, D32)
-- Per-file scan cache keyed by content hash (cache.rs)
+- Per-file scan cache keyed by content hash, entries signed with HMAC-SHA256
+  under a per-user key, default dir under the user cache (cache.rs, D41)
 - Inline disable comment parsing and the unused-disable report (disable.rs)
 - `#[cfg(test)]` and test-path detection for `skip_test_code` (test_filter.rs)
 - Autofix: `rewrite` application, fix point, dry-run diff (fix/, D31)
@@ -92,7 +93,8 @@ candidates, then this crate confirms or rejects each one:
   returns a probability per candidate, batched per context cluster (D35, D36)
 - pipeline/context.rs: the code window sent with a candidate (25 lines each
   side)
-- cache.rs: AI verdicts and probabilities under `<cache-dir>/ai/`
+- cache.rs: AI verdicts and probabilities under `<cache-dir>/ai/`, signed like
+  the scan cache and keyed on the exact match (rule, path, span; D41)
 
 It is not a `RuleEngine`: it is async, needs an external provider and is
 orchestrated by `slopguard-cli` (D30). Dependencies: ironflow-core, tokio.
@@ -270,7 +272,7 @@ path = "../shared-rules"
 
 Git sources are shallow-fetched with the machine's `git` into
 `<user cache>/slopguard/sources/<hash>` (`SLOPGUARD_SOURCES_CACHE` overrides
-the root) and treated as untrusted (D41). Git runs with
+the root) and treated as untrusted (D42). Git runs with
 `GIT_ALLOW_PROTOCOL=https:ssh` (`SLOPGUARD_GIT_ALLOW_PROTOCOL` overrides it,
 for `file://` test remotes), a url or ref starting with `-` is rejected, and
 the fetch puts `--` before them. Each online run refreshes the checkout and a
@@ -308,7 +310,7 @@ assert_functions = ["run", "check_*"]    # external helpers that assert
 [scan]
 ignores = ["target/", "generated/", "*.generated.rs"]
 test_paths = ["**/it/**"]           # extra globs treated as test code
-# cache_dir = ".slopguard-cache"
+# cache_dir = "/path/to/cache"   # default: <user cache>/slopguard/projects/<hash>
 
 [output]
 format = "text"    # text | json | sarif | html
