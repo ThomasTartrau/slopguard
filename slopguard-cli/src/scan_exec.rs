@@ -169,11 +169,39 @@ pub fn collect_findings(opts: CollectOpts) -> Result<(ScanResult, Config), AppEr
 
     let sources = resolve_config_sources(&config, offline)?;
     let mut rules = load_effective_rules(&config, &sources)?;
+    retain_requested_rules(&mut rules, rule_filter.as_deref(), no_ai)?;
 
-    if let Some(ref filter_id) = rule_filter {
+    let targets = if diff {
+        let cwd = env::current_dir().map_err(AppError::Io)?;
+        let changed = under_requested_paths(changed_files(&cwd, diff_base.as_deref())?, &paths);
+        ScanTargets::Files(changed)
+    } else {
+        ScanTargets::Walk(paths)
+    };
+
+    let result = scan_with_rules(
+        targets,
+        rules,
+        &config,
+        no_cache,
+        cache_dir,
+        report_unused,
+        diff_base,
+    )?;
+    Ok((result, config))
+}
+
+/// Narrow the loaded rules to the `--rule` filter (an unknown id is an error,
+/// with a suggestion) and, with `--no-ai`, drop the AI rules.
+fn retain_requested_rules(
+    rules: &mut Vec<Rule>,
+    rule_filter: Option<&str>,
+    no_ai: bool,
+) -> Result<(), AppError> {
+    if let Some(filter_id) = rule_filter {
         let found = rules.iter().any(|r| r.id.as_str() == filter_id);
         if !found {
-            let suggestion = suggest_similar(filter_id, &rules);
+            let suggestion = suggest_similar(filter_id, rules);
             // CLI diagnostics to stderr, not application logging (as in `main.rs`).
             if let Some(suggested) = suggestion {
                 // slopguard-disable-next-line no-println-in-prod
@@ -195,24 +223,29 @@ pub fn collect_findings(opts: CollectOpts) -> Result<(ScanResult, Config), AppEr
     if no_ai {
         rules.retain(|r| r.ai_check.is_none());
     }
+    Ok(())
+}
 
+/// Run the AST pass (cached or not), the AI pass and the unused-disable report
+/// over `targets` with already resolved `rules` and `config`. `diff_base` is
+/// only recorded in the stats of a `--diff` run (`ScanTargets::Files`).
+fn scan_with_rules(
+    targets: ScanTargets,
+    rules: Vec<Rule>,
+    config: &Config,
+    no_cache: bool,
+    cache_dir: Option<PathBuf>,
+    report_unused: bool,
+    diff_base: Option<String>,
+) -> Result<ScanResult, AppError> {
     let (ai_rules, ast_rules): (Vec<Rule>, Vec<Rule>) =
         rules.into_iter().partition(|r| r.ai_check.is_some());
 
-    let targets = if diff {
-        let cwd = env::current_dir().map_err(AppError::Io)?;
-        let changed = under_requested_paths(changed_files(&cwd, diff_base.as_deref())?, &paths);
-        ScanTargets::Files(changed)
-    } else {
-        ScanTargets::Walk(paths)
-    };
-
-    let resolved_cache_dir = resolve_cache_dir(cache_dir, &config);
-    let mut result = targets.run(&ast_rules, &config, no_cache, &resolved_cache_dir)?;
+    let resolved_cache_dir = resolve_cache_dir(cache_dir, config);
+    let mut result = targets.run(&ast_rules, config, no_cache, &resolved_cache_dir)?;
 
     if !ai_rules.is_empty() {
-        let ai_findings =
-            run_ai_phase(&targets, &ai_rules, &config, no_cache, &resolved_cache_dir)?;
+        let ai_findings = run_ai_phase(&targets, &ai_rules, config, no_cache, &resolved_cache_dir)?;
         if !ai_findings.is_empty() {
             merge_findings(&mut result, ai_findings);
         }
@@ -226,8 +259,8 @@ pub fn collect_findings(opts: CollectOpts) -> Result<(ScanResult, Config), AppEr
         let mut all_rules = ast_rules;
         all_rules.extend(ai_rules);
         let unused = match &targets {
-            ScanTargets::Walk(p) => scan_unused_disables(p, &all_rules, &config)?,
-            ScanTargets::Files(f) => scan_files_unused_disables(f, &all_rules, &config)?,
+            ScanTargets::Walk(p) => scan_unused_disables(p, &all_rules, config)?,
+            ScanTargets::Files(f) => scan_files_unused_disables(f, &all_rules, config)?,
         };
         if !unused.is_empty() {
             merge_findings(&mut result, unused);
@@ -240,7 +273,7 @@ pub fn collect_findings(opts: CollectOpts) -> Result<(ScanResult, Config), AppEr
         result.stats.files_changed = Some(files.len());
     }
 
-    Ok((result, config))
+    Ok(result)
 }
 
 pub(crate) fn run_scan(opts: ScanOpts) -> Result<bool, AppError> {
@@ -370,8 +403,9 @@ pub(crate) struct FixOpts {
 }
 
 /// Refuse to rewrite files when the working tree has uncommitted changes under
-/// the scanned paths. Outside a git repository there is nothing to guard, so it
-/// passes silently. `--dry-run` and `--allow-dirty` skip this entirely.
+/// the scanned paths. Outside a git repository uncommitted work cannot be
+/// protected, so it refuses too. `--dry-run` and `--allow-dirty` skip this
+/// entirely.
 fn guard_clean_tree(paths: &[PathBuf]) -> Result<(), AppError> {
     // Probe the repository that holds the scanned paths, not the process cwd, so
     // `slopguard scan /elsewhere --fix` guards the tree it will actually rewrite.
@@ -394,7 +428,18 @@ fn guard_clean_tree(paths: &[PathBuf]) -> Result<(), AppError> {
         .unwrap_or_else(|| PathBuf::from("."));
     let dirty = match git::dirty_files(&probe) {
         Ok(dirty) => dirty,
-        Err(GitError::NotARepository { .. }) => return Ok(()),
+        Err(GitError::NotARepository { .. }) => {
+            // CLI diagnostic to stderr, not application logging.
+            // slopguard-disable-next-line no-println-in-prod
+            eprintln!(
+                "error: scanned paths are not inside a git repository, so uncommitted \
+                 changes cannot be protected; pass --allow-dirty to rewrite anyway, or \
+                 preview with --dry-run"
+            );
+            return Err(AppError::Io(io::Error::other(
+                "refusing to --fix outside a git repository",
+            )));
+        }
         Err(err) => return Err(err.into()),
     };
     let under = under_requested_paths(dirty, paths);
@@ -434,21 +479,15 @@ fn run_fix(opts: FixOpts) -> Result<bool, AppError> {
     } = opts;
 
     let mut config = resolve_config(config_path.as_deref())?;
-    config.rules.disable.extend(cli_disable.iter().cloned());
-    config.rules.enable.extend(cli_enable.iter().cloned());
-    config
-        .scan
-        .test_paths
-        .extend(cli_test_paths.iter().cloned());
+    config.rules.disable.extend(cli_disable);
+    config.rules.enable.extend(cli_enable);
+    config.scan.test_paths.extend(cli_test_paths);
 
+    // Sources are resolved (and fetched) once: the verification re-scan below
+    // reuses these rules, so it checks the exact ruleset that was applied.
     let sources = resolve_config_sources(&config, offline)?;
     let mut rules = load_effective_rules(&config, &sources)?;
-    if let Some(filter_id) = &rule_filter {
-        rules.retain(|r| r.id.as_str() == filter_id);
-    }
-    if no_ai {
-        rules.retain(|r| r.ai_check.is_none());
-    }
+    retain_requested_rules(&mut rules, rule_filter.as_deref(), no_ai)?;
 
     if !dry_run && !allow_dirty {
         guard_clean_tree(&paths)?;
@@ -493,21 +532,15 @@ fn run_fix(opts: FixOpts) -> Result<bool, AppError> {
 
     // Re-scan from disk to report what could not be fixed; this drives the exit
     // code (0 only when no finding remains).
-    let (mut result, _config) = collect_findings(CollectOpts {
-        paths,
-        config_path,
-        cli_disable,
-        cli_enable,
-        cli_test_paths,
-        rule_filter,
-        no_cache: true,
-        cache_dir: None,
-        no_ai,
-        report_unused: false,
-        diff: false,
-        diff_base: None,
-        offline,
-    })?;
+    let mut result = scan_with_rules(
+        ScanTargets::Walk(paths),
+        rules,
+        &config,
+        true,
+        None,
+        false,
+        None,
+    )?;
     apply_baseline(&mut result, no_baseline, baseline_path)?;
     let remaining = result.findings.len();
 
