@@ -17,6 +17,7 @@ use strsim::normalized_levenshtein;
 use thiserror::Error;
 
 use slopguard_core::baseline::BaselineError;
+use slopguard_core::cache::project_cache_dir;
 use slopguard_core::config::{load_config, load_config_file, Config, ConfigError, ProjectTrust};
 use slopguard_core::git::GitError;
 use slopguard_core::preset::{presets_help, Preset};
@@ -97,7 +98,7 @@ pub(crate) fn resolve_cache_dir(cli_flag: Option<PathBuf>, config: &Config) -> P
         .or_else(|| config.scan.cache_dir.clone())
         .unwrap_or_else(|| {
             let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-            cwd.join(".slopguard-cache")
+            project_cache_dir(&cwd)
         })
 }
 

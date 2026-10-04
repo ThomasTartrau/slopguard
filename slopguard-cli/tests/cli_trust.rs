@@ -178,3 +178,39 @@ fn global_config_zero_concurrency_fails_with_config_error() {
             "[ai].concurrency must be between 1 and 64, got 0",
         ));
 }
+
+#[test]
+fn default_scan_cache_lives_outside_the_project() {
+    // WHY: a cache inside the scanned repo could be committed with forged
+    // entries that silence findings. The default cache is per-user.
+    let project = tempdir().unwrap();
+    let home = tempdir().unwrap();
+    let cache_home = home.path().join("cache-home");
+    write(project.path().join("main.rs"), "fn main() {}\n").unwrap();
+    write(project.path().join("slopguard.toml"), RULESETS_OFF).unwrap();
+
+    slopguard_in(project.path(), home.path())
+        .env("XDG_CACHE_HOME", &cache_home)
+        .args(["scan", "--no-colors", "."])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("0 errors, 0 warnings"));
+
+    assert!(
+        !project.path().join(".slopguard-cache").exists(),
+        "no cache directory is created in the scanned project"
+    );
+    #[cfg(target_os = "linux")]
+    {
+        use std::fs::read_dir;
+
+        let user_cache = cache_home.join("slopguard");
+        assert!(user_cache.join("cache.key").is_file());
+        let projects: Vec<_> = read_dir(user_cache.join("projects"))
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect();
+        assert_eq!(projects.len(), 1, "got: {projects:?}");
+        assert!(projects[0].join("rules.hash").is_file());
+    }
+}

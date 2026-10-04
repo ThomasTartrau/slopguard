@@ -14,6 +14,12 @@
 # or add --trust-repo-config to the scan command for repositories you trust
 # (never on merge requests from forks). The cache dir is passed explicitly
 # below with --cache-dir.
+#
+# Cache entries are signed with a per-user key in
+# $XDG_CACHE_HOME/slopguard/cache.key (~/.cache/slopguard/cache.key), outside
+# the checkout, so entries committed to the repository are never trusted. The
+# key is not part of the cached paths below: entries restored from a previous
+# job only hit when the runner keeps its home cache directory between jobs.
 
 slopguard:
   image: rust:latest

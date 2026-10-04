@@ -1,8 +1,12 @@
 //! On-disk cache for AI verdicts.
 //!
-//! Keyed by `sha256(file_content + prompt + model)` so that a change to the
-//! file, the resolved prompt, or the model invalidates the entry. Verdicts are
-//! stored as JSON under `<cache-dir>/ai/`.
+//! Keyed by the SHA256 of the file content, the resolved prompt (or classifier
+//! instructions), the model, and the identity of the match (rule id, file path
+//! and line/column span), so a change to any of them invalidates the entry and
+//! two matches of one rule in one file never share a verdict. Verdicts are
+//! stored as JSON under `<cache-dir>/ai/`, each prefixed with an HMAC-SHA256
+//! tag (see [`CacheKey`]) bound to the entry name: an unsigned, tampered or
+//! moved entry is ignored and the verdict recomputed.
 
 use std::fs;
 use std::io;
@@ -10,16 +14,16 @@ use std::path::{Path, PathBuf};
 
 use serde::de::DeserializeOwned;
 use serde::Serialize;
-use slopguard_core::cache::{ensure_gitignored_dir, sha256_hex};
+use slopguard_core::cache::{ensure_gitignored_dir, sha256_hex, CacheKey};
 
 use crate::pipeline::AiVerdict;
 
 /// Compute a cache key: the SHA256 of `parts` joined by NUL bytes, so a change
 /// to any part invalidates the entry. The LLM path hashes
-/// `[content, prompt, model]`; the classifier path hashes
-/// `[content, rule_id, instructions, model]` and caches the raw probability
-/// under it, so retuning the threshold (applied after the cache read) does not
-/// invalidate the entry.
+/// `[content, prompt, model, match identity..]`; the classifier path hashes
+/// `[content, rule_id, instructions, model, match identity..]` and caches the
+/// raw probability under it, so retuning the threshold (applied after the cache
+/// read) does not invalidate the entry.
 pub fn cache_key(parts: &[&str]) -> String {
     sha256_hex(parts.join("\0").as_bytes())
 }
@@ -27,13 +31,16 @@ pub fn cache_key(parts: &[&str]) -> String {
 /// A file-based store for AI verdicts, living under `<base>/ai`.
 pub struct AiCache {
     dir: PathBuf,
+    key: CacheKey,
 }
 
 impl AiCache {
-    /// Create a cache rooted at `<base>/ai` (where `base` is the scan cache dir).
-    pub fn new(base: &Path) -> Self {
+    /// Create a cache rooted at `<base>/ai` (where `base` is the scan cache dir),
+    /// signing its entries with `key`.
+    pub fn new(base: &Path, key: CacheKey) -> Self {
         Self {
             dir: base.join("ai"),
+            key,
         }
     }
 
@@ -49,21 +56,27 @@ impl AiCache {
     }
 
     fn entry_path(&self, key: &str) -> PathBuf {
-        self.dir.join(format!("{key}.json"))
+        self.dir.join(entry_name(key))
     }
 
-    /// Read and deserialize the entry for `key`. Missing or corrupted entries
-    /// return `None`.
+    /// Read, verify and deserialize the entry for `key`. Missing, unsigned,
+    /// tampered or corrupted entries return `None`.
     fn read_entry<T: DeserializeOwned>(&self, key: &str) -> Option<T> {
         let data = fs::read(self.entry_path(key)).ok()?;
-        serde_json::from_slice(&data).ok()
+        let payload = self.key.open(&entry_name(key), &data)?;
+        serde_json::from_slice(payload).ok()
     }
 
-    /// Serialize `value` into the entry for `key`, creating the directory.
+    /// Serialize and sign `value` into the entry for `key`, creating the
+    /// directory.
     fn write_entry<T: Serialize>(&self, key: &str, value: &T) -> io::Result<()> {
         self.ensure_dir()?;
         let data = serde_json::to_vec(value).map_err(io::Error::other)?;
-        fs::write(self.entry_path(key), data)
+        let sealed = self
+            .key
+            .seal(&entry_name(key), &data)
+            .map_err(io::Error::other)?;
+        fs::write(self.entry_path(key), sealed)
     }
 
     /// Look up a cached verdict by key. Corrupted entries return `None`.
@@ -99,11 +112,20 @@ impl AiCache {
     }
 }
 
+/// File name of the entry for `key`, also bound into its signature.
+fn entry_name(key: &str) -> String {
+    format!("{key}.json")
+}
+
 #[cfg(test)]
 mod tests {
     use tempfile::tempdir;
 
     use super::*;
+
+    fn test_key() -> CacheKey {
+        CacheKey::from_bytes([7; 32])
+    }
 
     fn verdict() -> AiVerdict {
         AiVerdict {
@@ -142,7 +164,7 @@ mod tests {
     #[test]
     fn miss_then_hit() {
         let dir = tempdir().unwrap();
-        let cache = AiCache::new(dir.path());
+        let cache = AiCache::new(dir.path(), test_key());
         let key = cache_key(&["fn main() {}", "is this slop?", "claude-haiku-4-5"]);
 
         assert!(cache.get(&key).is_none(), "cold cache misses");
@@ -156,10 +178,75 @@ mod tests {
     #[test]
     fn corrupted_entry_returns_none() {
         let dir = tempdir().unwrap();
-        let cache = AiCache::new(dir.path());
+        let cache = AiCache::new(dir.path(), test_key());
         cache.ensure_dir().unwrap();
         let key = cache_key(&["x", "y", "z"]);
         fs::write(cache.entry_path(&key), b"not json!!!").unwrap();
         assert!(cache.get(&key).is_none(), "corrupt entry must not panic");
+    }
+
+    #[test]
+    fn forged_verdict_without_hmac_is_ignored() {
+        let dir = tempdir().unwrap();
+        let cache = AiCache::new(dir.path(), test_key());
+        cache.ensure_dir().unwrap();
+        let key = cache_key(&["code", "prompt", "model"]);
+        // What a repository could ship to silence an AI rule.
+        fs::write(
+            cache.entry_path(&key),
+            br#"{"is_issue":false,"reason":"","confidence":0.0}"#,
+        )
+        .unwrap();
+
+        assert!(cache.get(&key).is_none(), "an unsigned verdict is ignored");
+    }
+
+    #[test]
+    fn cache_verdict_signed_with_other_key_is_ignored() {
+        let dir = tempdir().unwrap();
+        let other = AiCache::new(dir.path(), CacheKey::from_bytes([9; 32]));
+        let key = cache_key(&["code", "prompt", "model"]);
+        other.put(&key, &verdict()).unwrap();
+        assert!(other.get(&key).is_some());
+
+        let cache = AiCache::new(dir.path(), test_key());
+        assert!(cache.get(&key).is_none());
+    }
+
+    #[test]
+    fn tampered_cache_verdict_is_ignored() {
+        let dir = tempdir().unwrap();
+        let cache = AiCache::new(dir.path(), test_key());
+        let key = cache_key(&["code", "prompt", "model"]);
+        cache.put(&key, &verdict()).unwrap();
+        let path = cache.entry_path(&key);
+        let mut data = fs::read(&path).unwrap();
+        let last = data.len() - 1;
+        data[last] ^= 0x01;
+        fs::write(&path, data).unwrap();
+
+        assert!(cache.get(&key).is_none());
+    }
+
+    #[test]
+    fn cache_verdict_moved_to_other_key_is_ignored() {
+        let dir = tempdir().unwrap();
+        let cache = AiCache::new(dir.path(), test_key());
+        let clean = cache_key(&["code", "prompt", "model", "clean"]);
+        let dirty = cache_key(&["code", "prompt", "model", "dirty"]);
+        cache
+            .put(
+                &clean,
+                &AiVerdict {
+                    is_issue: false,
+                    reason: String::new(),
+                    confidence: 0.0,
+                },
+            )
+            .unwrap();
+        fs::copy(cache.entry_path(&clean), cache.entry_path(&dirty)).unwrap();
+
+        assert!(cache.get(&clean).is_some());
+        assert!(cache.get(&dirty).is_none());
     }
 }

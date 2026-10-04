@@ -805,7 +805,7 @@ reports only the new ones. The summary line tells you how many were suppressed:
 0 errors, 0 warnings in 12 files
 ```
 
-**Commit the baseline file.** Unlike `.slopguard-cache/`, it is shared state: it
+**Commit the baseline file.** Unlike the scan cache, it is shared state: it
 must be in git so every developer and every CI job filters the same findings. Do
 not add it to `.gitignore`.
 
@@ -934,9 +934,11 @@ repos:
 
 ### Cache in CI
 
-slopguard supports a `--cache-dir` flag (and `SLOPGUARD_CACHE_DIR` env var) to persist scan cache across CI runs. The templates above configure this automatically.
+slopguard supports a `--cache-dir` flag (and `SLOPGUARD_CACHE_DIR` env var) to persist scan cache across CI runs. The templates above pass it explicitly.
 
-Resolution order: `--cache-dir` (CLI) > `SLOPGUARD_CACHE_DIR` (env) > `cache_dir` in the user config (or a trusted `slopguard.toml`) > `.slopguard-cache/` in the working directory.
+Resolution order: `--cache-dir` (CLI) > `SLOPGUARD_CACHE_DIR` (env) > `cache_dir` in the user config (or a trusted `slopguard.toml`) > `<user cache>/slopguard/projects/<hash>` (`$XDG_CACHE_HOME` or `~/.cache` on Linux), one directory per project.
+
+Every cache entry (scan findings, AI verdicts, classifier probabilities) is signed with HMAC-SHA256 using a random key stored in `<user cache>/slopguard/cache.key` (mode 0600). Unsigned or tampered entries, such as a cache committed to the scanned repository, are ignored and recomputed. In CI, persist the key along with the cache directory to keep cache hits across runs: the GitHub Action caches `~/.cache/slopguard`, key included; with the GitLab template, entries only hit when the runner keeps its home cache directory between jobs. Never store the key inside the checkout, where a merge request could replace it.
 
 Invalidation only deletes slopguard's own entry files, and only in a directory that holds its `rules.hash` manifest, so pointing `--cache-dir` at an existing directory never wipes foreign files.
 

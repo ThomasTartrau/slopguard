@@ -49,7 +49,7 @@ fn default_rules_and_scan() -> Result<String, RuleError> {
          [scan]\nignores = []\n\
          # cache_dir is read from the user config (~/.config/slopguard/config.toml),\n\
          # not from a repo slopguard.toml unless --trust-repo-config is passed:\n\
-         # cache_dir = \".slopguard-cache\"\n",
+         # cache_dir = \"/path/to/cache\"\n",
     );
     Ok(out)
 }
