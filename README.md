@@ -147,7 +147,7 @@ slopguard scan --diff                 # only files changed vs HEAD (staged + uns
 slopguard scan --diff --base main     # only files changed vs main (three-dot diff)
 slopguard scan --fix                  # apply autofix-safe rewrites in place
 slopguard scan --fix --dry-run        # preview the rewrites as a unified diff, write nothing
-slopguard scan --fix --allow-dirty    # rewrite even with uncommitted changes (else refused)
+slopguard scan --fix --allow-dirty    # rewrite even with uncommitted changes or outside git (else refused)
 slopguard scan --report-unused-disable  # also report disable comments that suppress nothing
 slopguard scan --offline              # never fetch git rule sources, reuse the cache
 slopguard list                       # show active rules with their type and source
@@ -240,12 +240,15 @@ reserved to the user:
   never printed. Set them in
   `~/.config/slopguard/config.toml`, a `--config` file, or with CLI flags and
   env vars (`--cache-dir`, `SLOPGUARD_CACHE_DIR`).
+- **`[fix]`** (`allow_external`, the external rules `--fix` may apply, see
+  [Autofix](#autofix)) is ignored in the repo file the same way, so a merge
+  request cannot make `--fix` apply the rewrites of rules it ships itself.
 - **`rules.custom_dirs` and local `[[rules.sources]] path`** must resolve
   inside the repository (symlinks included). A path that escapes it is a
   configuration error (exit code 2). Git sources are not affected.
 - **`[ai].concurrency`** must be between 1 and 64 in every config file.
 
-`--trust-repo-config` (accepted by every subcommand) lifts the first two
+`--trust-repo-config` (accepted by every subcommand) lifts the first three
 restrictions for repositories you trust. A file passed with `--config` is
 chosen by you and is always trusted.
 
@@ -648,14 +651,34 @@ slopguard scan --fix              # apply them
 - Today `no-dbg-in-prod` and `no-unnecessary-clone` are autofixable
   (`(autofix)` in [RULES.md](RULES.md)).
 - `--fix` refuses to run when the scanned paths have uncommitted changes, so
-  every rewrite can be reviewed and reverted with git. `--allow-dirty` bypasses
-  the check; outside a git repository there is nothing to check.
+  every rewrite can be reviewed and reverted with git. Outside a git repository
+  it refuses too, since uncommitted work cannot be protected there.
+  `--allow-dirty` bypasses the check; `--dry-run` never needs it.
+- A rewrite never goes beyond detection: the rule's `files` / `ignores` globs
+  apply, and a dedicated `autofix_rule` only rewrites inside a match of the
+  detection `rule` (with its `constraints`).
 - Findings you suppressed inline, recorded in the baseline, or located in test
   code (for rules with `skip_test_code`) are never rewritten.
+  Suppressions are resolved on the original file, so a rewrite that shifts
+  lines cannot expose them.
 - After rewriting, slopguard scans again and exits 1 if findings remain.
 
 To make a custom rule autofixable, add `rewrite` and `autofix_safe: true`, and
 prove the rewrite with `tests.should_fix` (`before` / `after` pairs).
+
+Rules from `rules.custom_dirs` or `[[rules.sources]]` are not rewritten on
+their own say-so: `autofix_safe` on an external rule takes effect only once
+you list its id in your user config (`~/.config/slopguard/config.toml`, or a
+`--config` file):
+
+```toml
+[fix]
+allow_external = ["my-team-rule"]
+```
+
+This key is reserved to the user: it is ignored in the scanned repository's
+`slopguard.toml` (see [Trust model](#trust-model)). An id that matches no
+loaded rule is ignored.
 
 ---
 

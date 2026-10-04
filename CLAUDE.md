@@ -18,7 +18,7 @@ Delivered features:
 - 103 active rules (`slopguard list`), across the `slop`, `security`, and `correctness` rulesets, covering Rust and TypeScript. 117 rule YAML files ship on disk; 14 are opt-in (`enabled: false`), shown by `slopguard list --all`.
 - Five rule types: `ast` (84 active), `metric` (8, file-level), `cross-file` (3, project-wide index), `resolution` (2, import resolution against manifests), `ai` (6, AST pre-filter plus model confirmation).
 - Per-rule options: `[rules.options.<id>]` (today only `no-assertion-free-test`'s `assert_functions`).
-- Autofix: `slopguard scan --fix` applies in-place rewrites for rules marked `autofix_safe` (`--fix --dry-run` to preview without writing, `--allow-dirty` to bypass the clean-tree guard).
+- Autofix: `slopguard scan --fix` applies in-place rewrites for rules marked `autofix_safe` (`--fix --dry-run` to preview without writing, `--allow-dirty` to bypass the clean-tree guard, which also refuses outside git). An external rule (`custom_dirs`, `[[rules.sources]]`) is rewritten only when its id is listed in the user-only `[fix] allow_external`.
 - AI pipeline: LLM-backed rules run when a provider is configured; `slopguard scan --no-ai` skips them. An optional classifier (`[ai.classifier]`, Jev) can replace the LLM confirmation.
 - Cache: per-file findings keyed by content hash, AI results under `<cache-dir>/ai/` (`--no-cache`, `--cache-dir`).
 - External rule sources: `[[rules.sources]]` loads rules from git repositories or local paths (`--offline` to skip fetching).

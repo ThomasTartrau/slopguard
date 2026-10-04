@@ -1059,3 +1059,73 @@ fn rule_source_ref_starting_with_dash_is_rejected() {
         "expected InvalidSource for a dash-prefixed ref, got: {err:?}"
     );
 }
+
+#[test]
+fn fix_allow_external_is_parsed_from_global_config() {
+    let global_dir = tempdir().unwrap();
+    let project_dir = tempdir().unwrap();
+    write_global(
+        global_dir.path(),
+        "[fix]\nallow_external = [\"team-rule\"]\n",
+    );
+
+    let loaded = load_untrusted(Some(global_dir.path()), project_dir.path());
+    assert_eq!(loaded.config.fix.allow_external, vec!["team-rule"]);
+    assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
+}
+
+#[test]
+fn fix_allow_external_defaults_to_empty() {
+    assert!(Config::default().fix.allow_external.is_empty());
+}
+
+#[test]
+fn repo_config_cannot_set_fix_allow_external() {
+    let global_dir = tempdir().unwrap();
+    let project_dir = tempdir().unwrap();
+    write_global(
+        global_dir.path(),
+        "[fix]\nallow_external = [\"team-rule\"]\n",
+    );
+    write(
+        project_dir.path().join("slopguard.toml"),
+        "[fix]\nallow_external = [\"evil-rule\"]\n",
+    )
+    .unwrap();
+
+    let loaded = load_untrusted(Some(global_dir.path()), project_dir.path());
+    assert_eq!(loaded.config.fix.allow_external, vec!["team-rule"]);
+    assert_eq!(loaded.warnings.len(), 1, "{:?}", loaded.warnings);
+    assert!(loaded.warnings[0].starts_with("ignored 'fix.allow_external' in slopguard.toml"));
+    assert!(!loaded.warnings[0].contains("evil-rule"));
+}
+
+#[test]
+fn trusted_repo_config_may_set_fix_allow_external() {
+    let dir = tempdir().unwrap();
+    write(
+        dir.path().join("slopguard.toml"),
+        "[fix]\nallow_external = [\"team-rule\"]\n",
+    )
+    .unwrap();
+
+    let loaded = load_config_from(None, dir.path(), ProjectTrust::Trusted).unwrap();
+    assert_eq!(loaded.config.fix.allow_external, vec!["team-rule"]);
+    assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
+}
+
+#[test]
+fn unknown_fix_key_is_rejected() {
+    let dir = tempdir().unwrap();
+    write(
+        dir.path().join("slopguard.toml"),
+        "[fix]\nallow_externals = [\"team-rule\"]\n",
+    )
+    .unwrap();
+
+    let err = load_err(None, dir.path());
+    assert!(
+        matches!(err, ConfigError::Parse { .. }) && err.to_string().contains("allow_externals"),
+        "expected a parse error naming the misspelled key, got: {err}"
+    );
+}

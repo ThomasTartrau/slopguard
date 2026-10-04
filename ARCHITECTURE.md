@@ -139,7 +139,7 @@ category: slop                 # slop | security | correctness (derived from rul
 enabled: false                 # opt-in rule, activated by `rules.enable` (default true)
 fix: "Use X instead of Y"     # human message, never applied
 rewrite: "$R"                  # ast-grep rewrite template applied by `scan --fix` (D31)
-autofix_safe: true             # required for `rewrite` to be applied (default false)
+autofix_safe: true             # required for `rewrite` to be applied (default false); external rules also need fix.allow_external
 skip_test_code: true           # drop findings inside #[cfg(test)] blocks (Rust only, default false)
 ai_check:                      # turns the rule into an AI rule: `rule` only collects candidates
   prompt: "..."                # template with {{filename}}, {{rule_context}}, {{code}}
@@ -455,16 +455,21 @@ provider (D34).
 ## Autofix
 
 `scan --fix` applies the `rewrite` of every `autofix_safe` rule in place
-(`slopguard-core::fix`, D31):
+(`slopguard-core::fix`, D31). Builtin rules qualify on `autofix_safe` alone; an
+external rule (`custom_dirs`, `[[rules.sources]]`) also needs its id in the
+user-only `fix.allow_external` (D40).
 
-1. Refuse when the scanned paths have uncommitted changes, unless
-   `--allow-dirty` (outside a git repository the check passes).
-2. Match each autofixable rule (or its narrower `autofix_rule`) directly on the
-   source, skipping matches that detection would suppress: test code, inline
-   disable, baseline.
-3. Apply the non-overlapping edits, then match the new buffer again, until a
-   fix point or 10 iterations.
-4. Rescan from disk and exit 1 if findings remain.
+1. Refuse when the scanned paths have uncommitted changes, or are outside a git
+   repository, unless `--allow-dirty`.
+2. Resolve once, on the original content, the matches detection would suppress
+   (inline disable, baseline) as protected byte ranges.
+3. Match each autofixable rule (or its narrower `autofix_rule`, kept only inside
+   a detection match) directly on the source, within the rule's `files` /
+   `ignores` scope, skipping test code and protected ranges.
+4. Apply the non-overlapping edits, shift the protected ranges, then match the
+   new buffer again, until a fix point or 10 iterations.
+5. Rescan from disk with the rules already loaded (no source re-fetch) and exit
+   1 if findings remain.
 
 `--dry-run` prints the unified diff and writes nothing.
 

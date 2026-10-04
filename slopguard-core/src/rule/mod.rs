@@ -193,7 +193,9 @@ pub struct Rule {
     pub rewrite: Option<String>,
     /// Opt-in marker that this rule's `rewrite` is safe to apply automatically
     /// (idempotent, no semantic change). `scan --fix` ignores the `rewrite` of
-    /// any rule without it. Defaults to `false`.
+    /// any rule without it. Defaults to `false`. On a rule from `custom_dirs`
+    /// or `[[rules.sources]]` it is not enough: the rule id must also be listed
+    /// in the user config's `fix.allow_external`.
     #[serde(default)]
     pub autofix_safe: bool,
     /// Matcher used only by `scan --fix` to locate nodes to rewrite, when it must
@@ -201,6 +203,9 @@ pub struct Rule {
     /// rule can flag every variant of a pattern while auto-rewriting only the
     /// subset whose `rewrite` is provably safe. `null` (the default) means
     /// `--fix` reuses `rule`. The detection pass never reads this field.
+    /// `--fix` only rewrites an `autofix_rule` match whose range lies inside a
+    /// match of the detection `rule` (with its `constraints`), so it can narrow
+    /// but never widen what detection reports.
     #[serde(default, skip_serializing_if = "Value::is_null")]
     pub autofix_rule: Value,
     #[serde(default)]
@@ -287,7 +292,9 @@ impl Rule {
     }
 
     /// Whether `scan --fix` may rewrite this rule's matches: it carries a
-    /// `rewrite` template and is explicitly marked `autofix_safe`.
+    /// `rewrite` template and is explicitly marked `autofix_safe`. An external
+    /// (non-builtin) rule additionally needs its id in `fix.allow_external`,
+    /// which `scan --fix` checks on top of this.
     pub fn is_autofixable(&self) -> bool {
         self.autofix_safe && self.rewrite.is_some()
     }
