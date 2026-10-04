@@ -36,13 +36,16 @@ use crate::cache::{cache_key, AiCache};
 use crate::provider::non_empty_env;
 
 use super::context::{extract_context, extract_numbered, CONTEXT_RADIUS};
-use super::prompt::render_prompt;
-use super::{call_llm, match_identity, AiCandidate};
+use super::prompt::{escape_tags, render_prompt};
+use super::{call_llm, failed_finding, match_identity, unverified_finding, AiCandidate};
 
 /// What replaces `{{code}}` in the noul instructions: the code itself travels
 /// as the request `state` (line-numbered), not inline in the instructions.
 const CODE_PLACEHOLDER: &str =
-    "the code under review (provided as the state, each line prefixed with its absolute line number)";
+    "the code under review (provided as the state inside code tags, each line prefixed with its absolute line number)";
+
+/// Default cap on the request `state` size, in bytes.
+pub(crate) const MAX_STATE_BYTES: usize = 64 * 1024;
 
 /// Environment variable holding the direct TypeSafe API key.
 pub const TYPESAFE_API_KEY_ENV: &str = "TYPESAFE_API_KEY";
@@ -233,7 +236,8 @@ fn build_clusters<'a>(misses: &[&'a AiCandidate], caps: &ClusterCaps) -> Vec<Clu
 }
 
 /// Ask the LLM to write a per-instance reason for a `generated` rule. `None`
-/// when no LLM is available or the call fails, so the caller can fall back.
+/// when no LLM is available or the call fails (with a warning naming the
+/// error), so the caller can fall back. The reason is already sanitized.
 async fn generate_reason(
     llm: Option<&dyn AgentProvider>,
     candidate: &AiCandidate,
@@ -247,8 +251,18 @@ async fn generate_reason(
         filename,
         &candidate.rule_context,
     );
-    let verdict = call_llm(llm, &candidate.model, &prompt).await?;
-    Some(verdict.reason)
+    match call_llm(llm, &candidate.model, &prompt).await {
+        Ok(verdict) => Some(verdict.reason),
+        Err(err) => {
+            // CLI diagnostic to stderr, not application logging.
+            // slopguard-disable-next-line no-println-in-prod
+            eprintln!(
+                "warning: generated reason failed for rule '{}': {err}",
+                candidate.finding.rule_id
+            );
+            None
+        }
+    }
 }
 
 /// Build a finding for a classified candidate, or `None` when its probability
@@ -297,13 +311,51 @@ async fn finding_for(
     Some(finding)
 }
 
+/// The request `state` for a region: line-numbered source with tags escaped,
+/// cut to at most `max_bytes` (at a line boundary when one exists, never inside
+/// a UTF-8 character), then wrapped in `<code>` tags so the closing tag is
+/// always present. The flag tells whether the source was truncated.
+fn build_state(source: &str, start: usize, end: usize, max_bytes: usize) -> (String, bool) {
+    let escaped = escape_tags(&extract_numbered(source, start, end));
+    let truncated = escaped.len() > max_bytes;
+    let kept = if truncated {
+        let mut cut = max_bytes;
+        while !escaped.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        match escaped[..cut].rfind('\n') {
+            Some(newline) => &escaped[..newline],
+            None => &escaped[..cut],
+        }
+    } else {
+        escaped.as_str()
+    };
+    (format!("<code>\n{kept}\n</code>"), truncated)
+}
+
+/// Why a classifier answer cannot be used.
+#[derive(Debug, Error)]
+enum AnswerError {
+    /// The answer for the question is missing or not a noul.
+    #[error("no usable answer: {0}")]
+    Missing(String),
+    /// The probability is NaN, infinite or outside `[0.0, 1.0]`.
+    #[error("probability {0} is outside [0.0, 1.0]")]
+    OutOfRange(f64),
+}
+
+/// Whether `probability` is a valid noul probability (NaN is not).
+fn valid_probability(probability: f64) -> bool {
+    (0.0..=1.0).contains(&probability)
+}
+
 /// Classify one cluster with a single multi-noul request: the merged region as
 /// line-numbered `state`, one `qN` noul per member. Remaps each answer to its
 /// candidate, caches the raw probability, and applies the threshold per member.
 ///
-/// A request error skips every member (no per-candidate fallback), and a
-/// missing or mistyped answer skips just that member, matching the existing
-/// silent-skip behavior.
+/// A request error keeps every member as an unverified finding (one warning for
+/// the cluster), and a missing, mistyped or out-of-range answer keeps just that
+/// member the same way. None of these failures is cached.
 async fn classify_cluster(
     decider: &dyn DecisionProvider,
     llm: Option<&dyn AgentProvider>,
@@ -316,11 +368,20 @@ async fn classify_cluster(
     let Some(first) = cluster.members.first() else {
         return Vec::new();
     };
-    let state = extract_numbered(
+    let (state, truncated) = build_state(
         &first.file_content,
         cluster.region_start,
         cluster.region_end,
+        MAX_STATE_BYTES,
     );
+    if truncated {
+        // CLI diagnostic to stderr, not application logging.
+        // slopguard-disable-next-line no-println-in-prod
+        eprintln!(
+            "warning: classifier state for {} truncated to {MAX_STATE_BYTES} bytes",
+            first.finding.file.display()
+        );
+    }
 
     let mut questions = BTreeMap::new();
     for (index, candidate) in cluster.members.iter().enumerate() {
@@ -343,18 +404,40 @@ async fn classify_cluster(
     };
     let output = match decider.decide(&request).await {
         Ok(output) => output,
-        // A cluster-level failure (network, rate limit) skips all its members.
-        // slopguard-disable-next-line no-swallowed-error
-        Err(_) => return Vec::new(),
+        Err(err) => {
+            // CLI diagnostic to stderr, not application logging.
+            // slopguard-disable-next-line no-println-in-prod
+            eprintln!(
+                "warning: AI classification failed for {} candidates in {}: {err}",
+                cluster.members.len(),
+                first.finding.file.display()
+            );
+            return cluster
+                .members
+                .iter()
+                .map(|candidate| failed_finding(&candidate.finding))
+                .collect();
+        }
     };
 
     let mut findings = Vec::new();
     for (index, candidate) in cluster.members.iter().enumerate() {
-        let probability = match output.noul(&question_key(index)) {
+        let answer = output
+            .noul(&question_key(index))
+            .map_err(|err| AnswerError::Missing(err.to_string()))
+            .and_then(|probability| {
+                if valid_probability(probability) {
+                    Ok(probability)
+                } else {
+                    Err(AnswerError::OutOfRange(probability))
+                }
+            });
+        let probability = match answer {
             Ok(probability) => probability,
-            // A missing/mistyped answer skips just that member.
-            // slopguard-disable-next-line no-swallowed-error
-            Err(_) => continue,
+            Err(err) => {
+                findings.push(unverified_finding(&candidate.finding, &err));
+                continue;
+            }
         };
         if let Some(cache) = cache {
             // A cache write failure must not drop the finding.
@@ -391,7 +474,12 @@ pub fn run_classifier_pass(
     let runtime = match Builder::new_multi_thread().enable_all().build() {
         Ok(runtime) => runtime,
         // If a runtime cannot be built, skip AI rather than crashing the scan.
-        Err(_) => return Vec::new(),
+        Err(err) => {
+            // CLI diagnostic to stderr, not application logging.
+            // slopguard-disable-next-line no-println-in-prod
+            eprintln!("warning: AI classification skipped, cannot build the async runtime: {err}");
+            return Vec::new();
+        }
     };
 
     let cluster_caps = ClusterCaps {
@@ -411,7 +499,11 @@ pub fn run_classifier_pass(
         let mut hits: Vec<(&AiCandidate, f64)> = Vec::new();
         let mut misses: Vec<&AiCandidate> = Vec::new();
         for candidate in &candidates {
-            match cache.and_then(|c| c.get_probability(&candidate_key(candidate, jev_model))) {
+            // An out-of-range cached probability is a miss.
+            let cached = cache
+                .and_then(|c| c.get_probability(&candidate_key(candidate, jev_model)))
+                .filter(|probability| valid_probability(*probability));
+            match cached {
                 Some(probability) => hits.push((candidate, probability)),
                 None => misses.push(candidate),
             }
