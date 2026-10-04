@@ -17,19 +17,43 @@
 #
 # Cache entries are signed with a per-user key in
 # $XDG_CACHE_HOME/slopguard/cache.key (~/.cache/slopguard/cache.key), outside
-# the checkout, so entries committed to the repository are never trusted. The
-# key is not part of the cached paths below: entries restored from a previous
-# job only hit when the runner keeps its home cache directory between jobs.
+# the checkout, so entries committed to the repository are never trusted. To
+# keep cache hits across jobs, the key is copied in and out of the cached path
+# .cache/slopguard-key/ (outside --cache-dir, so a stale cache dir never
+# carries it). The copy is skipped, and the restored path deleted, whenever any
+# file under that path is tracked by git: a key committed to the repository is
+# never installed. Alternatively, mount a runner-level volume on
+# $XDG_CACHE_HOME/slopguard and drop the key paths below.
 
 slopguard:
   image: rust:latest
+  variables:
+    SLOPGUARD_KEY_CACHE: .cache/slopguard-key
   cache:
     key: slopguard-${CI_COMMIT_REF_SLUG}
     paths:
       - .cache/slopguard/
+      - .cache/slopguard-key/
   before_script:
     - cargo install slopguard-cli
+    - |
+      KEY_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/slopguard"
+      if git ls-files -- "$SLOPGUARD_KEY_CACHE" | grep -q .; then
+        rm -rf "$SLOPGUARD_KEY_CACHE"
+      elif [ -f "$SLOPGUARD_KEY_CACHE/cache.key" ] && [ ! -L "$SLOPGUARD_KEY_CACHE/cache.key" ]; then
+        mkdir -p "$KEY_DIR"
+        cp "$SLOPGUARD_KEY_CACHE/cache.key" "$KEY_DIR/cache.key"
+        chmod 600 "$KEY_DIR/cache.key"
+      fi
   script:
     - slopguard scan . --cache-dir .cache/slopguard/
+  after_script:
+    - |
+      KEY_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/slopguard"
+      if ! git ls-files -- "$SLOPGUARD_KEY_CACHE" | grep -q . \
+        && [ -f "$KEY_DIR/cache.key" ] && [ ! -L "$KEY_DIR/cache.key" ]; then
+        mkdir -p "$SLOPGUARD_KEY_CACHE"
+        cp "$KEY_DIR/cache.key" "$SLOPGUARD_KEY_CACHE/cache.key"
+      fi
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
