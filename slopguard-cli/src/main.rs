@@ -26,7 +26,8 @@ use slopguard_core::rule::{
 };
 use slopguard_core::scanner::ScanError;
 use slopguard_core::source::{
-    default_cache_root, resolve_sources, ResolvedSource, SourceError, SourceOptions,
+    default_allowed_protocols, default_cache_root, git_token_from_env, resolve_sources,
+    unpinned_source_warnings, ResolvedSource, SourceError, SourceOptions,
 };
 use slopguard_core::testing::{self, RuleTestStatus, TestError, TestFailureKind};
 
@@ -63,14 +64,22 @@ pub enum AppError {
 
 /// Resolve the external rule sources declared in `config`, cloning or
 /// refreshing git sources (unless `offline`). Shared by every subcommand that
-/// loads rules.
+/// loads rules. Each git source not pinned to a commit sha is reported on
+/// stderr first, and the token is only bound to the user's trusted host.
 pub(crate) fn resolve_config_sources(
     config: &Config,
     offline: bool,
 ) -> Result<Vec<ResolvedSource>, AppError> {
+    for warning in unpinned_source_warnings(&config.rules.sources) {
+        // CLI diagnostic to stderr, not application logging.
+        // slopguard-disable-next-line no-println-in-prod
+        eprintln!("warning: {warning}");
+    }
     let opts = SourceOptions {
         cache_root: default_cache_root(),
         offline,
+        git_token: git_token_from_env(config.git.token_host.as_deref()),
+        allowed_protocols: default_allowed_protocols(),
     };
     Ok(resolve_sources(&config.rules.sources, &opts)?)
 }

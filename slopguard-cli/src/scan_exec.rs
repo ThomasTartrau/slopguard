@@ -12,8 +12,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use similar::TextDiff;
 use slopguard_ai::{
-    build_classifier, build_provider, resolve_jev_model, run_ai_pass, run_classifier_pass, AiCache,
-    AiCandidate, BatchConfig, DEFAULT_MODEL,
+    build_classifier, build_provider, cap_candidates, resolve_jev_model, run_ai_pass,
+    run_classifier_pass, AiCache, AiCandidate, BatchConfig, DEFAULT_MODEL,
 };
 use slopguard_core::baseline::{project_root, Baseline};
 use slopguard_core::config::{Config, OutputFormat};
@@ -26,6 +26,7 @@ use slopguard_core::scanner::{
     count_severities, scan, scan_cached, scan_files, scan_files_cached, scan_files_unused_disables,
     scan_unused_disables, ScanError,
 };
+use slopguard_core::source::RuleOrigin;
 
 use crate::baseline_cmd::{apply_baseline, resolve_baseline};
 use crate::cli::{Format, SeverityThreshold};
@@ -196,8 +197,18 @@ pub fn collect_findings(opts: CollectOpts) -> Result<(ScanResult, Config), AppEr
         rules.retain(|r| r.ai_check.is_none());
     }
 
-    let (ai_rules, ast_rules): (Vec<Rule>, Vec<Rule>) =
+    let (mut ai_rules, ast_rules): (Vec<Rule>, Vec<Rule>) =
         rules.into_iter().partition(|r| r.ai_check.is_some());
+
+    // External AI rules (custom dirs, sources) carry prompts the user never
+    // reviewed and send code to the provider, so they need the user's opt-in.
+    // They are dropped, not downgraded to AST rules, so their unconfirmed
+    // candidates never surface as findings.
+    if !config.ai.allow_external_rules {
+        let before = ai_rules.len();
+        ai_rules.retain(|r| r.origin == RuleOrigin::Builtin);
+        warn_external_ai_skipped(before - ai_rules.len());
+    }
 
     let targets = if diff {
         let cwd = env::current_dir().map_err(AppError::Io)?;
@@ -643,6 +654,38 @@ fn warn_ai_skipped(ai_rules: &[Rule], err: &dyn Display) {
     eprintln!("warning: {} AI rules skipped ({err})", ai_rules.len());
 }
 
+/// The single warning for external `ai_check` rules dropped because the user
+/// config does not set `ai.allow_external_rules`. Silent when none was dropped.
+fn warn_external_ai_skipped(skipped: usize) {
+    if skipped > 0 {
+        // slopguard-disable-next-line no-println-in-prod
+        eprintln!(
+            "warning: {skipped} external AI rules skipped \
+             (set ai.allow_external_rules = true in the user config to allow them)"
+        );
+    }
+}
+
+/// Keep at most `ai.max_calls` candidates for the AI pass, warning when some
+/// exceed it. Returns the kept candidates and the overflow, reported as plain
+/// AST findings without AI verification.
+fn cap_ai_candidates(
+    candidates: Vec<AiCandidate>,
+    config: &Config,
+) -> (Vec<AiCandidate>, Vec<Finding>) {
+    let max_calls = config.ai.max_calls;
+    let (kept, overflow) = cap_candidates(candidates, max_calls);
+    if !overflow.is_empty() {
+        // slopguard-disable-next-line no-println-in-prod
+        eprintln!(
+            "warning: {} AI candidates exceed ai.max_calls ({max_calls}); \
+             reported without AI verification",
+            overflow.len()
+        );
+    }
+    (kept, overflow)
+}
+
 /// Classify candidates with the System One provider (Jev).
 ///
 /// When the classifier cannot be built (disabled, missing key), a single
@@ -667,6 +710,7 @@ fn run_classifier_phase(
     if candidates.is_empty() {
         return Ok(Vec::new());
     }
+    let (candidates, mut findings) = cap_ai_candidates(candidates, config);
 
     // The LLM writes reasons for `generated` rules, so it is only built when
     // one is present. Optional: without it, those rules fall back to their
@@ -677,7 +721,7 @@ fn run_classifier_phase(
     let llm = needs_llm.then(|| build_provider(&config.ai).ok()).flatten();
     let cache = (!no_cache).then(|| AiCache::new(cache_dir));
     let jev_model = resolve_jev_model(&config.ai.classifier);
-    Ok(run_classifier_pass(
+    findings.extend(run_classifier_pass(
         &*decider,
         llm.as_deref(),
         candidates,
@@ -690,7 +734,8 @@ fn run_classifier_phase(
             max_state_lines: config.ai.classifier.batch_max_state_lines,
         },
         cache.as_ref(),
-    ))
+    ));
+    Ok(findings)
 }
 
 /// Run the generative LLM confirmation phase for `ai_rules`.
@@ -717,11 +762,13 @@ fn run_llm_phase(
     if candidates.is_empty() {
         return Ok(Vec::new());
     }
+    let (candidates, mut findings) = cap_ai_candidates(candidates, config);
     let cache = (!no_cache).then(|| AiCache::new(cache_dir));
-    Ok(run_ai_pass(
+    findings.extend(run_ai_pass(
         &*provider,
         candidates,
         config.ai.concurrency,
         cache.as_ref(),
-    ))
+    ));
+    Ok(findings)
 }

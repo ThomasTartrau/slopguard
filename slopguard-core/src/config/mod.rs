@@ -127,9 +127,17 @@ impl RuleSource {
         self.git.is_some()
     }
 
-    /// Reject a source that declares neither `git` nor `path`, or a `ref`
-    /// without a `git` (a ref is meaningless for a local path).
+    /// Reject a source that declares neither `git` nor `path`, a `ref`
+    /// without a `git` (a ref is meaningless for a local path), or a `git` or
+    /// `ref` starting with `-`, which git would parse as an option
+    /// (`--upload-pack=...`).
     fn validate(&self) -> Result<(), String> {
+        if self.git.as_deref().is_some_and(|git| git.starts_with('-')) {
+            return Err("'git' must not start with '-'".to_string());
+        }
+        if self.git_ref.as_deref().is_some_and(|r| r.starts_with('-')) {
+            return Err("'ref' must not start with '-'".to_string());
+        }
         match (&self.git, &self.path, &self.git_ref) {
             (None, None, _) => Err("a rule source needs either 'git' or 'path'".to_string()),
             (None, Some(_), Some(_)) => {
@@ -207,6 +215,23 @@ pub struct AiConfig {
     pub api_key: Option<String>,
     /// Optional System One classifier (Jev), on a separate axis from the LLM.
     pub classifier: ClassifierConfig,
+    /// Let `ai_check` rules from external sources (`rules.custom_dirs`,
+    /// `[[rules.sources]]`) send code to the provider. Off by default: such
+    /// rules are skipped, since their prompt is not reviewed by the user.
+    pub allow_external_rules: bool,
+    /// Maximum number of AI candidates verified per scan (cache hits count).
+    /// Candidates beyond it are reported without AI verification.
+    #[default = 200]
+    pub max_calls: usize,
+}
+
+/// `[git]`: how external git rule sources are fetched. User config only.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct GitConfig {
+    /// The only host `SLOPGUARD_GIT_TOKEN` is sent to (overridden by
+    /// `SLOPGUARD_GIT_TOKEN_HOST`). Without a host, no token is injected.
+    pub token_host: Option<String>,
 }
 
 /// Severity escalation: when one rule fires repeatedly in a single file, its
@@ -232,6 +257,7 @@ pub struct Config {
     pub output: OutputConfig,
     pub ai: AiConfig,
     pub escalation: EscalationConfig,
+    pub git: GitConfig,
 }
 
 #[derive(Debug, Error)]
@@ -273,7 +299,7 @@ pub const MAX_AI_CONCURRENCY: usize = 64;
 
 /// Whether the scanned repository's `slopguard.toml` is trusted.
 ///
-/// An untrusted repo file cannot set the user-only keys (`[ai]`,
+/// An untrusted repo file cannot set the user-only keys (`[ai]`, `[git]`,
 /// `scan.cache_dir`) and its rule paths must stay inside the repository.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ProjectTrust {
@@ -301,7 +327,7 @@ fn validate_concurrency(config: &Config) -> Result<(), ConfigError> {
 }
 
 /// Keys an untrusted repo file cannot set, as dotted paths into its table.
-const RESERVED_KEYS: [&str; 2] = ["ai", "scan.cache_dir"];
+const RESERVED_KEYS: [&str; 3] = ["ai", "git", "scan.cache_dir"];
 
 /// Remove the user-only keys from an untrusted repo table and return a single
 /// warning naming every removed leaf key, sorted. Values are never echoed:
@@ -460,7 +486,7 @@ fn load_table(path: &Path) -> Result<(Table, Config), ConfigError> {
 /// Load config with explicit paths (for testing).
 ///
 /// With [`ProjectTrust::Untrusted`], the repo file's rule paths must stay
-/// inside `project_root` and its user-only keys (`[ai]`, `scan.cache_dir`)
+/// inside `project_root` and its user-only keys (`[ai]`, `[git]`, `scan.cache_dir`)
 /// are dropped with a warning. The global file is always trusted.
 pub fn load_config_from(
     global_dir: Option<&Path>,
@@ -513,7 +539,7 @@ pub fn load_config_file(path: &Path) -> Result<Config, ConfigError> {
 /// 2. `slopguard.toml` at `project_root` (project overrides)
 ///
 /// Unless `trust` is [`ProjectTrust::Trusted`], the project file cannot set
-/// the user-only keys (`[ai]`, `scan.cache_dir`) and its rule paths must stay
+/// the user-only keys (`[ai]`, `[git]`, `scan.cache_dir`) and its rule paths must stay
 /// inside `project_root`. See [`load_config_from`].
 pub fn load_config(project_root: &Path, trust: ProjectTrust) -> Result<LoadedConfig, ConfigError> {
     let global_dir = dirs::config_dir();

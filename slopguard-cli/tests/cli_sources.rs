@@ -23,6 +23,11 @@ tests:
     - "allowed_call();"
 "#;
 
+/// Overrides the protocols git may use for sources (https and ssh only by
+/// default), so the tests can serve rules from a `file://` remote.
+const ALLOW_PROTOCOL_ENV: &str = "SLOPGUARD_GIT_ALLOW_PROTOCOL";
+const TEST_PROTOCOLS: &str = "file:https:ssh";
+
 fn git(dir: &Path, args: &[&str]) {
     let status = StdCommand::new("git")
         .current_dir(dir)
@@ -74,6 +79,7 @@ fn list_json_exposes_imported_rule_provenance() {
         .args(["list", "--format", "json"])
         .current_dir(project.path())
         .env("SLOPGUARD_SOURCES_CACHE", cache.path())
+        .env(ALLOW_PROTOCOL_ENV, TEST_PROTOCOLS)
         .output()
         .unwrap();
 
@@ -116,6 +122,7 @@ fn test_command_validates_imported_rules() {
         .args(["test"])
         .current_dir(project.path())
         .env("SLOPGUARD_SOURCES_CACHE", cache.path())
+        .env(ALLOW_PROTOCOL_ENV, TEST_PROTOCOLS)
         .output()
         .unwrap();
 
@@ -140,6 +147,7 @@ fn scan_offline_reuses_cache_without_network() {
         .args(["list"])
         .current_dir(project.path())
         .env("SLOPGUARD_SOURCES_CACHE", cache.path())
+        .env(ALLOW_PROTOCOL_ENV, TEST_PROTOCOLS)
         .output()
         .unwrap();
     assert!(warm.status.success(), "warm-up list failed");
@@ -151,6 +159,7 @@ fn scan_offline_reuses_cache_without_network() {
         .args(["scan", ".", "--offline"])
         .current_dir(project.path())
         .env("SLOPGUARD_SOURCES_CACHE", cache.path())
+        .env(ALLOW_PROTOCOL_ENV, TEST_PROTOCOLS)
         .output()
         .unwrap();
 
@@ -163,5 +172,84 @@ fn scan_offline_reuses_cache_without_network() {
     assert!(
         !stderr.contains("offline:") && !stderr.to_lowercase().contains("network"),
         "offline scan must not report a network error; stderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn floating_ref_prints_unpinned_warning() {
+    let (project, cache, _remote) = source_project();
+
+    let output = slopguard()
+        .args(["list"])
+        .current_dir(project.path())
+        .env("SLOPGUARD_SOURCES_CACHE", cache.path())
+        .env(ALLOW_PROTOCOL_ENV, TEST_PROTOCOLS)
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "list failed; stderr:\n{stderr}");
+    assert!(
+        stderr.contains("warning: unpinned rule source 'file://"),
+        "a source without a sha ref must be reported as unpinned; stderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn unreachable_remote_on_refresh_fails_the_scan() {
+    let (project, cache, remote) = source_project();
+
+    let warm = slopguard()
+        .args(["list"])
+        .current_dir(project.path())
+        .env("SLOPGUARD_SOURCES_CACHE", cache.path())
+        .env(ALLOW_PROTOCOL_ENV, TEST_PROTOCOLS)
+        .output()
+        .unwrap();
+    assert!(warm.status.success(), "warm-up list failed");
+
+    // The remote disappears: an online scan must not silently keep the stale
+    // cached rules.
+    drop(remote);
+
+    let output = slopguard()
+        .args(["scan", "."])
+        .current_dir(project.path())
+        .env("SLOPGUARD_SOURCES_CACHE", cache.path())
+        .env(ALLOW_PROTOCOL_ENV, TEST_PROTOCOLS)
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "a failed refresh must fail the scan; stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("git fetch HEAD failed for source"),
+        "the error should name the failed fetch; stderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn file_protocol_source_is_refused_by_default() {
+    let (project, cache, _remote) = source_project();
+
+    let output = slopguard()
+        .args(["list"])
+        .current_dir(project.path())
+        .env("SLOPGUARD_SOURCES_CACHE", cache.path())
+        .env_remove(ALLOW_PROTOCOL_ENV)
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "a file:// source must be refused under the default https:ssh; stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("git fetch HEAD failed for source"),
+        "the refusal should come from the fetch; stderr:\n{stderr}"
     );
 }

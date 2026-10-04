@@ -1,6 +1,6 @@
 use std::fs::{create_dir, write};
 
-use tempfile::tempdir;
+use tempfile::{tempdir, TempDir};
 
 use super::*;
 
@@ -484,4 +484,117 @@ rule:
             url: "https://example.com/rules.git".to_string()
         }
     );
+}
+
+/// A git source holding `yaml` as its only rule file, for activation tests.
+fn single_rule_source(yaml: &str) -> (TempDir, Vec<crate::source::ResolvedSource>) {
+    let dir = tempdir().unwrap();
+    write(dir.path().join("rule.yml"), yaml).unwrap();
+    let sources = vec![crate::source::ResolvedSource {
+        dir: dir.path().to_path_buf(),
+        origin: crate::source::RuleOrigin::Git {
+            url: "https://example.com/rules.git".to_string(),
+        },
+    }];
+    (dir, sources)
+}
+
+fn has_rule(rules: &[Rule], id: &str) -> bool {
+    rules.iter().any(|r| r.id.as_str() == id)
+}
+
+#[test]
+fn external_rule_with_enabled_false_is_inactive() {
+    let (_dir, sources) = single_rule_source(
+        r#"
+id: external-opt-in
+language: rust
+severity: warning
+category: slop
+enabled: false
+message: "opt-in external rule"
+rule:
+  pattern: foo()
+"#,
+    );
+    let mut config = crate::config::Config::default();
+
+    let rules = load_effective_rules(&config, &sources).unwrap();
+    assert!(
+        !has_rule(&rules, "external-opt-in"),
+        "enabled: false is off"
+    );
+
+    config.rules.enable.push("external-opt-in".to_string());
+    let rules = load_effective_rules(&config, &sources).unwrap();
+    assert!(
+        has_rule(&rules, "external-opt-in"),
+        "enable list turns it on"
+    );
+
+    // `load_all_rules` stays unfiltered so `explain` can describe it.
+    config.rules.enable.clear();
+    let all = load_all_rules(&config, &sources).unwrap();
+    assert!(has_rule(&all, "external-opt-in"));
+}
+
+#[test]
+fn external_rule_respects_rules_disable_and_rulesets() {
+    let (_dir, sources) = single_rule_source(
+        r#"
+id: external-sec
+language: rust
+severity: error
+category: security
+message: "external security rule"
+rule:
+  pattern: foo()
+"#,
+    );
+    let mut config = crate::config::Config::default();
+    let rules = load_effective_rules(&config, &sources).unwrap();
+    assert!(has_rule(&rules, "external-sec"), "active by default");
+
+    config.rules.disable.push("external-sec".to_string());
+    let rules = load_effective_rules(&config, &sources).unwrap();
+    assert!(!has_rule(&rules, "external-sec"), "rules.disable drops it");
+
+    config.rules.disable.clear();
+    config.rulesets.security = false;
+    let rules = load_effective_rules(&config, &sources).unwrap();
+    assert!(
+        !has_rule(&rules, "external-sec"),
+        "inactive ruleset drops it"
+    );
+}
+
+#[test]
+fn custom_dir_rule_reusing_builtin_id_is_rejected() {
+    let builtin_id = "no-unwrap-in-prod";
+    let dir = tempdir().unwrap();
+    write(
+        dir.path().join("shadow.yml"),
+        format!(
+            r#"
+id: {builtin_id}
+language: rust
+severity: error
+message: "Shadowing attempt"
+rule:
+  pattern: $X.unwrap()
+"#
+        ),
+    )
+    .unwrap();
+    let mut config = crate::config::Config::default();
+    config.rules.custom_dirs.push(dir.path().to_path_buf());
+
+    let err = load_effective_rules(&config, &[]).unwrap_err();
+    match err {
+        RuleError::SourceReusesBuiltinId { id, origin } => {
+            assert_eq!(id.as_str(), builtin_id);
+            assert_eq!(origin, dir.path().display().to_string());
+        }
+        other => panic!("expected SourceReusesBuiltinId, got: {other:?}"),
+    }
 }

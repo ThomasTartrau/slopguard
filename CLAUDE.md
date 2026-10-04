@@ -6,7 +6,7 @@ A Rust CLI tool that catches AI-generated code patterns ("slop") and common corr
 
 Read these files before working:
 - ARCHITECTURE.md - workspace structure, crate responsibilities, data flow
-- DECISIONS.md - all design decisions with rationale (D1-D40)
+- DECISIONS.md - all design decisions with rationale (D1-D41)
 - ROADMAP.md - what to build and in what order
 - RULES.md - the builtin rules, their YAML format, and ast-grep syntax gotchas
 

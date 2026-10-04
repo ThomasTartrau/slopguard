@@ -270,9 +270,20 @@ path = "../shared-rules"
 
 Git sources are shallow-fetched with the machine's `git` into
 `<user cache>/slopguard/sources/<hash>` (`SLOPGUARD_SOURCES_CACHE` overrides
-the root) and refreshed best-effort on each run; `--offline` reuses the cache
-only. `SLOPGUARD_GIT_TOKEN` provides an https token without writing it to
-disk. An external rule reusing a builtin (id, language) is rejected.
+the root) and treated as untrusted (D41). Git runs with
+`GIT_ALLOW_PROTOCOL=https:ssh` (`SLOPGUARD_GIT_ALLOW_PROTOCOL` overrides it,
+for `file://` test remotes), a url or ref starting with `-` is rejected, and
+the fetch puts `--` before them. Each online run refreshes the checkout and a
+failed fetch is an error; a 40-character sha ref already checked out skips the
+fetch, and any other ref prints an unpinned warning. `--offline` reuses the
+cache only. `SLOPGUARD_GIT_TOKEN` provides an https token without writing it to
+disk, sent only to the host named by `SLOPGUARD_GIT_TOKEN_HOST` or the user
+config's `[git] token_host`. An external rule (source or `custom_dirs`)
+reusing a builtin (id, language) is rejected, and external rules go through the
+same `rulesets` / `enabled` / `rules.enable` / `rules.disable` selection as
+builtin ones. External `ai_check` rules are dropped before the AI pass unless
+`[ai].allow_external_rules` is set, and the AI pass confirms at most
+`[ai].max_calls` candidates per scan (the rest are reported unverified).
 `slopguard list` shows each rule's `source`.
 
 ## Config format (slopguard.toml)
@@ -309,6 +320,8 @@ provider = "api"          # api (HTTP) | cli (local claude binary)
 vendor = "anthropic"      # anthropic | openai, for provider = "api"
 model = "claude-haiku-4-5"
 concurrency = 4
+max_calls = 200           # candidates confirmed per scan
+allow_external_rules = false
 # api_key via ANTHROPIC_API_KEY / OPENAI_API_KEY env var
 
 [ai.classifier]           # optional, replaces the LLM confirmation (D35)
@@ -318,6 +331,9 @@ threshold = 0.7
 batch = true
 batch_max_questions = 8
 batch_max_state_lines = 200
+
+[git]
+token_host = "gitlab.com"   # only host SLOPGUARD_GIT_TOKEN is sent to
 
 [escalation]
 enabled = false    # opt-in
@@ -332,9 +348,10 @@ Hierarchical resolution:
 2. `slopguard.toml` at project root (overrides global)
 3. CLI flags (override everything)
 
-The project file is untrusted by default (D40): `[ai]` and `scan.cache_dir`
-are dropped from it with a warning, and its `rules.custom_dirs` / local
-`[[rules.sources]] path` must resolve inside the repository.
+The project file is untrusted by default (D40): `[ai]`, `[git]` and
+`scan.cache_dir` are dropped from it with a warning, and its
+`rules.custom_dirs` / local `[[rules.sources]] path` must resolve inside the
+repository.
 `--trust-repo-config` lifts both restrictions; a `--config` file is always
 trusted. `[ai].concurrency` must lie in `1..=64` in every file.
 
