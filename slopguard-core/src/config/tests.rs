@@ -959,6 +959,108 @@ fn ai_concurrency_in_explicit_config_file_is_rejected() {
 }
 
 #[test]
+fn ai_external_rules_and_max_calls_defaults() {
+    let cfg = Config::default();
+    assert!(!cfg.ai.allow_external_rules);
+    assert_eq!(cfg.ai.max_calls, 200);
+    assert_eq!(cfg.git.token_host, None);
+}
+
+#[test]
+fn ai_external_rules_and_max_calls_parse() {
+    let global_dir = tempdir().unwrap();
+    let project_dir = tempdir().unwrap();
+    write_global(
+        global_dir.path(),
+        "[ai]\nallow_external_rules = true\nmax_calls = 0\n",
+    );
+
+    let loaded = load_untrusted(Some(global_dir.path()), project_dir.path());
+    assert!(loaded.config.ai.allow_external_rules);
+    assert_eq!(loaded.config.ai.max_calls, 0);
+}
+
+#[test]
+fn repo_config_cannot_allow_external_ai_rules() {
+    let dir = tempdir().unwrap();
+    write(
+        dir.path().join("slopguard.toml"),
+        "[ai]\nallow_external_rules = true\nmax_calls = 100000\n",
+    )
+    .unwrap();
+
+    let loaded = load_untrusted(None, dir.path());
+    assert!(!loaded.config.ai.allow_external_rules);
+    assert_eq!(loaded.config.ai.max_calls, 200);
+    assert_eq!(loaded.warnings.len(), 1, "{:?}", loaded.warnings);
+    assert!(loaded.warnings[0]
+        .starts_with("ignored 'ai.allow_external_rules', 'ai.max_calls' in slopguard.toml"));
+}
+
+#[test]
+fn repo_config_cannot_set_git_token_host() {
+    let dir = tempdir().unwrap();
+    write(
+        dir.path().join("slopguard.toml"),
+        "[git]\ntoken_host = \"evil.example\"\n",
+    )
+    .unwrap();
+
+    let loaded = load_untrusted(None, dir.path());
+    assert_eq!(loaded.config.git.token_host, None);
+    assert_eq!(loaded.warnings.len(), 1, "{:?}", loaded.warnings);
+    assert!(loaded.warnings[0].starts_with("ignored 'git.token_host' in slopguard.toml"));
+}
+
+#[test]
+fn global_git_token_host_is_honored() {
+    let global_dir = tempdir().unwrap();
+    let project_dir = tempdir().unwrap();
+    write_global(global_dir.path(), "[git]\ntoken_host = \"gitlab.com\"\n");
+    write(
+        project_dir.path().join("slopguard.toml"),
+        "[git]\ntoken_host = \"evil.example\"\n",
+    )
+    .unwrap();
+
+    let loaded = load_untrusted(Some(global_dir.path()), project_dir.path());
+    assert_eq!(loaded.config.git.token_host.as_deref(), Some("gitlab.com"));
+    assert_eq!(loaded.warnings.len(), 1, "{:?}", loaded.warnings);
+}
+
+#[test]
+fn rule_source_git_starting_with_dash_is_rejected() {
+    let dir = tempdir().unwrap();
+    write(
+        dir.path().join("slopguard.toml"),
+        "[[rules.sources]]\ngit = \"--upload-pack=touch /tmp/pwned\"\n",
+    )
+    .unwrap();
+
+    let err = load_err(None, dir.path());
+    assert!(
+        matches!(&err, ConfigError::InvalidSource(msg) if msg.contains("'git' must not start with '-'")),
+        "expected InvalidSource for a dash-prefixed git url, got: {err:?}"
+    );
+}
+
+#[test]
+fn rule_source_ref_starting_with_dash_is_rejected() {
+    let dir = tempdir().unwrap();
+    write(
+        dir.path().join("slopguard.toml"),
+        "[[rules.sources]]\ngit = \"https://gitlab.com/org/rules.git\"\nref = \"--upload-pack=touch /tmp/pwned\"\n",
+    )
+    .unwrap();
+
+    let err = load_err(None, dir.path());
+    assert!(
+        matches!(&err, ConfigError::InvalidSource(msg) if msg.contains("'ref' must not start with '-'")),
+        "expected InvalidSource for a dash-prefixed ref, got: {err:?}"
+    );
+}
+
+#[test]
 fn fix_allow_external_is_parsed_from_global_config() {
     let global_dir = tempdir().unwrap();
     let project_dir = tempdir().unwrap();

@@ -1,6 +1,6 @@
 mod common;
 
-use std::fs::{create_dir, create_dir_all, write};
+use std::fs::{create_dir, create_dir_all, read_to_string, write};
 use std::path::{Path, PathBuf};
 
 use assert_cmd::Command;
@@ -25,6 +25,15 @@ fn slopguard_in(project: &Path, home: &Path) -> Command {
         .env_remove("TYPESAFE_API_KEY")
         .env_remove("OPENROUTER_API_KEY");
     cmd
+}
+
+/// Write `content` as the user config under the isolated `home`.
+// `dirs::config_dir` honors XDG_CONFIG_HOME on Linux only.
+#[cfg(target_os = "linux")]
+fn write_user_config(home: &Path, content: &str) {
+    let global = home.join(".config").join("slopguard");
+    create_dir_all(&global).unwrap();
+    write(global.join("config.toml"), content).unwrap();
 }
 
 /// A project whose `slopguard.toml` enables AI and loads an in-repo custom
@@ -56,7 +65,7 @@ ai_check:
     write(
         project.join("slopguard.toml"),
         format!(
-            "{RULESETS_OFF}\n[rules]\ncustom_dirs = [\"./custom-rules\"]\n\n\
+            "{RULESETS_OFF}\n[rules]\nenable = [\"ai-safety-demo\"]\ncustom_dirs = [\"./custom-rules\"]\n\n\
              [ai]\nenabled = true\nprovider = \"api\"\nvendor = \"anthropic\"\n\
              api_key = \"repo-secret-key\"\n"
         ),
@@ -79,14 +88,18 @@ fn outside_dir_project(parent: &Path) -> PathBuf {
     project
 }
 
+// `dirs::config_dir` honors XDG_CONFIG_HOME on Linux only.
+#[cfg(target_os = "linux")]
 #[test]
 fn repo_config_ai_keys_are_ignored_with_a_warning() {
     // WHY: the scanned repo is untrusted input. Its `[ai]` table must not turn
     // the AI pass on (nor reach for a key): it is dropped with a warning, so
     // the AI rule is skipped as "AI is disabled", not "missing API key".
+    // The user config lets the in-repo (external) AI rule reach the AI phase.
     let project = tempdir().unwrap();
     let home = tempdir().unwrap();
     ai_project(project.path());
+    write_user_config(home.path(), "[ai]\nallow_external_rules = true\n");
 
     slopguard_in(project.path(), home.path())
         .args(["scan", "--no-cache", "--no-colors", "."])
@@ -97,6 +110,7 @@ fn repo_config_ai_keys_are_ignored_with_a_warning() {
             "warning: ignored 'ai.api_key', 'ai.enabled', 'ai.provider', 'ai.vendor' in slopguard.toml",
         ))
         .stderr(predicate::str::contains("AI is disabled"))
+        .stderr(predicate::str::contains("external AI rules skipped").not())
         .stderr(predicate::str::contains("ANTHROPIC_API_KEY").not())
         // The secret value is never echoed.
         .stderr(predicate::str::contains("repo-secret-key").not());
@@ -177,6 +191,46 @@ fn global_config_zero_concurrency_fails_with_config_error() {
         .stderr(predicate::str::contains(
             "[ai].concurrency must be between 1 and 64, got 0",
         ));
+}
+
+#[test]
+fn external_ai_rule_is_skipped_by_default() {
+    // WHY: an in-repo `ai_check` rule is external: its prompt was never
+    // reviewed by the user, so it must not send code to a provider unless the
+    // user config sets `ai.allow_external_rules`.
+    let project = tempdir().unwrap();
+    let home = tempdir().unwrap();
+    ai_project(project.path());
+
+    slopguard_in(project.path(), home.path())
+        .args(["scan", "--no-cache", "--no-colors", "."])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("0 errors, 0 warnings"))
+        .stderr(predicate::str::contains(
+            "warning: 1 external AI rules skipped (set ai.allow_external_rules = true in the user config to allow them)",
+        ))
+        .stderr(predicate::str::contains("AI is disabled").not());
+}
+
+#[test]
+fn repo_config_cannot_allow_external_ai_rules() {
+    // `allow_external_rules` lives under the reserved `[ai]` table: the repo
+    // cannot grant its own rules access to the provider.
+    let project = tempdir().unwrap();
+    let home = tempdir().unwrap();
+    ai_project(project.path());
+    let config_path = project.path().join("slopguard.toml");
+    let mut config = read_to_string(&config_path).unwrap();
+    config.push_str("allow_external_rules = true\n");
+    write(&config_path, config).unwrap();
+
+    slopguard_in(project.path(), home.path())
+        .args(["scan", "--no-cache", "--no-colors", "."])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("'ai.allow_external_rules'"))
+        .stderr(predicate::str::contains("1 external AI rules skipped"));
 }
 
 #[test]

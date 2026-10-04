@@ -233,7 +233,8 @@ that tune the scan itself (`[rulesets]`, `[rules]`, `[scan].ignores`,
 reserved to the user:
 
 - **`[ai]` and `[ai.classifier]`** (provider, endpoint, model, API key,
-  concurrency) and **`scan.cache_dir`** are ignored when they appear in the
+  concurrency, `max_calls`, `allow_external_rules`), **`[git]`** (the token
+  host) and **`scan.cache_dir`** are ignored when they appear in the
   repo file, with a single `warning: ignored 'ai.api_key', 'ai.enabled' in
   slopguard.toml ...` line on stderr naming every dropped key. Values are
   never printed. Set them in
@@ -304,13 +305,25 @@ path = "../shared-rules"   # or a local directory
 - Git sources are shallow-fetched with your own `git` (ssh-agent, credential
   helpers and `~/.gitconfig` apply) into `~/.cache/slopguard/sources/` (Linux;
   the platform cache directory elsewhere, `SLOPGUARD_SOURCES_CACHE` to
-  override). For a private https repository in CI, set `SLOPGUARD_GIT_TOKEN`;
-  it is never written to disk.
-- Each run refreshes the checkout. If the remote is unreachable, the cached copy
-  is used. `--offline` never fetches and fails when the cache is empty.
-- There is no lockfile yet: pin a tag or a sha for reproducible CI.
-- A source rule cannot reuse the id of a builtin rule for the same language;
+  override). Only `https` and `ssh` remotes are allowed.
+- For a private https repository in CI, set `SLOPGUARD_GIT_TOKEN` together with
+  the one host it may be sent to, `SLOPGUARD_GIT_TOKEN_HOST=gitlab.com` (or
+  `[git] token_host = "gitlab.com"` in your user config). Without a host the
+  token is not used. It is never written to disk.
+- Each online run refreshes the checkout, and a failed fetch fails the command:
+  stale rules are never used silently. A ref that is a 40-character commit sha
+  already in the cache is not fetched again. `--offline` never fetches and
+  fails when the cache is empty.
+- There is no lockfile yet: pin a commit sha. Any other ref (tag, branch,
+  default branch) prints a `warning: unpinned rule source` line on each run.
+- External rules (sources and `custom_dirs`) follow the same selection as
+  builtin ones: their ruleset must be on, `enabled: false` keeps them off
+  unless listed in `rules.enable`, and `rules.disable` applies.
+- An external rule cannot reuse the id of a builtin rule for the same language;
   that is an error, not an override.
+- External `ai_check` rules never run unless the user config sets
+  `[ai] allow_external_rules = true`: they would send your code to the model
+  with a prompt written by someone else. A skipped rule is reported on stderr.
 - `slopguard list` shows where each rule comes from in its `source` column, and
   `slopguard test` validates source rules like any other.
 
@@ -352,6 +365,8 @@ provider = "api"          # "api" (HTTP) or "cli" (local claude binary)
 vendor = "anthropic"      # "anthropic" or "openai" (only for provider = "api")
 model = "claude-haiku-4-5" # optional; per-rule model overrides win
 concurrency = 4            # candidates confirmed in parallel
+max_calls = 200            # candidates confirmed per scan; the rest are reported unverified
+allow_external_rules = false # run ai_check rules from custom_dirs / rule sources
 # api_key = "..."          # optional; prefer the env var below
 ```
 

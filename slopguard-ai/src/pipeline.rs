@@ -199,6 +199,22 @@ pub fn run_ai_pass(
     })
 }
 
+/// Split `candidates` at `max_calls`: the first `max_calls` go to the AI pass,
+/// the rest come back as their unverified AST findings (no AI reason, no
+/// confidence), so a large scan cannot trigger an unbounded number of calls.
+/// Cache hits count against the cap, which keeps the bound predictable.
+pub fn cap_candidates(
+    mut candidates: Vec<AiCandidate>,
+    max_calls: usize,
+) -> (Vec<AiCandidate>, Vec<Finding>) {
+    let overflow = candidates
+        .split_off(max_calls.min(candidates.len()))
+        .into_iter()
+        .map(|candidate| candidate.finding)
+        .collect();
+    (candidates, overflow)
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -389,6 +405,35 @@ mod tests {
     }
 
     #[test]
+    fn cap_candidates_keeps_first_n_and_returns_rest_unverified() {
+        let provider = MockProvider::new(json!({
+            "is_issue": true,
+            "reason": "confirmed",
+            "confidence": 0.9
+        }));
+        let candidates = (1..=3).map(|line| candidate(line, "a\nb\nc\n")).collect();
+
+        let (kept, overflow) = cap_candidates(candidates, 2);
+        assert_eq!(kept.len(), 2);
+        assert_eq!(
+            kept.iter().map(|c| c.finding.line).collect::<Vec<_>>(),
+            vec![1, 2],
+            "the first candidates are kept, in order"
+        );
+        assert_eq!(overflow.len(), 1);
+        assert_eq!(overflow[0].line, 3);
+        assert_eq!(overflow[0].confidence, None, "overflow is not AI-verified");
+
+        let confirmed = run_ai_pass(&provider, kept, 4, None);
+        assert_eq!(confirmed.len(), 2);
+        assert_eq!(
+            provider.calls.load(Ordering::SeqCst),
+            2,
+            "only the capped candidates reach the provider"
+        );
+    }
+
+    #[test]
     fn cache_key_differs_per_match_position() {
         let dir = tempdir().unwrap();
         let cache = AiCache::new(dir.path(), test_key());
@@ -422,6 +467,33 @@ mod tests {
             2,
             "both verdicts are served from the cache"
         );
+    }
+
+    #[test]
+    fn max_calls_zero_returns_all_unverified() {
+        let provider = MockProvider::new(json!({
+            "is_issue": true,
+            "reason": "confirmed",
+            "confidence": 0.9
+        }));
+        let candidates = vec![candidate(1, "a\nb\n"), candidate(2, "a\nb\n")];
+
+        let (kept, overflow) = cap_candidates(candidates, 0);
+        assert!(kept.is_empty());
+        assert_eq!(overflow.len(), 2);
+        assert!(overflow.iter().all(|f| f.confidence.is_none()));
+
+        let confirmed = run_ai_pass(&provider, kept, 4, None);
+        assert!(confirmed.is_empty());
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 0, "no provider call");
+    }
+
+    #[test]
+    fn cap_above_candidate_count_keeps_everything() {
+        let candidates = vec![candidate(1, "a\n")];
+        let (kept, overflow) = cap_candidates(candidates, 200);
+        assert_eq!(kept.len(), 1);
+        assert!(overflow.is_empty());
     }
 
     #[test]

@@ -571,7 +571,7 @@ fn reject_builtin_id_reuse(external: &[Rule], builtin: &[Rule]) -> Result<(), Ru
     Ok(())
 }
 
-/// Whether a builtin rule takes part in a scan under `config`.
+/// Whether a rule (builtin or external) takes part in a scan under `config`.
 ///
 /// A rule listed in `rules.enable` is always active. Otherwise it must be
 /// enabled by default, belong to an active ruleset, and not be listed in
@@ -590,53 +590,58 @@ pub fn is_rule_active(rule: &Rule, config: &crate::config::Config) -> bool {
 }
 
 /// Load the non-builtin rules (custom directories + external sources) and
-/// reject any external rule that reuses a builtin id. Custom rules come first,
-/// then source rules, matching the order both public loaders expose.
+/// reject any of them that reuses a builtin id: neither a custom directory nor
+/// a source may shadow a builtin rule. Custom rules come first, then source
+/// rules, matching the order both public loaders expose.
 fn load_external_rules(
     config: &crate::config::Config,
     sources: &[ResolvedSource],
     builtin: &[Rule],
-) -> Result<Vec<Rule>, RuleError> {
-    let source_rules = load_source_rules(sources)?;
-    reject_builtin_id_reuse(&source_rules, builtin)?;
-
-    let mut external = load_custom_rules(&config.rules.custom_dirs)?;
-    external.extend(source_rules);
-    Ok(external)
+) -> Result<(Vec<Rule>, Vec<Rule>), RuleError> {
+    let custom = load_custom_rules(&config.rules.custom_dirs)?;
+    let from_sources = load_source_rules(sources)?;
+    reject_builtin_id_reuse(&custom, builtin)?;
+    reject_builtin_id_reuse(&from_sources, builtin)?;
+    Ok((custom, from_sources))
 }
 
-/// Load all effective rules based on config: builtin (filtered by rulesets and
-/// the enable/disable lists), custom rules from configured directories, and
-/// rules from resolved external sources. An external rule reusing a builtin id
-/// is rejected before any filtering.
+/// Load all effective rules based on config: builtin, custom rules from
+/// configured directories, and rules from resolved external sources, all
+/// filtered by [`is_rule_active`] (rulesets, `enabled: false`, and the
+/// enable/disable lists). An external rule reusing a builtin id is rejected
+/// before any filtering.
 pub fn load_effective_rules(
     config: &crate::config::Config,
     sources: &[ResolvedSource],
 ) -> Result<Vec<Rule>, RuleError> {
     let builtin = load_builtin_rules()?;
-    let external = load_external_rules(config, sources, &builtin)?;
+    let (custom, from_sources) = load_external_rules(config, sources, &builtin)?;
 
+    // Rules from `custom_dirs` are an explicit opt-in and are not gated by
+    // rulesets or `enabled`; builtin and source rules are.
     let mut rules: Vec<Rule> = builtin
         .into_iter()
+        .chain(from_sources)
         .filter(|rule| is_rule_active(rule, config))
         .collect();
-    rules.extend(external);
+    rules.extend(custom);
     validate_unique_ids(&rules)?;
     Ok(rules)
 }
 
 /// Load all rules (builtin + custom + external sources) without filtering by
 /// activation status. Used by `explain` to look up any rule regardless of
-/// config.
+/// config, so an opt-in or disabled rule can still be explained.
 pub fn load_all_rules(
     config: &crate::config::Config,
     sources: &[ResolvedSource],
 ) -> Result<Vec<Rule>, RuleError> {
     let builtin = load_builtin_rules()?;
-    let external = load_external_rules(config, sources, &builtin)?;
+    let (custom, from_sources) = load_external_rules(config, sources, &builtin)?;
 
     let mut rules = builtin;
-    rules.extend(external);
+    rules.extend(custom);
+    rules.extend(from_sources);
     Ok(rules)
 }
 

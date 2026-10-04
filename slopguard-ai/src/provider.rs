@@ -193,6 +193,7 @@ mod tests {
             concurrency: 4,
             api_key: key.map(str::to_string),
             classifier: ClassifierConfig::default(),
+            ..AiConfig::default()
         }
     }
 

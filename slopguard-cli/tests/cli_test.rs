@@ -34,7 +34,7 @@ tests:
     .unwrap();
 
     let config = format!(
-        "[rulesets]\nslop = false\nsecurity = false\ncorrectness = false\n\n[rules]\ncustom_dirs = [\"{}\"]\n",
+        "[rulesets]\nslop = false\nsecurity = false\ncorrectness = false\n\n[rules]\nenable = [\"test-good\"]\ncustom_dirs = [\"{}\"]\n",
         rules_dir.display()
     );
     let config_path = dir.path().join("slopguard.toml");
@@ -76,7 +76,7 @@ tests:
     .unwrap();
 
     let config = format!(
-        "[rulesets]\nslop = false\nsecurity = false\ncorrectness = false\n\n[rules]\ncustom_dirs = [\"{}\"]\n",
+        "[rulesets]\nslop = false\nsecurity = false\ncorrectness = false\n\n[rules]\nenable = [\"test-bad-match\"]\ncustom_dirs = [\"{}\"]\n",
         rules_dir.display()
     );
     let config_path = dir.path().join("slopguard.toml");
@@ -117,7 +117,7 @@ tests:
     .unwrap();
 
     let config = format!(
-        "[rulesets]\nslop = false\nsecurity = false\ncorrectness = false\n\n[rules]\ncustom_dirs = [\"{}\"]\n",
+        "[rulesets]\nslop = false\nsecurity = false\ncorrectness = false\n\n[rules]\nenable = [\"test-bad-not-match\"]\ncustom_dirs = [\"{}\"]\n",
         rules_dir.display()
     );
     let config_path = dir.path().join("slopguard.toml");
@@ -153,7 +153,7 @@ rule:
     .unwrap();
 
     let config = format!(
-        "[rulesets]\nslop = false\nsecurity = false\ncorrectness = false\n\n[rules]\ncustom_dirs = [\"{}\"]\n",
+        "[rulesets]\nslop = false\nsecurity = false\ncorrectness = false\n\n[rules]\nenable = [\"no-tests-rule\"]\ncustom_dirs = [\"{}\"]\n",
         rules_dir.display()
     );
     let config_path = dir.path().join("slopguard.toml");
@@ -215,7 +215,7 @@ tests:
     .unwrap();
 
     let config = format!(
-        "[rulesets]\nslop = false\nsecurity = false\ncorrectness = false\n\n[rules]\ncustom_dirs = [\"{}\"]\n",
+        "[rulesets]\nslop = false\nsecurity = false\ncorrectness = false\n\n[rules]\nenable = [\"custom-max-lines\"]\ncustom_dirs = [\"{}\"]\n",
         rules_dir.display()
     );
     let config_path = dir.join("slopguard.toml");
