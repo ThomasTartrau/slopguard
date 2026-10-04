@@ -126,7 +126,7 @@ download_and_install() {
     ARCHIVE_PATH="${WORKDIR}/${ARCHIVE}"
 
     if ! curl -fsSL "$URL" -o "$ARCHIVE_PATH"; then
-        error "download failed. Check that v${VERSION} has a binary for ${TARGET}"
+        error "download failed: v${VERSION} has no pre-built binary for ${TARGET}. Install from source instead: cargo install slopguard-cli"
     fi
 
     if ! curl -fsSL "$SUMS_URL" -o "${WORKDIR}/SHA256SUMS"; then

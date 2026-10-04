@@ -12,7 +12,8 @@ RUN case "$(uname -m)" in \
 RUN cargo binstall --no-confirm \
     cargo-nextest@0.9.140 \
     cargo-audit@0.22.2 \
-    cargo-zigbuild@0.23.4
+    cargo-zigbuild@0.23.4 \
+    sccache@0.10.0
 
 FROM rust:1.94.1-bookworm
 
@@ -33,3 +34,4 @@ RUN rustup component add clippy rustfmt && \
 COPY --from=builder /usr/local/cargo/bin/cargo-nextest /usr/local/cargo/bin/
 COPY --from=builder /usr/local/cargo/bin/cargo-audit /usr/local/cargo/bin/
 COPY --from=builder /usr/local/cargo/bin/cargo-zigbuild /usr/local/cargo/bin/
+COPY --from=builder /usr/local/cargo/bin/sccache /usr/local/cargo/bin/

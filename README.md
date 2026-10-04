@@ -104,8 +104,8 @@ Pre-built binaries are available for:
 | OS | Architecture | Target |
 | ---- | ------------- | -------- |
 | Linux | x86_64 | `x86_64-unknown-linux-gnu`, `x86_64-unknown-linux-musl` |
-| macOS | ARM (M1+) | `aarch64-apple-darwin` |
-| macOS | Intel | `x86_64-apple-darwin` |
+
+macOS binaries are not published yet: on macOS, install from source with `cargo install slopguard-cli`.
 
 You can also download archives directly from the [releases page](https://gitlab.com/ThomasTartrau/slopguard/-/releases).
 
