@@ -22,9 +22,9 @@ use slopguard_core::config::{load_config, load_config_file, Config, ConfigError,
 use slopguard_core::git::GitError;
 use slopguard_core::preset::{presets_help, Preset};
 use slopguard_core::rule::{
-    is_rule_active, load_all_rules, load_builtin_rules, load_effective_rules, Category, Rule,
-    RuleError,
+    is_rule_active, load_all_rules, load_effective_rules, Category, Rule, RuleError,
 };
+use slopguard_core::sanitize::sanitize_control;
 use slopguard_core::scanner::ScanError;
 use slopguard_core::source::{
     default_allowed_protocols, default_cache_root, git_token_from_env, resolve_sources,
@@ -201,30 +201,33 @@ fn run_test(config_path: Option<PathBuf>, offline: bool) -> Result<bool, AppErro
     for result in &summary.results {
         match &result.status {
             RuleTestStatus::Pass => {
-                println!("  PASS  {}", result.rule_id);
+                println!("  PASS  {}", sanitize_control(result.rule_id.as_str()));
             }
             RuleTestStatus::Fail { failures } => {
-                println!("  FAIL  {}", result.rule_id);
+                println!("  FAIL  {}", sanitize_control(result.rule_id.as_str()));
                 for failure in failures {
                     match &failure.kind {
                         TestFailureKind::ShouldMatchDidNot => println!(
                             "        should_match did not match: {}",
-                            failure.snippet.lines().next().unwrap_or("")
+                            sanitize_control(failure.snippet.lines().next().unwrap_or(""))
                         ),
                         TestFailureKind::ShouldNotMatchDid => println!(
                             "        should_not_match matched: {}",
-                            failure.snippet.lines().next().unwrap_or("")
+                            sanitize_control(failure.snippet.lines().next().unwrap_or(""))
                         ),
                         TestFailureKind::FixMismatch { actual } => println!(
                             "        should_fix mismatch: {} -> got {}",
-                            failure.snippet.lines().next().unwrap_or(""),
-                            actual.lines().next().unwrap_or("")
+                            sanitize_control(failure.snippet.lines().next().unwrap_or("")),
+                            sanitize_control(actual.lines().next().unwrap_or(""))
                         ),
                     }
                 }
             }
             RuleTestStatus::NoTests => {
-                println!("  WARN  {} - no tests", result.rule_id);
+                println!(
+                    "  WARN  {} - no tests",
+                    sanitize_control(result.rule_id.as_str())
+                );
             }
         }
     }
@@ -250,17 +253,17 @@ fn run_list(
 ) -> Result<(), AppError> {
     let config = resolve_config(config_path.as_deref())?;
 
+    let sources = resolve_config_sources(&config, offline)?;
     let rules = if show_all {
-        load_builtin_rules()?
+        load_all_rules(&config, &sources)?
     } else {
-        let sources = resolve_config_sources(&config, offline)?;
         load_effective_rules(&config, &sources)?
     };
 
     let entries: Vec<ListEntry> = rules
         .iter()
         .map(|r| ListEntry {
-            id: r.id.to_string(),
+            id: sanitize_control(r.id.as_str()).into_owned(),
             language: r.language.to_string(),
             severity: r.severity.to_string(),
             category: r
@@ -270,7 +273,7 @@ fn run_list(
                 .to_string(),
             kind: json::rule_kind(r).to_string(),
             source: r.origin.label(),
-            status: if !show_all || is_rule_active(r, &config) {
+            status: if is_rule_active(r, &config) {
                 "enabled".to_string()
             } else {
                 "disabled".to_string()
@@ -346,18 +349,25 @@ fn run_list(
         .unwrap_or(4)
         .max(4);
 
+    let status_w = filtered
+        .iter()
+        .map(|e| e.status.len())
+        .max()
+        .unwrap_or(6)
+        .max(6);
+
     println!(
-        "{:<id_w$}  {:<lang_w$}  {:<sev_w$}  {:<cat_w$}  {:<kind_w$}  status",
-        "id", "language", "severity", "category", "type"
+        "{:<id_w$}  {:<lang_w$}  {:<sev_w$}  {:<cat_w$}  {:<kind_w$}  {:<status_w$}  source",
+        "id", "language", "severity", "category", "type", "status"
     );
     println!(
-        "{:<id_w$}  {:<lang_w$}  {:<sev_w$}  {:<cat_w$}  {:<kind_w$}  ------",
-        "--", "--------", "--------", "--------", "----"
+        "{:<id_w$}  {:<lang_w$}  {:<sev_w$}  {:<cat_w$}  {:<kind_w$}  {:<status_w$}  ------",
+        "--", "--------", "--------", "--------", "----", "------"
     );
     for e in &filtered {
         println!(
-            "{:<id_w$}  {:<lang_w$}  {:<sev_w$}  {:<cat_w$}  {:<kind_w$}  {}",
-            e.id, e.language, e.severity, e.category, e.kind, e.status
+            "{:<id_w$}  {:<lang_w$}  {:<sev_w$}  {:<cat_w$}  {:<kind_w$}  {:<status_w$}  {}",
+            e.id, e.language, e.severity, e.category, e.kind, e.status, e.source
         );
     }
 

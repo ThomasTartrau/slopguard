@@ -103,7 +103,7 @@ pub fn run_baseline(opts: BaselineOpts) -> Result<(), AppError> {
         offline,
     } = opts;
 
-    let (result, _config) = collect_findings(CollectOpts {
+    let (result, _config, _rules) = collect_findings(CollectOpts {
         paths,
         config_path,
         cli_disable,

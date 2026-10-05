@@ -1,6 +1,7 @@
 mod common;
 
-use std::fs::write;
+use std::fs::{create_dir, write};
+use std::path::{Path, PathBuf};
 
 use predicates::prelude::*;
 use tempfile::tempdir;
@@ -223,4 +224,103 @@ fn list_shows_cross_file_rule() {
         .find(|e| e["id"] == "no-single-impl-trait")
         .expect("no-single-impl-trait should be listed");
     assert_eq!(entry["type"], "cross-file");
+}
+
+/// A config loading two external rules from a local `custom_dirs`: `team-on`
+/// (force-enabled) and `team-off` (`enabled: false`). Returns the config path.
+fn external_rules_config(dir: &Path) -> PathBuf {
+    let rules_dir = dir.join("custom-rules");
+    create_dir(&rules_dir).unwrap();
+    for (id, enabled) in [("team-on", "true"), ("team-off", "false")] {
+        write(
+            rules_dir.join(format!("{id}.yml")),
+            format!(
+                "id: {id}\nlanguage: rust\nseverity: warning\ncategory: slop\n\
+                 message: \"Demo.\"\nenabled: {enabled}\nrule:\n  pattern: $R.clone()\n"
+            ),
+        )
+        .unwrap();
+    }
+    let config_path = dir.join("slopguard.toml");
+    let custom_dir = rules_dir.to_str().unwrap().replace('\\', "/");
+    write(
+        &config_path,
+        format!("[rules]\nenable = [\"team-on\"]\ncustom_dirs = [\"{custom_dir}\"]\n"),
+    )
+    .unwrap();
+    config_path
+}
+
+#[test]
+fn list_shows_external_rule_with_source_and_status() {
+    let dir = tempdir().unwrap();
+    let config_path = external_rules_config(dir.path());
+
+    let output = slopguard()
+        .args([
+            "list",
+            "--format",
+            "json",
+            "--config",
+            config_path.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let entries = json.as_array().unwrap();
+
+    let on = entries
+        .iter()
+        .find(|e| e["id"] == "team-on")
+        .expect("team-on should be listed");
+    assert_eq!(on["status"], "enabled");
+    assert!(on["source"].as_str().unwrap().contains("custom-rules"));
+
+    let builtin = entries
+        .iter()
+        .find(|e| e["id"] == "no-unwrap-in-prod")
+        .unwrap();
+    assert_eq!(builtin["source"], "builtin");
+
+    let text = slopguard()
+        .args(["list", "--config", config_path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8(text.stdout).unwrap();
+    assert!(
+        stdout.contains("source"),
+        "missing source header:\n{stdout}"
+    );
+    let line = stdout.lines().find(|l| l.starts_with("team-on")).unwrap();
+    assert!(line.contains("enabled") && line.contains("custom-rules"));
+}
+
+#[test]
+fn list_all_shows_disabled_external_rule_with_source() {
+    let dir = tempdir().unwrap();
+    let config_path = external_rules_config(dir.path());
+
+    let output = slopguard()
+        .args([
+            "list",
+            "--all",
+            "--format",
+            "json",
+            "--config",
+            config_path.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let off = json
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["id"] == "team-off")
+        .expect("--all should list the external rule disabled in its YAML");
+
+    assert_eq!(off["status"], "disabled");
+    assert!(off["source"].as_str().unwrap().contains("custom-rules"));
 }

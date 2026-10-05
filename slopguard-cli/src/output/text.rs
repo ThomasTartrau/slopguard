@@ -6,6 +6,7 @@ use std::path::Path;
 
 use slopguard_core::finding::{CacheStats, Finding, ScanResult};
 use slopguard_core::rule::{Category, Rule, Severity};
+use slopguard_core::sanitize::sanitize_control;
 
 use crate::output::json::rule_kind;
 use crate::output::plural;
@@ -75,8 +76,8 @@ fn write_finding(
         w,
         "{sev_color}{sev_label}{escalated}{reset}[{id}]: {msg}",
         reset = c.reset,
-        id = finding.rule_id,
-        msg = finding.message
+        id = sanitize_control(finding.rule_id.as_str()),
+        msg = sanitize_control(&finding.message)
     )?;
 
     let gw = gutter_width(finding.line);
@@ -85,7 +86,7 @@ fn write_finding(
     writeln!(
         w,
         "{padding} {cy}-->{r} {}:{}:{}",
-        finding.file.display(),
+        sanitize_control(&finding.file.display().to_string()),
         finding.line,
         finding.column,
         cy = c.cyan,
@@ -97,7 +98,8 @@ fn write_finding(
         let line_content = source_lines[finding.line - 1];
         writeln!(
             w,
-            "{cb}{ln}{r} {cy}|{r} {line_content}",
+            "{cb}{ln}{r} {cy}|{r} {printed}",
+            printed = sanitize_control(line_content),
             cb = c.cyan_bold,
             ln = finding.line,
             cy = c.cyan,
@@ -125,7 +127,13 @@ fn write_finding(
     writeln!(w, "{padding} {cy}|{r}", cy = c.cyan, r = c.reset)?;
 
     if let Some(note) = &finding.note {
-        writeln!(w, "{padding} {cy}={r} {note}", cy = c.cyan, r = c.reset)?;
+        writeln!(
+            w,
+            "{padding} {cy}={r} {note}",
+            note = sanitize_control(note),
+            cy = c.cyan,
+            r = c.reset
+        )?;
     }
 
     writeln!(w)?;
@@ -139,16 +147,16 @@ pub fn format_explain(rule: &Rule, w: &mut impl Write) -> io::Result<()> {
         .unwrap_or(&Category::Correctness)
         .to_string();
 
-    writeln!(w, "id:        {}", rule.id)?;
+    writeln!(w, "id:        {}", sanitize_control(rule.id.as_str()))?;
     writeln!(w, "language:  {}", rule.language)?;
     writeln!(w, "severity:  {}", rule.severity)?;
     writeln!(w, "category:  {category}")?;
-    writeln!(w, "message:   {}", rule.message)?;
+    writeln!(w, "message:   {}", sanitize_control(&rule.message))?;
     if let Some(note) = &rule.note {
-        writeln!(w, "note:      {note}")?;
+        writeln!(w, "note:      {}", sanitize_control(note))?;
     }
     if let Some(fix) = &rule.fix {
-        writeln!(w, "fix:       {fix}")?;
+        writeln!(w, "fix:       {}", sanitize_control(fix))?;
     }
     writeln!(w, "type:      {}", rule_kind(rule))?;
     if let Some(metric) = &rule.metric {
@@ -163,12 +171,12 @@ pub fn format_explain(rule: &Rule, w: &mut impl Write) -> io::Result<()> {
             writeln!(w, "threshold: {threshold}")?;
         }
         if let Some(model) = &ai_check.model {
-            writeln!(w, "model:     {model}")?;
+            writeln!(w, "model:     {}", sanitize_control(model))?;
         }
         writeln!(w)?;
         writeln!(w, "prompt:")?;
         for line in ai_check.prompt.lines() {
-            writeln!(w, "  {line}")?;
+            writeln!(w, "  {}", sanitize_control(line))?;
         }
     }
 
@@ -178,7 +186,7 @@ pub fn format_explain(rule: &Rule, w: &mut impl Write) -> io::Result<()> {
             writeln!(w, "should_match:")?;
             for snippet in &tests.should_match {
                 for line in snippet.lines() {
-                    writeln!(w, "  {line}")?;
+                    writeln!(w, "  {}", sanitize_control(line))?;
                 }
             }
         }
@@ -187,7 +195,7 @@ pub fn format_explain(rule: &Rule, w: &mut impl Write) -> io::Result<()> {
             writeln!(w, "should_not_match:")?;
             for snippet in &tests.should_not_match {
                 for line in snippet.lines() {
-                    writeln!(w, "  {line}")?;
+                    writeln!(w, "  {}", sanitize_control(line))?;
                 }
             }
         }
@@ -209,7 +217,11 @@ pub fn format_text(result: &ScanResult, w: &mut impl Write, use_colors: bool) ->
     let c = Colors::new(use_colors);
 
     if let (Some(base), Some(changed)) = (&result.stats.diff_base, result.stats.files_changed) {
-        writeln!(w, "Scanning {changed} changed files (base: {base})")?;
+        writeln!(
+            w,
+            "Scanning {changed} changed files (base: {})",
+            sanitize_control(base)
+        )?;
         writeln!(w)?;
     }
 
@@ -269,4 +281,131 @@ pub fn format_text(result: &ScanResult, w: &mut impl Write, use_colors: bool) ->
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs::write;
+    use std::path::{Path, PathBuf};
+
+    use serde_json::{from_value, json};
+    use slopguard_core::finding::{Finding, ScanResult, ScanStats};
+    use slopguard_core::rule::{Category, Rule, Severity};
+    use tempfile::tempdir;
+
+    use super::{format_explain, format_text};
+
+    const HOSTILE: &str = "\x1b[2J\x1b]0;x\x07";
+
+    fn finding(file: &Path) -> Finding {
+        Finding {
+            rule_id: "demo-rule".into(),
+            severity: Severity::Warning,
+            category: Category::Slop,
+            message: format!("message {HOSTILE}"),
+            note: Some(format!("model reason {HOSTILE}")),
+            fix: None,
+            file: file.to_path_buf(),
+            line: 1,
+            column: 1,
+            end_line: 1,
+            end_column: 2,
+            matched_text: "x".to_string(),
+            confidence: None,
+            escalated: false,
+        }
+    }
+
+    fn result(findings: Vec<Finding>) -> ScanResult {
+        ScanResult {
+            stats: ScanStats {
+                errors: 0,
+                warnings: findings.len(),
+                total: findings.len(),
+                files_scanned: 1,
+                baseline_filtered: 0,
+                diff_base: None,
+                files_changed: None,
+            },
+            findings,
+            cache_stats: None,
+        }
+    }
+
+    fn render(result: &ScanResult) -> String {
+        let mut out = Vec::new();
+        format_text(result, &mut out, false).unwrap();
+        String::from_utf8(out).unwrap()
+    }
+
+    fn assert_neutralized(out: &str) {
+        assert!(!out.contains('\x1b'), "raw ESC in output: {out:?}");
+        assert!(!out.contains('\x07'), "raw BEL in output: {out:?}");
+        assert!(out.contains("\\x1b"), "escaped ESC missing: {out:?}");
+    }
+
+    #[test]
+    fn text_output_neutralizes_message_note_and_path() {
+        let dir = tempdir().unwrap();
+        let file = dir.path().join("dir\x1b[2J.rs");
+        let out = render(&result(vec![finding(&file)]));
+
+        assert_neutralized(&out);
+        assert!(out.contains("model reason"));
+    }
+
+    #[test]
+    fn text_output_neutralizes_matched_line() {
+        let dir = tempdir().unwrap();
+        let file = dir.path().join("a.rs");
+        write(&file, "let s = \"\x1b[31m\";\n").unwrap();
+        let mut f = finding(&file);
+        f.message = "plain".to_string();
+        f.note = None;
+        let out = render(&result(vec![f]));
+
+        assert_neutralized(&out);
+        assert!(out.contains("let s = \"\\x1b[31m\";"));
+    }
+
+    #[test]
+    fn text_output_neutralizes_diff_base() {
+        let mut r = result(Vec::new());
+        r.stats.diff_base = Some(format!("main{HOSTILE}"));
+        r.stats.files_changed = Some(0);
+
+        assert_neutralized(&render(&r));
+    }
+
+    #[test]
+    fn explain_output_neutralizes_rule_text() {
+        let rule: Rule = from_value(json!({
+            "id": "demo-rule",
+            "language": "rust",
+            "severity": "error",
+            "message": format!("message {HOSTILE}"),
+            "note": format!("note {HOSTILE}"),
+            "fix": format!("fix {HOSTILE}"),
+            "tests": {
+                "should_match": [format!("let a = {HOSTILE};")],
+                "should_not_match": [format!("let b = {HOSTILE};")],
+            },
+        }))
+        .unwrap();
+        let mut out = Vec::new();
+        format_explain(&rule, &mut out).unwrap();
+
+        assert_neutralized(&String::from_utf8(out).unwrap());
+    }
+
+    #[test]
+    fn colors_stay_intact_when_enabled() {
+        let file = PathBuf::from("missing.rs");
+        let mut out = Vec::new();
+        format_text(&result(vec![finding(&file)]), &mut out, true).unwrap();
+        let out = String::from_utf8(out).unwrap();
+
+        assert!(out.contains("\x1b[1;33m"), "own color codes must remain");
+        assert!(!out.contains("\x1b[2J"), "hostile sequence must be escaped");
+    }
 }

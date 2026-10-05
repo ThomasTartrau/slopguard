@@ -23,6 +23,7 @@ use slopguard_core::finding::{Finding, ScanResult};
 use slopguard_core::fix::fix_paths;
 use slopguard_core::git::{self, changed_files, GitError};
 use slopguard_core::rule::{load_effective_rules, Language, ReasonMode, Rule, Severity};
+use slopguard_core::sanitize::sanitize_control;
 use slopguard_core::scanner::{
     count_severities, scan, scan_cached, scan_files, scan_files_cached, scan_files_unused_disables,
     scan_unused_disables, ScanError,
@@ -49,11 +50,12 @@ fn write_output(
     w: &mut impl Write,
     use_colors: bool,
     html_meta: &HtmlMeta,
+    rules: &[Rule],
 ) -> io::Result<()> {
     match format {
         Format::Text => text::format_text(result, w, use_colors),
         Format::Json => json::format_json(result, w),
-        Format::Sarif => sarif::format_sarif(result, w),
+        Format::Sarif => sarif::format_sarif(result, rules, w),
         Format::Html => html::format_html(result, &compute_report(result), html_meta, w),
     }
 }
@@ -146,8 +148,8 @@ fn under_requested_paths(files: Vec<PathBuf>, paths: &[PathBuf]) -> Vec<PathBuf>
 
 /// Resolve the config, load the active rules, run the AST pass (cached or
 /// not) then the AI pass, and return the raw unfiltered result along with the
-/// resolved config.
-pub fn collect_findings(opts: CollectOpts) -> Result<(ScanResult, Config), AppError> {
+/// resolved config and the rules that were scanned with.
+pub fn collect_findings(opts: CollectOpts) -> Result<(ScanResult, Config, Vec<Rule>), AppError> {
     let CollectOpts {
         paths,
         config_path,
@@ -183,14 +185,14 @@ pub fn collect_findings(opts: CollectOpts) -> Result<(ScanResult, Config), AppEr
 
     let result = scan_with_rules(
         targets,
-        rules,
+        rules.clone(),
         &config,
         no_cache,
         cache_dir,
         report_unused,
         diff_base,
     )?;
-    Ok((result, config))
+    Ok((result, config, rules))
 }
 
 /// Narrow the loaded rules to the `--rule` filter (an unknown id is an error,
@@ -336,7 +338,7 @@ pub(crate) fn run_scan(opts: ScanOpts) -> Result<bool, AppError> {
     // `paths` is moved into CollectOpts below, so derive the title first.
     let project = project_name(&paths);
 
-    let (mut result, config) = collect_findings(CollectOpts {
+    let (mut result, config, rules) = collect_findings(CollectOpts {
         paths,
         config_path,
         cli_disable,
@@ -384,13 +386,13 @@ pub(crate) fn run_scan(opts: ScanOpts) -> Result<bool, AppError> {
             let file = fs::File::create(&path)?;
             let mut w = BufWriter::new(file);
             // A file is never a terminal: never emit ANSI escapes into it.
-            write_output(&result, &format, &mut w, false, &html_meta)?;
+            write_output(&result, &format, &mut w, false, &html_meta, &rules)?;
             w.flush()?;
         }
         None => {
             let stdout = io::stdout();
             let mut out = stdout.lock();
-            write_output(&result, &format, &mut out, use_colors, &html_meta)?;
+            write_output(&result, &format, &mut out, use_colors, &html_meta, &rules)?;
         }
     }
 
@@ -527,7 +529,7 @@ fn run_fix(opts: FixOpts) -> Result<bool, AppError> {
                 .unified_diff()
                 .header(&format!("a/{rel}"), &format!("b/{rel}"))
                 .to_string();
-            write!(out, "{unified}")?;
+            write!(out, "{}", sanitize_control(&unified))?;
         }
         writeln!(
             out,
@@ -576,15 +578,15 @@ pub(crate) fn language_for_path(path: &Path) -> Option<Language> {
     }
 }
 
-/// Find the `ai_check` rule that produced a candidate finding, matching on id
+/// Find the rule that produced a finding, matching on id
 /// and (when possible) the file's language, so a shared id across Rust and
 /// TypeScript resolves to the right variant.
-fn find_ai_rule<'a>(ai_rules: &'a [Rule], finding: &Finding) -> Option<&'a Rule> {
+pub(crate) fn find_rule<'a>(rules: &'a [Rule], finding: &Finding) -> Option<&'a Rule> {
     let lang = language_for_path(&finding.file);
-    ai_rules
+    rules
         .iter()
         .find(|r| r.id == finding.rule_id && Some(&r.language) == lang.as_ref())
-        .or_else(|| ai_rules.iter().find(|r| r.id == finding.rule_id))
+        .or_else(|| rules.iter().find(|r| r.id == finding.rule_id))
 }
 
 /// Turn AST candidate findings into AI candidates: attach each rule's prompt,
@@ -598,7 +600,7 @@ fn build_candidates(
     let mut contents: HashMap<PathBuf, Option<String>> = HashMap::new();
     let mut candidates = Vec::new();
     for finding in findings {
-        let Some(rule) = find_ai_rule(ai_rules, &finding) else {
+        let Some(rule) = find_rule(ai_rules, &finding) else {
             continue;
         };
         let Some(ai_check) = rule.ai_check.as_ref() else {
