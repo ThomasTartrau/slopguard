@@ -407,3 +407,34 @@ fn fix_with_unknown_rule_filter_fails_before_rewriting() {
 
     assert_eq!(read_to_string(&file).unwrap(), CLONE_SRC);
 }
+
+#[test]
+fn dry_run_diff_neutralizes_control_characters() {
+    let dir = tempdir().unwrap();
+    let file = dir.path().join("app.rs");
+    // The ESC sits on a context line of the diff, next to the fixable clone.
+    write(
+        &file,
+        "// \x1b[31mred\x1b[0m\nfn f() -> String {\n    let s = name.to_string().clone();\n    s\n}\n",
+    )
+    .unwrap();
+
+    let output = slopguard()
+        .args([
+            "scan",
+            "--no-ai",
+            "--fix",
+            "--dry-run",
+            file.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    assert!(
+        !output.stdout.contains(&0x1b),
+        "dry-run diff must not contain a raw ESC byte"
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("\\x1b[31mred"), "got:\n{stdout}");
+}

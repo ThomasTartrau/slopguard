@@ -2,6 +2,8 @@
 
 use std::io::{self, Write};
 
+use slopguard_core::sanitize::sanitize_control;
+
 use crate::output::text::Colors;
 use crate::output::{plural, write_json_pretty};
 use crate::stats_cmd::StatsReport;
@@ -27,7 +29,7 @@ struct Row {
 
 fn row(label: &str, count: usize, color: &'static str) -> Row {
     Row {
-        label: label.to_string(),
+        label: sanitize_control(label).into_owned(),
         count,
         color,
     }

@@ -291,3 +291,26 @@ fn text_summary_line() {
         "summary should show correct counts, got: {stdout}"
     );
 }
+
+#[test]
+fn text_output_neutralizes_control_characters_in_matched_line() {
+    let dir = tempdir().unwrap();
+    write(
+        dir.path().join("bad.rs"),
+        "fn main() {\n    foo().unwrap(); // \x1b[2J\n}\n",
+    )
+    .unwrap();
+
+    let output = slopguard()
+        .args(["scan", "--no-colors", dir.path().to_str().unwrap()])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        !output.stdout.contains(&0x1b),
+        "text output must not contain a raw ESC byte"
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("\\x1b[2J"), "got:\n{stdout}");
+}

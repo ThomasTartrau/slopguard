@@ -447,3 +447,36 @@ fn pinned_sha_does_not_warn() {
     ];
     assert!(unpinned_source_warnings(&sources).is_empty());
 }
+
+#[test]
+fn invalid_argument_error_neutralizes_control_characters() {
+    let err = validate_git_arg("url", "-\x1b[2J").unwrap_err();
+    assert!(!err.to_string().contains('\x1b'));
+    assert!(err.to_string().contains("\\x1b"));
+}
+
+#[test]
+fn origin_label_neutralizes_control_characters() {
+    let git = RuleOrigin::Git {
+        url: "https://x/\x1b]0;t\x07".to_string(),
+    };
+    let local = RuleOrigin::Local {
+        path: PathBuf::from("rules\x1b[2J"),
+    };
+    for label in [git.label(), local.label()] {
+        assert!(!label.contains('\x1b'));
+        assert!(!label.contains('\x07'));
+        assert!(label.contains("\\x1b"));
+    }
+}
+
+#[test]
+fn unpinned_warning_neutralizes_control_characters() {
+    let sources = [RuleSource {
+        git: Some("https://x/\x1b[2J.git".to_string()),
+        git_ref: Some("main\x1b[31m".to_string()),
+        path: None,
+    }];
+    let warnings = unpinned_source_warnings(&sources);
+    assert!(warnings.iter().all(|w| !w.contains('\x1b')));
+}

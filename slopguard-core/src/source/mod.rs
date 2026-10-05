@@ -36,6 +36,7 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::config::RuleSource;
+use crate::sanitize::sanitize_control;
 
 /// Environment variable holding an https token that overrides git's own
 /// credential resolution. Empty means "unset".
@@ -118,8 +119,10 @@ impl RuleOrigin {
     pub fn label(&self) -> String {
         match self {
             RuleOrigin::Builtin => "builtin".to_string(),
-            RuleOrigin::Git { url } => url.clone(),
-            RuleOrigin::Local { path } => path.display().to_string(),
+            RuleOrigin::Git { url } => sanitize_control(url).into_owned(),
+            RuleOrigin::Local { path } => {
+                sanitize_control(&path.display().to_string()).into_owned()
+            }
         }
     }
 }
@@ -222,12 +225,15 @@ pub fn unpinned_source_warnings(sources: &[RuleSource]) -> Vec<String> {
             let url = source.git.as_deref()?;
             let reason = match source.git_ref.as_deref() {
                 Some(git_ref) if is_pinned_sha(git_ref) => return None,
-                Some(git_ref) => format!("ref '{git_ref}' is not a 40-character commit sha"),
+                Some(git_ref) => format!(
+                    "ref '{}' is not a 40-character commit sha",
+                    sanitize_control(git_ref)
+                ),
                 None => "no ref set, the default branch is used".to_string(),
             };
             Some(format!(
                 "unpinned rule source '{}': {reason}; pin it to a commit sha so its rules cannot change unnoticed",
-                without_userinfo(url)
+                sanitize_control(&without_userinfo(url))
             ))
         })
         .collect()
@@ -296,7 +302,7 @@ fn validate_git_arg(what: &'static str, value: &str) -> Result<(), SourceError> 
     if value.starts_with('-') {
         return Err(SourceError::InvalidArgument {
             what,
-            value: value.to_string(),
+            value: sanitize_control(value).into_owned(),
         });
     }
     Ok(())
@@ -312,8 +318,13 @@ fn run_git(dir: &Path, args: &[&str], allowed_protocols: &str) -> Result<Output,
         .map_err(|source| SourceError::Spawn { source })
 }
 
-fn stderr_of(output: &Output) -> String {
+fn raw_stderr_of(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).trim().to_string()
+}
+
+/// The trimmed stderr of a git call with control characters neutralized.
+fn stderr_of(output: &Output) -> String {
+    sanitize_control(&raw_stderr_of(output)).into_owned()
 }
 
 /// Shallow-fetch `git_ref` from `url` into an existing repo at `dir` and check
@@ -336,14 +347,14 @@ fn fetch_and_checkout(
         &opts.allowed_protocols,
     )?;
     if !fetch.status.success() {
-        let mut stderr = stderr_of(&fetch);
+        let mut stderr = raw_stderr_of(&fetch);
         if let Some(token) = token {
             stderr = stderr.replace(&token.token, REDACTED);
         }
         return Err(SourceError::Git {
-            url: url.to_string(),
-            args: format!("fetch {refspec}"),
-            stderr,
+            url: sanitize_control(url).into_owned(),
+            args: format!("fetch {}", sanitize_control(refspec)),
+            stderr: sanitize_control(&stderr).into_owned(),
         });
     }
     let checkout = run_git(
@@ -359,7 +370,7 @@ fn fetch_and_checkout(
     )?;
     if !checkout.status.success() {
         return Err(SourceError::Git {
-            url: url.to_string(),
+            url: sanitize_control(url).into_owned(),
             args: "checkout FETCH_HEAD".to_string(),
             stderr: stderr_of(&checkout),
         });
@@ -399,8 +410,8 @@ fn ensure_git_source(
     if !is_repo {
         if opts.offline {
             return Err(SourceError::OfflineNoCache {
-                url: url.to_string(),
-                path: dir.display().to_string(),
+                url: sanitize_control(url).into_owned(),
+                path: sanitize_control(&dir.display().to_string()).into_owned(),
             });
         }
         create_dir_all(&dir).map_err(|source| SourceError::Cache {
@@ -410,7 +421,7 @@ fn ensure_git_source(
         let init = run_git(&dir, &["init", "--quiet"], &opts.allowed_protocols)?;
         if !init.status.success() {
             return Err(SourceError::Git {
-                url: url.to_string(),
+                url: sanitize_control(url).into_owned(),
                 args: "init".to_string(),
                 stderr: stderr_of(&init),
             });
@@ -452,7 +463,7 @@ pub fn resolve_sources(
         } else if let Some(path) = &source.path {
             if !path.is_dir() {
                 return Err(SourceError::LocalMissing {
-                    path: path.display().to_string(),
+                    path: sanitize_control(&path.display().to_string()).into_owned(),
                 });
             }
             resolved.push(ResolvedSource {

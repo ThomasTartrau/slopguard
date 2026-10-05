@@ -4,9 +4,10 @@ use std::ops::Not;
 use serde::Serialize;
 
 use slopguard_core::finding::ScanResult;
-use slopguard_core::rule::Severity;
+use slopguard_core::rule::{Rule, Severity};
 
 use crate::output::write_json_pretty;
+use crate::scan_exec::find_rule;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -128,25 +129,46 @@ fn severity_to_sarif_level(severity: &Severity) -> &'static str {
     }
 }
 
-pub fn format_sarif(result: &ScanResult, w: &mut impl Write) -> io::Result<()> {
-    let mut rules_map: Vec<(&str, &str, &str)> = Vec::new();
-    let mut rules: Vec<SarifRule<'_>> = Vec::new();
+/// Format the result as SARIF. The rule metadata (descriptions, default
+/// level) comes from the static `rules`, never from a finding: a finding's
+/// note can carry third-party text such as a model's reason. A rule absent
+/// from `rules` (baseline or unused-disable pseudo rules) falls back to the
+/// finding's message.
+pub fn format_sarif(result: &ScanResult, rules: &[Rule], w: &mut impl Write) -> io::Result<()> {
+    let mut rule_ids: Vec<&str> = Vec::new();
+    let mut sarif_rules: Vec<SarifRule<'_>> = Vec::new();
 
     for finding in &result.findings {
         let id = finding.rule_id.as_str();
-        if !rules_map.iter().any(|(rid, _, _)| *rid == id) {
-            let desc = finding.note.as_deref().unwrap_or(&finding.message);
-            rules_map.push((id, &finding.message, desc));
-            rules.push(SarifRule {
-                id,
-                short_description: SarifMessage {
-                    text: &finding.message,
+        if !rule_ids.contains(&id) {
+            rule_ids.push(id);
+            let sarif_rule = match find_rule(rules, finding) {
+                Some(rule) => SarifRule {
+                    id,
+                    short_description: SarifMessage {
+                        text: &rule.message,
+                    },
+                    full_description: SarifMessage {
+                        text: rule.note.as_deref().unwrap_or(&rule.message),
+                    },
+                    default_configuration: SarifDefaultConfiguration {
+                        level: severity_to_sarif_level(&rule.severity),
+                    },
                 },
-                full_description: SarifMessage { text: desc },
-                default_configuration: SarifDefaultConfiguration {
-                    level: severity_to_sarif_level(&finding.severity),
+                None => SarifRule {
+                    id,
+                    short_description: SarifMessage {
+                        text: &finding.message,
+                    },
+                    full_description: SarifMessage {
+                        text: &finding.message,
+                    },
+                    default_configuration: SarifDefaultConfiguration {
+                        level: severity_to_sarif_level(&finding.severity),
+                    },
                 },
-            });
+            };
+            sarif_rules.push(sarif_rule);
         }
     }
 
@@ -154,9 +176,9 @@ pub fn format_sarif(result: &ScanResult, w: &mut impl Write) -> io::Result<()> {
         .findings
         .iter()
         .map(|f| {
-            let rule_index = rules_map
+            let rule_index = rule_ids
                 .iter()
-                .position(|(rid, _, _)| *rid == f.rule_id.as_str())
+                .position(|rid| *rid == f.rule_id.as_str())
                 .unwrap_or(0);
 
             // Emitted only when there is something to say, so a plain AST
@@ -205,7 +227,7 @@ pub fn format_sarif(result: &ScanResult, w: &mut impl Write) -> io::Result<()> {
                     name: "slopguard",
                     version: env!("CARGO_PKG_VERSION"),
                     information_uri: "https://github.com/ThomasTartrau/slopguard",
-                    rules,
+                    rules: sarif_rules,
                 },
             },
             results,
@@ -217,9 +239,100 @@ pub fn format_sarif(result: &ScanResult, w: &mut impl Write) -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use serde_json::{json, to_value};
+    use std::path::PathBuf;
 
-    use super::SarifResultProperties;
+    use serde_json::{from_slice, from_value, json, to_value, Value};
+    use slopguard_core::finding::{Finding, ScanResult, ScanStats};
+    use slopguard_core::rule::{Category, Rule, Severity};
+
+    use super::{format_sarif, SarifResultProperties};
+
+    fn rule(note: Option<&str>) -> Rule {
+        from_value(json!({
+            "id": "demo-rule",
+            "language": "rust",
+            "severity": "error",
+            "message": "static message",
+            "note": note,
+        }))
+        .unwrap()
+    }
+
+    fn finding(rule_id: &str, note: Option<&str>) -> Finding {
+        Finding {
+            rule_id: rule_id.into(),
+            severity: Severity::Warning,
+            category: Category::Slop,
+            message: "finding message".to_string(),
+            note: note.map(String::from),
+            fix: None,
+            file: PathBuf::from("src/lib.rs"),
+            line: 1,
+            column: 1,
+            end_line: 1,
+            end_column: 2,
+            matched_text: "x".to_string(),
+            confidence: None,
+            escalated: false,
+        }
+    }
+
+    fn result(findings: Vec<Finding>) -> ScanResult {
+        ScanResult {
+            stats: ScanStats {
+                errors: 0,
+                warnings: findings.len(),
+                total: findings.len(),
+                files_scanned: 1,
+                baseline_filtered: 0,
+                diff_base: None,
+                files_changed: None,
+            },
+            findings,
+            cache_stats: None,
+        }
+    }
+
+    fn sarif_rules(result: &ScanResult, rules: &[Rule]) -> Value {
+        let mut out = Vec::new();
+        format_sarif(result, rules, &mut out).unwrap();
+        let log: Value = from_slice(&out).unwrap();
+        log["runs"][0]["tool"]["driver"]["rules"].clone()
+    }
+
+    #[test]
+    fn sarif_rule_metadata_ignores_finding_note() {
+        let scan = result(vec![
+            finding("demo-rule", Some("attacker note")),
+            finding("demo-rule", None),
+        ]);
+        let rules = sarif_rules(&scan, &[rule(Some("static note"))]);
+
+        assert_eq!(rules[0]["fullDescription"]["text"], "static note");
+        assert_eq!(rules[0]["shortDescription"]["text"], "static message");
+        assert_eq!(rules[0]["defaultConfiguration"]["level"], "error");
+        assert!(!rules.to_string().contains("attacker note"));
+    }
+
+    #[test]
+    fn sarif_rule_without_note_uses_message() {
+        let scan = result(vec![finding("demo-rule", Some("attacker note"))]);
+        let rules = sarif_rules(&scan, &[rule(None)]);
+
+        assert_eq!(rules[0]["fullDescription"]["text"], "static message");
+        assert!(!rules.to_string().contains("attacker note"));
+    }
+
+    #[test]
+    fn sarif_unknown_rule_falls_back_to_message_not_note() {
+        let scan = result(vec![finding("pseudo-rule", Some("attacker note"))]);
+        let rules = sarif_rules(&scan, &[rule(Some("static note"))]);
+
+        assert_eq!(rules[0]["shortDescription"]["text"], "finding message");
+        assert_eq!(rules[0]["fullDescription"]["text"], "finding message");
+        assert_eq!(rules[0]["defaultConfiguration"]["level"], "warning");
+        assert!(!rules.to_string().contains("attacker note"));
+    }
 
     #[test]
     fn properties_omit_absent_confidence_and_false_escalation() {

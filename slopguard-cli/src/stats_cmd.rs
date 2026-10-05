@@ -195,7 +195,7 @@ pub fn run_stats(opts: StatsOpts) -> Result<(), AppError> {
         )));
     }
 
-    let (mut result, config) = collect_findings(CollectOpts {
+    let (mut result, config, _rules) = collect_findings(CollectOpts {
         paths,
         config_path,
         cli_disable,
