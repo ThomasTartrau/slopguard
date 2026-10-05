@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.1.33](https://gitlab.com/ThomasTartrau/slopguard/compare/slopguard-core-v0.1.32...slopguard-core-v0.1.33) - 2026-10-05
+
+### Fixed
+
+- #48 neutralize control characters in outputs and fix SARIF/list rule metadata
+
 ## [0.1.32](https://gitlab.com/ThomasTartrau/slopguard/compare/slopguard-core-v0.1.31...slopguard-core-v0.1.32) - 2026-10-04
 
 ### Fixed
