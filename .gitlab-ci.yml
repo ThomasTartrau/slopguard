@@ -32,7 +32,20 @@ variables:
   RELEASE_PLZ_VERSION: "0.3.160"
   CARGO_HTTP_TIMEOUT: "180"
   CARGO_NET_RETRY: "5"
-  CI_RUST_IMAGE: "${CI_REGISTRY_IMAGE}/ci-rust:rust-1.94.1"
+  # Shared compilation cache on the homelab MinIO, same settings as ironflow.
+  # Jobs that compile source ci/sccache-setup.sh (see .sccache), which drops the
+  # wrapper when the cache is unusable.
+  RUSTC_WRAPPER: sccache
+  CARGO_INCREMENTAL: "0"
+  SCCACHE_BUCKET: sccache
+  SCCACHE_ENDPOINT: http://minio.ci.svc.cluster.local:9000
+  SCCACHE_REGION: us-east-1
+  SCCACHE_S3_USE_SSL: "false"
+  SCCACHE_S3_KEY_PREFIX: slopguard
+  SCCACHE_IGNORE_SERVER_IO_ERROR: "1"
+  # The rust version must match the channel in rust-toolchain.toml, otherwise
+  # rustup downloads that toolchain in every job, without the cross targets.
+  CI_RUST_IMAGE: "${CI_REGISTRY_IMAGE}/ci-rust:rust-1.94.1-v2"
 
 .rust-cache: &rust-cache
   cache:
@@ -57,6 +70,14 @@ variables:
   - export PATH="${CI_PROJECT_DIR}/.cargo/bin:$PATH"
   - release-plz --version
 
+# Every job that compiles extends this (cargo fmt and cargo audit never call
+# the wrapper). A job with its own before_script pulls it in with !reference.
+.sccache:
+  before_script:
+    - . ci/sccache-setup.sh
+  after_script:
+    - command -v sccache >/dev/null 2>&1 && sccache --show-stats || true
+
 # Validation jobs run only on MR pipelines.
 # Code is already validated before reaching main.
 # Release MRs from release-plz only bump Cargo.toml + CHANGELOG -- skip validation.
@@ -70,6 +91,10 @@ variables:
 # CI IMAGE
 # ---------------------------------------------------------------------------
 
+# Only main publishes the image: an MR build validates the Dockerfile without
+# pushing, so it can never overwrite the tag main depends on. The runner pulls
+# with IfNotPresent, so a changed image needs a new CI_RUST_IMAGE tag (bumping it
+# in this file is enough to republish).
 build-ci-image:
   stage: check
   image:
@@ -84,13 +109,17 @@ build-ci-image:
       --dockerfile "${CI_PROJECT_DIR}/ci/rust/Dockerfile"
       --destination "$CI_RUST_IMAGE"
       --custom-platform=linux/amd64
+      $KANIKO_PUSH_ARGS
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
       changes:
         - ci/rust/Dockerfile
+      variables:
+        KANIKO_PUSH_ARGS: "--no-push"
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
       changes:
         - ci/rust/Dockerfile
+        - .gitlab-ci.yml
 
 # ---------------------------------------------------------------------------
 # CHECK
@@ -110,7 +139,7 @@ cargo-fmt:
     - cargo fmt --all -- --check
 
 cargo-clippy:
-  extends: .only-mr
+  extends: [.only-mr, .sccache]
   stage: check
   image: $CI_RUST_IMAGE
   <<: *rust-cache
@@ -139,7 +168,7 @@ cargo-audit:
 # ---------------------------------------------------------------------------
 
 unit-tests:
-  extends: .only-mr
+  extends: [.only-mr, .sccache]
   stage: test
   image: $CI_RUST_IMAGE
   <<: *rust-cache
@@ -152,7 +181,7 @@ unit-tests:
     - cargo nextest run --workspace
 
 doc-tests:
-  extends: .only-mr
+  extends: [.only-mr, .sccache]
   stage: test
   image: $CI_RUST_IMAGE
   <<: *rust-cache
@@ -169,6 +198,7 @@ doc-tests:
 # ---------------------------------------------------------------------------
 
 build-release:
+  extends: .sccache
   stage: build
   image: $CI_RUST_IMAGE
   <<: *rust-cache
@@ -190,7 +220,10 @@ release-plz-update:
   variables:
     GIT_DEPTH: 0
   before_script:
+    - !reference [.sccache, before_script]
     - *install-release-plz
+  after_script:
+    - !reference [.sccache, after_script]
   script:
     - git config user.name "release-plz[bot]"
     - git config user.email "release-plz@users.noreply.gitlab.com"
@@ -225,7 +258,10 @@ release-plz-release:
   variables:
     GIT_DEPTH: 0
   before_script:
+    - !reference [.sccache, before_script]
     - *install-release-plz
+  after_script:
+    - !reference [.sccache, after_script]
   script:
     - git remote set-url origin "https://gitlab-ci-token:${GITLAB_TOKEN}@gitlab.com/${CI_PROJECT_PATH}.git"
     - git fetch origin "$CI_COMMIT_BRANCH"
@@ -245,16 +281,17 @@ release-plz-release:
 # ---------------------------------------------------------------------------
 
 build-binaries:
+  extends: .sccache
   stage: release
   image: $CI_RUST_IMAGE
   <<: *rust-cache
   needs: []
+  # No darwin targets: reqwest links the Security and SystemConfiguration
+  # frameworks, which zig cannot provide without an Apple SDK.
   parallel:
     matrix:
       - TARGET: x86_64-unknown-linux-gnu
       - TARGET: x86_64-unknown-linux-musl
-      - TARGET: aarch64-apple-darwin
-      - TARGET: x86_64-apple-darwin
   script:
     - VERSION="${CI_COMMIT_TAG#slopguard-cli-v}"
     - |
@@ -277,20 +314,7 @@ build-binaries:
       https://gitlab.com/ThomasTartrau/slopguard
       INNER
     - tar -czf "dist/${DIST}.tar.gz" -C dist "${DIST}"
-    - PROJ_API="${CI_API_V4_URL}/projects/${CI_PROJECT_ID}"
-    - PKG_URL="${PROJ_API}/packages/generic/slopguard/${VERSION}/${DIST}.tar.gz"
-    - LINKS_URL="${PROJ_API}/releases/${CI_COMMIT_TAG}/assets/links"
-    - |
-      curl --fail --header "JOB-TOKEN: $CI_JOB_TOKEN" \
-        --upload-file "dist/${DIST}.tar.gz" \
-        "${PKG_URL}"
-    - |
-      curl --fail --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
-        --request POST \
-        "${LINKS_URL}" \
-        --data-urlencode "name=${DIST}.tar.gz" \
-        --data-urlencode "url=${PKG_URL}" \
-        --data-urlencode "link_type=package"
+    - sh ci/publish-asset.sh "dist/${DIST}.tar.gz" package
   artifacts:
     paths:
       - dist/*.tar.gz
@@ -305,23 +329,8 @@ publish-checksums:
     - job: build-binaries
       artifacts: true
   script:
-    - VERSION="${CI_COMMIT_TAG#slopguard-cli-v}"
-    - PROJ_API="${CI_API_V4_URL}/projects/${CI_PROJECT_ID}"
-    - PKG_URL="${PROJ_API}/packages/generic/slopguard/${VERSION}/SHA256SUMS"
-    - LINKS_URL="${PROJ_API}/releases/${CI_COMMIT_TAG}/assets/links"
-    - cd dist
-    - sha256sum *.tar.gz > SHA256SUMS
-    - cat SHA256SUMS
-    - |
-      curl --fail --header "JOB-TOKEN: $CI_JOB_TOKEN" \
-        --upload-file SHA256SUMS \
-        "${PKG_URL}"
-    - |
-      curl --fail --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
-        --request POST \
-        "${LINKS_URL}" \
-        --data-urlencode "name=SHA256SUMS" \
-        --data-urlencode "url=${PKG_URL}" \
-        --data-urlencode "link_type=other"
+    - (cd dist && sha256sum *.tar.gz > SHA256SUMS)
+    - cat dist/SHA256SUMS
+    - sh ci/publish-asset.sh dist/SHA256SUMS other
   rules:
     - if: '$CI_COMMIT_TAG =~ /^slopguard-cli-v/'

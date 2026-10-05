@@ -8,6 +8,7 @@ use slopguard_core::preset::{parse_preset, Preset};
 #[derive(Parser)]
 #[command(
     name = "slopguard",
+    version,
     about = "Catch AI-generated code patterns and common issues"
 )]
 pub struct Cli {
