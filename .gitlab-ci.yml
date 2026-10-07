@@ -2,6 +2,13 @@ workflow:
   rules:
     - if: $CI_COMMIT_TAG
       when: never
+    # An MR that changes the Dockerfile runs its jobs on the image it builds,
+    # pushed under a per-commit tag so main's tag is never overwritten.
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes:
+        - ci/rust/Dockerfile
+      variables:
+        CI_RUST_IMAGE: "${CI_REGISTRY_IMAGE}/ci-rust:mr-${CI_MERGE_REQUEST_IID}-${CI_COMMIT_SHORT_SHA}"
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_COMMIT_TITLE =~ /^chore: release/'
       variables:
@@ -90,10 +97,11 @@ variables:
 # CI IMAGE
 # ---------------------------------------------------------------------------
 
-# Only main publishes the image: an MR build validates the Dockerfile without
-# pushing, so it can never overwrite the tag main depends on. The runner pulls
-# with IfNotPresent, so a changed image needs a new CI_RUST_IMAGE tag (bumping it
-# in this file is enough to republish).
+# Only main publishes CI_RUST_IMAGE. An MR that changes the Dockerfile pushes
+# to a per-commit mr- tag (set in workflow.rules) so its jobs run on the new
+# image without ever overwriting the tag main depends on. The runner pulls with
+# IfNotPresent, so a changed image needs a new CI_RUST_IMAGE tag (bumping it in
+# this file is enough to republish).
 build-ci-image:
   stage: check
   image:
@@ -108,13 +116,10 @@ build-ci-image:
       --dockerfile "${CI_PROJECT_DIR}/ci/rust/Dockerfile"
       --destination "$CI_RUST_IMAGE"
       --custom-platform=linux/amd64
-      $KANIKO_PUSH_ARGS
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
       changes:
         - ci/rust/Dockerfile
-      variables:
-        KANIKO_PUSH_ARGS: "--no-push"
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
       changes:
         - ci/rust/Dockerfile
