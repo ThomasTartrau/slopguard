@@ -79,38 +79,6 @@ You can extend slopguard with your own YAML rules or shared rulesets from git, d
 
 ### Install
 
-**Pre-built binary (recommended):**
-
-```bash
-curl -fsSL https://gitlab.com/ThomasTartrau/slopguard/-/raw/main/install.sh | sh
-```
-
-Or install a specific version:
-
-```bash
-curl -fsSL https://gitlab.com/ThomasTartrau/slopguard/-/raw/main/install.sh | VERSION=0.1.0 sh
-```
-
-The installer verifies the SHA-256 of the downloaded archive against the `SHA256SUMS` file published with each release, rejects versions that are not plain semver, and refuses archives containing unsafe tar entries (absolute paths, `..` segments, links, files outside the release directory). Nothing is installed if a check fails.
-
-By default, the binary is installed to `~/.local/bin/`. Override with `INSTALL_DIR`:
-
-```bash
-curl -fsSL https://gitlab.com/ThomasTartrau/slopguard/-/raw/main/install.sh | INSTALL_DIR=/usr/local/bin sh
-```
-
-Pre-built binaries are available for:
-
-| OS | Architecture | Target |
-| ---- | ------------- | -------- |
-| Linux | x86_64 | `x86_64-unknown-linux-gnu`, `x86_64-unknown-linux-musl` |
-
-macOS binaries are not published yet: on macOS, install from source with `cargo install slopguard-cli`.
-
-You can also download archives directly from the [releases page](https://gitlab.com/ThomasTartrau/slopguard/-/releases).
-
-**From source (requires Rust toolchain):**
-
 ```bash
 cargo install slopguard-cli
 ```

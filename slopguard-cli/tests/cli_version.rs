@@ -3,8 +3,8 @@ mod common;
 use common::slopguard;
 use predicates::prelude::*;
 
-/// install.sh runs `slopguard --version` under `set -eu` as its last step, so
-/// a missing flag makes a successful install exit with an error.
+/// `cargo install` users and CI scripts check the installation with
+/// `slopguard --version`, so a missing flag would break that check.
 #[test]
 fn version_flag_prints_package_version() {
     slopguard()

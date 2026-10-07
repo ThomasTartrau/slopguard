@@ -62,8 +62,8 @@
 
 ### Distribution
 
-- [x] Binaires pre-compiles via GitLab CI ([#19](https://gitlab.com/ThomasTartrau/slopguard/-/issues/19))
-- [x] Script d'installation `install.sh` ([#19](https://gitlab.com/ThomasTartrau/slopguard/-/issues/19))
+- [x] ~~Binaires pre-compiles via GitLab CI ([#19](https://gitlab.com/ThomasTartrau/slopguard/-/issues/19))~~ (abandonne, voir D44)
+- [x] ~~Script d'installation `install.sh` ([#19](https://gitlab.com/ThomasTartrau/slopguard/-/issues/19))~~ (abandonne, voir D44)
 - [x] Republier sur crates.io avec les README
 
 ### Validation sur le terrain
@@ -174,4 +174,4 @@ GitHub Action, GitLab CI template and pre-commit hook shipped in v0.1.x (#18).
 
 ### Distribution
 
-- [ ] Homebrew tap (pre-compiled binaries already ship on GitLab Releases, #19)
+- [ ] Homebrew tap
