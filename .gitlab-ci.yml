@@ -1,8 +1,14 @@
 workflow:
   rules:
-    - if: '$CI_COMMIT_TAG =~ /^slopguard-cli-v/'
     - if: $CI_COMMIT_TAG
       when: never
+    # An MR that changes the Dockerfile runs its jobs on the image it builds,
+    # pushed under a per-commit tag so main's tag is never overwritten.
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes:
+        - ci/rust/Dockerfile
+      variables:
+        CI_RUST_IMAGE: "${CI_REGISTRY_IMAGE}/ci-rust:mr-${CI_MERGE_REQUEST_IID}-${CI_COMMIT_SHORT_SHA}"
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_COMMIT_TITLE =~ /^chore: release/'
       variables:
@@ -44,8 +50,8 @@ variables:
   SCCACHE_S3_KEY_PREFIX: slopguard
   SCCACHE_IGNORE_SERVER_IO_ERROR: "1"
   # The rust version must match the channel in rust-toolchain.toml, otherwise
-  # rustup downloads that toolchain in every job, without the cross targets.
-  CI_RUST_IMAGE: "${CI_REGISTRY_IMAGE}/ci-rust:rust-1.94.1-v2"
+  # rustup downloads that toolchain in every job.
+  CI_RUST_IMAGE: "${CI_REGISTRY_IMAGE}/ci-rust:rust-1.94.1-v3"
 
 .rust-cache: &rust-cache
   cache:
@@ -91,10 +97,11 @@ variables:
 # CI IMAGE
 # ---------------------------------------------------------------------------
 
-# Only main publishes the image: an MR build validates the Dockerfile without
-# pushing, so it can never overwrite the tag main depends on. The runner pulls
-# with IfNotPresent, so a changed image needs a new CI_RUST_IMAGE tag (bumping it
-# in this file is enough to republish).
+# Only main publishes CI_RUST_IMAGE. An MR that changes the Dockerfile pushes
+# to a per-commit mr- tag (set in workflow.rules) so its jobs run on the new
+# image without ever overwriting the tag main depends on. The runner pulls with
+# IfNotPresent, so a changed image needs a new CI_RUST_IMAGE tag (bumping it in
+# this file is enough to republish).
 build-ci-image:
   stage: check
   image:
@@ -109,13 +116,10 @@ build-ci-image:
       --dockerfile "${CI_PROJECT_DIR}/ci/rust/Dockerfile"
       --destination "$CI_RUST_IMAGE"
       --custom-platform=linux/amd64
-      $KANIKO_PUSH_ARGS
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
       changes:
         - ci/rust/Dockerfile
-      variables:
-        KANIKO_PUSH_ARGS: "--no-push"
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
       changes:
         - ci/rust/Dockerfile
@@ -275,62 +279,3 @@ release-plz-release:
       - stuck_or_timeout_failure
   rules:
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
-
-# ---------------------------------------------------------------------------
-# BINARY RELEASES (tag pipelines only)
-# ---------------------------------------------------------------------------
-
-build-binaries:
-  extends: .sccache
-  stage: release
-  image: $CI_RUST_IMAGE
-  <<: *rust-cache
-  needs: []
-  # No darwin targets: reqwest links the Security and SystemConfiguration
-  # frameworks, which zig cannot provide without an Apple SDK.
-  parallel:
-    matrix:
-      - TARGET: x86_64-unknown-linux-gnu
-      - TARGET: x86_64-unknown-linux-musl
-  script:
-    - VERSION="${CI_COMMIT_TAG#slopguard-cli-v}"
-    - |
-      if [ "$TARGET" = "x86_64-unknown-linux-gnu" ]; then
-        rustup target add x86_64-unknown-linux-gnu 2>/dev/null || true
-        cargo build -p slopguard-cli --release --target "$TARGET"
-      else
-        cargo zigbuild -p slopguard-cli --release --target "$TARGET"
-      fi
-    - DIST="slopguard-${VERSION}-${TARGET}"
-    - mkdir -p "dist/${DIST}"
-    - cp "target/${TARGET}/release/slopguard" "dist/${DIST}/"
-    - cp LICENSE "dist/${DIST}/"
-    - |
-      cat > "dist/${DIST}/README.md" <<INNER
-      # slopguard
-
-      Catch AI-generated code patterns via static analysis.
-
-      https://gitlab.com/ThomasTartrau/slopguard
-      INNER
-    - tar -czf "dist/${DIST}.tar.gz" -C dist "${DIST}"
-    - sh ci/publish-asset.sh "dist/${DIST}.tar.gz" package
-  artifacts:
-    paths:
-      - dist/*.tar.gz
-    expire_in: 1 day
-  rules:
-    - if: '$CI_COMMIT_TAG =~ /^slopguard-cli-v/'
-
-publish-checksums:
-  stage: release
-  image: $CI_RUST_IMAGE
-  needs:
-    - job: build-binaries
-      artifacts: true
-  script:
-    - (cd dist && sha256sum *.tar.gz > SHA256SUMS)
-    - cat dist/SHA256SUMS
-    - sh ci/publish-asset.sh dist/SHA256SUMS other
-  rules:
-    - if: '$CI_COMMIT_TAG =~ /^slopguard-cli-v/'

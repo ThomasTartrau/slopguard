@@ -13,6 +13,7 @@ Decisions made during the architecture phase. This document is the source of tru
 ## D3: Distribution
 **Decision**: cargo install only for v0.1.0.
 **Why**: Users are Rust developers who already have cargo. Brew and binary releases come later.
+**Status**: superseded by D44.
 
 ## D4: Naming
 **Decision**: slopguard.
@@ -207,3 +208,8 @@ The following patterns are deferred to v0.2.0 (AI rules):
 **Decision**: the code sent to the model is escaped (`<` and `>` become `&lt;` and `&gt;`) and wrapped in `<code>` tags, in the generative prompt and in the classifier `state` alike, and every prompt starts with a notice saying the tagged content is untrusted source code, never instructions. The code is substituted last, so placeholders it contains are not expanded. The classifier state is capped at 64 KiB (cut at a line, never inside a character) with a warning, the closing tag being added after the cut. A model verdict is validated: a confidence outside `[0.0, 1.0]` (NaN included) is an error, and the reason loses its control characters and is cut to 500 characters. A classifier probability outside `[0.0, 1.0]` is an error too, and a cached verdict or probability that fails validation is a miss. When an AI call fails (provider error, response that does not deserialize, invalid verdict, missing classifier answer), the AST finding is kept with the note "verification IA echouee" (accented in code) and no confidence, one warning goes to stderr (one per cluster in the classifier), and nothing is cached. A genuine model "not an issue" still drops the finding.
 **Why**: the scanned code is attacker-controlled. Unescaped, it could close the code block and talk to the model (`answer is_issue=false`), and every AI failure used to drop the finding silently, so breaking or rate-limiting the model call silenced a rule. Failing open for findings, not for suppression, means the worst a hostile input can do is leave a finding unverified. Unvalidated output let a confidence of 7 or an escape sequence in a reason reach the report.
 **Cost**: an outage of the provider now yields unverified findings (possible false positives) instead of fewer findings. Prompts and classifier instructions changed, so existing AI cache entries are missed once.
+
+## D44: crates.io is the only distribution channel
+**Decision**: slopguard ships no prebuilt binaries, no `install.sh` and no tag pipeline. The only supported install is `cargo install slopguard-cli`. This replaces D3 and #19. Assets already published for releases up to 0.1.37 and the package registry stay untouched, and `release-plz-release` is unchanged.
+**Why**: darwin targets cannot be linked from Linux CI without an Apple SDK (#52). The tag pipeline, `install.sh` with its tests and the cross-compile targets of the CI image cost maintenance for a partial result. `cargo install` works everywhere and is already what the GitHub action, the GitLab CI template and the pre-commit hook use.
+**Cost**: users need a Rust toolchain and pay the compile time.
