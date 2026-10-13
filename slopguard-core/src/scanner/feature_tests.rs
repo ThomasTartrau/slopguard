@@ -695,14 +695,17 @@ fn all_engine_kinds_run_and_aggregate() {
 
 /// Findings of the builtin rule `rule_id` on `source`, written as `lib.rs`.
 fn builtin_findings(rule_id: &str, source: &str) -> Vec<Finding> {
-    let rule = load_builtin_rules()
+    // A rule id may exist once per language (`no-trivial-function` has a
+    // TypeScript twin), so keep every variant and let the scan pick by file.
+    let rules: Vec<Rule> = load_builtin_rules()
         .unwrap()
         .into_iter()
-        .find(|r| r.id.as_str() == rule_id)
-        .unwrap_or_else(|| panic!("builtin rule '{rule_id}' should exist"));
+        .filter(|r| r.id.as_str() == rule_id)
+        .collect();
+    assert!(!rules.is_empty(), "builtin rule '{rule_id}' should exist");
     let dir = tempdir().unwrap();
     write(dir.path().join("lib.rs"), source).unwrap();
-    scan_dir(dir.path(), &[rule])
+    scan_dir(dir.path(), &rules)
         .findings
         .into_iter()
         .filter(|f| f.rule_id.as_str() == rule_id)
