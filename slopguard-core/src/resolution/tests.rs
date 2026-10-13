@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use ast_grep_core::tree_sitter::LanguageExt;
 use ast_grep_language::SupportLang;
@@ -252,6 +252,121 @@ fn rust_workspace_dependency_resolves() {
         &rust_rule(),
     );
     assert!(found.is_empty(), "got: {:?}", specifiers(&found));
+}
+
+/// Write a package `name` in `root/name` with `manifest` as its `Cargo.toml`
+/// and return its directory.
+fn member_package(root: &Path, name: &str, manifest: &str) -> PathBuf {
+    let dir = root.join(name);
+    fs::create_dir_all(dir.join("src")).unwrap();
+    write_cargo(&dir, manifest);
+    dir
+}
+
+// A package's own `[lib] name` is importable from its `tests/` directory.
+#[test]
+fn rust_lib_name_resolves_for_own_tests_dir() {
+    let root = project();
+    write_cargo(
+        root.path(),
+        "[package]\nname = \"core-pkg\"\n[lib]\nname = \"mylib\"\n",
+    );
+    let tests = root.path().join("tests");
+    fs::create_dir(&tests).unwrap();
+    let found = findings(
+        &tests,
+        "it.rs",
+        "use mylib::x;\n",
+        Language::Rust,
+        &rust_rule(),
+    );
+    assert!(found.is_empty(), "got: {:?}", specifiers(&found));
+}
+
+// A path dependency is imported under its `[lib] name`, not its package name.
+#[test]
+fn rust_path_dependency_lib_name_resolves() {
+    let root = project();
+    member_package(
+        root.path(),
+        "core-pkg",
+        "[package]\nname = \"core-pkg\"\n[lib]\nname = \"mylib\"\n",
+    );
+    let user = member_package(
+        root.path(),
+        "user",
+        "[package]\nname = \"user\"\n[dependencies]\ncore-pkg = { path = \"../core-pkg\" }\n",
+    );
+    let found = findings(
+        &user.join("src"),
+        "lib.rs",
+        "use mylib::x;\n",
+        Language::Rust,
+        &rust_rule(),
+    );
+    assert!(found.is_empty(), "got: {:?}", specifiers(&found));
+}
+
+// A `workspace = true` path dependency resolves against the workspace root.
+#[test]
+fn rust_workspace_path_dependency_lib_name_resolves() {
+    let root = project();
+    write_cargo(
+        root.path(),
+        "[workspace]\nmembers = [\"core-pkg\", \"user\"]\n[workspace.dependencies]\ncore-pkg = { path = \"core-pkg\" }\n",
+    );
+    member_package(
+        root.path(),
+        "core-pkg",
+        "[package]\nname = \"core-pkg\"\n[lib]\nname = \"mylib\"\n",
+    );
+    let user = member_package(
+        root.path(),
+        "user",
+        "[package]\nname = \"user\"\n[dependencies]\ncore-pkg = { workspace = true }\n",
+    );
+    let found = findings(
+        &user.join("src"),
+        "lib.rs",
+        "use mylib::x;\n",
+        Language::Rust,
+        &rust_rule(),
+    );
+    assert!(found.is_empty(), "got: {:?}", specifiers(&found));
+}
+
+// With `package =` the dependency key stays the import name and the target's
+// `[lib] name` is not read.
+#[test]
+fn rust_path_dependency_with_package_key_stays_import_name() {
+    let root = project();
+    member_package(
+        root.path(),
+        "core-pkg",
+        "[package]\nname = \"core-pkg\"\n[lib]\nname = \"mylib\"\n",
+    );
+    let user = member_package(
+        root.path(),
+        "user",
+        "[package]\nname = \"user\"\n[dependencies]\nalias = { path = \"../core-pkg\", package = \"core-pkg\" }\n",
+    );
+    let src = user.join("src");
+    let resolved = findings(
+        &src,
+        "a.rs",
+        "use alias::x;\n",
+        Language::Rust,
+        &rust_rule(),
+    );
+    assert!(resolved.is_empty(), "got: {:?}", specifiers(&resolved));
+    let unresolved = findings(
+        &src,
+        "b.rs",
+        "use mylib::x;\n",
+        Language::Rust,
+        &rust_rule(),
+    );
+    assert_eq!(unresolved.len(), 1, "got: {unresolved:?}");
 }
 
 // Row 10: a bare `use foo::...` referencing a module declared in the same file

@@ -30,32 +30,136 @@ fn find_up(start: &Path, filename: &str) -> Option<PathBuf> {
     None
 }
 
-/// Add the keys of a table's `[dependencies]`, `[dev-dependencies]` and
-/// `[build-dependencies]` sub-tables, normalized to their `use` form.
-fn add_dep_table_keys(parent: &Table, names: &mut HashSet<String>) {
-    for key in ["dependencies", "dev-dependencies", "build-dependencies"] {
-        if let Some(table) = parent.get(key).and_then(|v| v.as_table()) {
-            names.extend(table.keys().map(|k| normalize_crate(k)));
+/// A workspace root: the directory of the manifest declaring `[workspace]` and
+/// its parsed table. Looked up lazily, only when a dependency inherits from it.
+type WorkspaceRoot = Option<(PathBuf, Table)>;
+
+/// The normalized `[lib] name` declared in `table`, if any.
+fn table_lib_name(table: &Table) -> Option<String> {
+    table
+        .get("lib")
+        .and_then(|v| v.as_table())
+        .and_then(|lib| lib.get("name"))
+        .and_then(|v| v.as_str())
+        .map(normalize_crate)
+}
+
+/// The normalized `[lib] name` of the crate whose manifest lives in `dir`, or
+/// `None` when the manifest is unreadable or declares no library name.
+fn lib_name(dir: &Path) -> Option<String> {
+    let text = read_to_string(dir.join("Cargo.toml")).ok()?;
+    let table = text.parse::<Table>().ok()?;
+    table_lib_name(&table)
+}
+
+/// The nearest manifest declaring a `[workspace]`: `table` itself (located in
+/// `manifest_dir`) or the first ancestor directory whose `Cargo.toml` has one.
+fn workspace_root(manifest_dir: &Path, table: &Table) -> WorkspaceRoot {
+    if table.get("workspace").is_some_and(|v| v.is_table()) {
+        return Some((manifest_dir.to_path_buf(), table.clone()));
+    }
+    manifest_dir.ancestors().skip(1).find_map(|dir| {
+        let text = read_to_string(dir.join("Cargo.toml")).ok()?;
+        let parsed = text.parse::<Table>().ok()?;
+        parsed
+            .get("workspace")
+            .is_some_and(|v| v.is_table())
+            .then(|| (dir.to_path_buf(), parsed))
+    })
+}
+
+/// The `[lib] name` of a path dependency declared as `spec` in a manifest
+/// located in `base_dir`. A renamed dependency (`package =`) is skipped: its key
+/// stays the import name.
+fn path_dependency_lib_name(spec: &Table, base_dir: &Path) -> Option<String> {
+    if spec.contains_key("package") {
+        return None;
+    }
+    let path = spec.get("path").and_then(|v| v.as_str())?;
+    lib_name(&base_dir.join(path))
+}
+
+/// The `[lib] name` of the path dependency `key` declared in the workspace
+/// root's `[workspace.dependencies]`, resolved against that root.
+fn inherited_lib_name(root: &WorkspaceRoot, key: &str) -> Option<String> {
+    let (root_dir, root_table) = root.as_ref()?;
+    let entry = root_table
+        .get("workspace")
+        .and_then(|v| v.as_table())
+        .and_then(|w| w.get("dependencies"))
+        .and_then(|v| v.as_table())
+        .and_then(|d| d.get(key))
+        .and_then(|v| v.as_table())?;
+    path_dependency_lib_name(entry, root_dir)
+}
+
+/// Where a manifest's dependency names are being collected from: its parsed
+/// table, its directory, and the lazily resolved workspace root.
+struct DepSource<'a> {
+    manifest: &'a Table,
+    dir: &'a Path,
+    workspace: Option<WorkspaceRoot>,
+}
+
+/// Add the names a dependency table makes importable: each key normalized, plus
+/// the `[lib] name` of path dependencies, including those inherited through
+/// `workspace = true` (resolved against the workspace root that declares them).
+fn add_dependencies(deps: &Table, source: &mut DepSource<'_>, names: &mut HashSet<String>) {
+    for (key, value) in deps {
+        names.insert(normalize_crate(key));
+        let Some(spec) = value.as_table() else {
+            continue;
+        };
+        if spec.contains_key("package") {
+            continue;
+        }
+        if spec.contains_key("path") {
+            names.extend(path_dependency_lib_name(spec, source.dir));
+        } else if spec.get("workspace").and_then(|v| v.as_bool()) == Some(true) {
+            let (manifest, dir) = (source.manifest, source.dir);
+            let root = source
+                .workspace
+                .get_or_insert_with(|| workspace_root(dir, manifest));
+            names.extend(inherited_lib_name(root, key));
         }
     }
 }
 
-/// Collect every dependency name a parsed `Cargo.toml` makes usable: the plain,
-/// dev and build dependencies, `[workspace.dependencies]`, `[target.*]`
-/// variants, and the package's own name.
-fn collect_cargo_deps(table: &Table) -> HashSet<String> {
-    let mut names = HashSet::new();
-    add_dep_table_keys(table, &mut names);
-
-    if let Some(workspace) = table.get("workspace").and_then(|v| v.as_table()) {
-        if let Some(deps) = workspace.get("dependencies").and_then(|v| v.as_table()) {
-            names.extend(deps.keys().map(|k| normalize_crate(k)));
+/// Add the dependencies of a table's `[dependencies]`, `[dev-dependencies]` and
+/// `[build-dependencies]` sub-tables.
+fn add_dep_tables(parent: &Table, source: &mut DepSource<'_>, names: &mut HashSet<String>) {
+    for key in ["dependencies", "dev-dependencies", "build-dependencies"] {
+        if let Some(table) = parent.get(key).and_then(|v| v.as_table()) {
+            add_dependencies(table, source, names);
         }
+    }
+}
+
+/// Collect every dependency name a parsed `Cargo.toml` (located in
+/// `manifest_dir`) makes usable: the plain, dev and build dependencies,
+/// `[workspace.dependencies]`, `[target.*]` variants, the package's own name,
+/// its `[lib] name`, and the `[lib] name` of each path dependency.
+fn collect_cargo_deps(table: &Table, manifest_dir: &Path) -> HashSet<String> {
+    let mut names = HashSet::new();
+    let mut source = DepSource {
+        manifest: table,
+        dir: manifest_dir,
+        workspace: None,
+    };
+    add_dep_tables(table, &mut source, &mut names);
+
+    if let Some(deps) = table
+        .get("workspace")
+        .and_then(|v| v.as_table())
+        .and_then(|w| w.get("dependencies"))
+        .and_then(|v| v.as_table())
+    {
+        add_dependencies(deps, &mut source, &mut names);
     }
 
     if let Some(targets) = table.get("target").and_then(|v| v.as_table()) {
         for target in targets.values().filter_map(|v| v.as_table()) {
-            add_dep_table_keys(target, &mut names);
+            add_dep_tables(target, &mut source, &mut names);
         }
     }
 
@@ -67,6 +171,8 @@ fn collect_cargo_deps(table: &Table) -> HashSet<String> {
     {
         names.insert(normalize_crate(name));
     }
+
+    names.extend(table_lib_name(table));
 
     names
 }
@@ -185,10 +291,11 @@ impl ManifestResolver {
     /// `Cargo.toml` could be read (nothing can be asserted about imports).
     pub(super) fn cargo_deps(&mut self, dir: &Path) -> Option<&HashSet<String>> {
         if !self.cargo.contains_key(dir) {
-            let deps = find_up(dir, "Cargo.toml")
-                .and_then(|path| read_to_string(&path).ok())
-                .and_then(|text| text.parse::<Table>().ok())
-                .map(|table| collect_cargo_deps(&table));
+            let deps = find_up(dir, "Cargo.toml").and_then(|path| {
+                let table = read_to_string(&path).ok()?.parse::<Table>().ok()?;
+                let manifest_dir = path.parent().unwrap_or_else(|| Path::new("."));
+                Some(collect_cargo_deps(&table, manifest_dir))
+            });
             self.cargo.insert(dir.to_path_buf(), deps);
         }
         self.cargo.get(dir).and_then(|entry| entry.as_ref())

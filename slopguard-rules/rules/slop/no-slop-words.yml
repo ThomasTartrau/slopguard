@@ -8,7 +8,7 @@ rule:
   any:
     - kind: line_comment
     - kind: block_comment
-  regex: '\b(comprehensive|robust|seamless|leverage|utilize|facilitate|streamline|endeavor|foster|harness|delve|intricate|nuanced|pivotal|myriad|plethora|paramount|cutting.edge|state.of.the.art|best.in.class|industry.leading|game.changing)\b'
+  regex: '\b(comprehensive|robust|seamless|leverage|utilize|facilitate|streamline|endeavor|foster|delve|intricate|nuanced|pivotal|myriad|plethora|paramount|cutting.edge|state.of.the.art|best.in.class|industry.leading|game.changing)\b|\b[Hh]arness(es|ed|ing)?\s+(the|its|their|our|your|this|these|those)\b|\b[Hh]arnessing\b'
 ignores:
   - "**/fixtures/**"
 tests:
@@ -16,7 +16,11 @@ tests:
     - "// This provides a comprehensive overview"
     - "// Leverage the robust framework"
     - "/* A seamless integration layer */"
+    - "// We harness the power of async"
+    - "// Harnessing modern tooling"
   should_not_match:
     - "// This function parses the input"
     - "// Returns the user count"
     - "/* Helper for date formatting */"
+    - "// Rust test-harness lines"
+    - "// the Kubernetes side of the harness"

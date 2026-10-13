@@ -5,13 +5,30 @@ category: correctness
 message: "Source error discarded. Preserve context with .context() or map_err(|e| ...e...)."
 note: "map_err(|_| ...) throws away the original error, making debugging impossible. Propagating with ? after map_err is a valid conversion, not swallowing."
 rule:
-  all:
-    - kind: call_expression
-    - regex: '\.map_err\(\|_\w*\|'
-    - not:
-        inside:
-          kind: try_expression
-          stopBy: end
+  any:
+    - all:
+        - kind: call_expression
+        - has:
+            field: function
+            kind: field_expression
+            has:
+              field: field
+              regex: '^map_err$'
+        - has:
+            field: arguments
+            regex: '^\(\s*\|_\w*\|'
+        - not:
+            inside:
+              kind: try_expression
+              stopBy: end
+    - all:
+        - kind: macro_invocation
+        - regex: '^[\w:]+!\s*[(\[]'
+        - regex: '\.map_err\(\|_\w*\|'
+        - not:
+            inside:
+              kind: try_expression
+              stopBy: end
 ignores:
   - "**/tests/**"
   - "**/*_tests/**"
@@ -29,3 +46,4 @@ tests:
     - 'conn.execute(sql).map_err(AppError::Database);'
     - 'conn.execute(sql).map_err(|_| Error::Database)?;'
     - 'decode_header(token).map_err(|_| AuthError::InvalidToken)?;'
+    - 'let v = Some(x.parse().map_err(|_| Error::Bad)?);'

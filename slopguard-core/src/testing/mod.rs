@@ -5,6 +5,7 @@ use ast_grep_core::tree_sitter::LanguageExt;
 use ast_grep_language::SupportLang;
 use thiserror::Error;
 
+use crate::ast_filter;
 use crate::fix::fix_snippet;
 use crate::metric::{self, Metric};
 use crate::rule::{self, Rule, RuleId, RuleTests};
@@ -79,7 +80,16 @@ fn count_matches(
     let applicable = collection.get_rule_from_lang(Path::new(lang_ext(lang)), lang);
     let combined = CombinedScan::new(applicable);
     let result = combined.scan(&root, false);
-    result.matches.iter().map(|(_, m)| m.len()).sum()
+    result
+        .matches
+        .iter()
+        .map(|(config, matches)| {
+            matches
+                .iter()
+                .filter(|m| !ast_filter::is_false_positive(config.id.as_str(), m))
+                .count()
+        })
+        .sum()
 }
 
 /// The `(label, content)` pairs a metric rule is tested against: inline
