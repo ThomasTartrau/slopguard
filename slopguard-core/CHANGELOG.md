@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.1.34](https://gitlab.com/ThomasTartrau/slopguard/compare/slopguard-core-v0.1.33...slopguard-core-v0.1.34) - 2026-10-14
+
+### Fixed
+
+- #54 tighten disable reasons, trivial-fn filter and cargo lookup
+
+- #54 CI (attempt 1)
+
+- #54 reduce false positives of six rules and accept a reason in disable directives
+
 ## [0.1.33](https://gitlab.com/ThomasTartrau/slopguard/compare/slopguard-core-v0.1.32...slopguard-core-v0.1.33) - 2026-10-05
 
 ### Fixed

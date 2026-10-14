@@ -1,6 +1,6 @@
 [package]
 name = "slopguard-core"
-version = "0.1.33"
+version = "0.1.34"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -25,7 +25,7 @@ getrandom = "0.3"
 log = "0.4"
 rmp-serde = "1"
 serde_yaml = "0.9"
-slopguard-rules = { path = "../slopguard-rules", version = "0.1.17" }
+slopguard-rules = { path = "../slopguard-rules", version = "0.1.18" }
 dirs = "7.0.0"
 smart-default = "0.7.1"
 globset = "0.4"
