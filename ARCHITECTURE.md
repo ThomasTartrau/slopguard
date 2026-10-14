@@ -168,9 +168,9 @@ finding anchored at line 1 when the measured value is **strictly greater than**
 the threshold.
 
 ```yaml
-metric: file_lines             # file_lines | import_count | function_count | comment_ratio
+metric: code_lines             # code_lines | file_lines | import_count | function_count | comment_ratio
 threshold: 500                 # required with `metric`; firing is strictly `>`
-message: "File exceeds 500 lines ($value lines)."   # $value is the measured value
+message: "File exceeds 500 lines of code ($value)."   # $value is the measured value
 tests:                         # a metric cannot be measured on a snippet
   should_match_files:
     - "fixtures/metrics/rust_large.rs"
@@ -181,8 +181,9 @@ tests:                         # a metric cannot be measured on a snippet
 | Metric | Measures |
 |--------|----------|
 | `file_lines` | `str::lines()` count, so a trailing newline terminates the last line (`"a\n"` is 1 line) |
+| `code_lines` | lines left non-blank once every comment node (doc comments included) is blanked out on the tree; a line of code with a trailing comment counts, `//` inside a string stays code |
 | `import_count` | `use` / `extern crate` (Rust), `import` statements (TypeScript), including nested ones |
-| `function_count` | `function_item` (Rust); declarations, function expressions, arrow functions and methods (TypeScript). Nested functions count |
+| `function_count` | `function_item` (Rust, so methods and nested functions but not closures); declarations, function expressions, arrow functions and methods (TypeScript). Nested functions count |
 | `comment_ratio` | distinct comment lines divided by total lines; `0.0` for an empty file |
 
 Metric rules are evaluated outside ast-grep, so the scanner applies their

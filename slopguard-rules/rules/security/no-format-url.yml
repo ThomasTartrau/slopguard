@@ -3,7 +3,13 @@ language: rust
 severity: error
 category: security
 message: "format!() to build a URL. Use Url::parse(), .query(), or .join()."
-note: "Parameter injection or path traversal risk if the input contains &, =, / or .."
+note: "Parameter injection or path traversal risk if the input contains &, =, / or .. File paths, package names and messages that quote a URL are not reported."
+# A format string is a URL when it carries a scheme, starts from a placeholder
+# named like a URL or host (`{base_url}/`, `{host}/`), or puts an id after a
+# literal path segment (`/users/{user_id}`). Placeholder names are matched as
+# whole words or `_`-suffixes, so `{width}` is not an id and `{filename}` is not
+# a URL part. A literal holding whitespace is prose (an error message quoting a
+# docs link), never a URL that gets requested.
 rule:
   kind: macro_invocation
   all:
@@ -14,7 +20,9 @@ rule:
         kind: token_tree
         has:
           kind: string_literal
-          regex: '(https?://|\{[^}]*(url|host|base|endpoint)[^}]*\}/|/\{[^}]*(id|name|key|uid|slug)[^}]*\}|\{[^}]*(id|name|key|uid|slug)[^}]*\}/)'
+          regex: '(https?://|\{(\w+_)?(url|uri|host|hostname|endpoint)(:[^}]*)?\}/|/[A-Za-z][\w.-]*/\{(\w+_)?(id|uid|uuid|slug)(:[^}]*)?\})'
+          not:
+            regex: '\s'
 ignores:
   - "**/tests/**"
   - "**/*_tests/**"
@@ -27,6 +35,16 @@ tests:
   should_match:
     - 'let url = format!("https://api.example.com/users/{}", user_id);'
     - 'let url = format!("{base_url}/items/{id}");'
+    - 'let path = format!("/users/{user_id}/posts");'
+    - 'let url = format!("{host}/api/v1{path}");'
+    - 'let url = format!("{api_url:?}/search");'
   should_not_match:
     - 'let msg = format!("connected to {}", host);'
     - 'let label = format!("user-{}", count);'
+    - 'let package = format!("@{scope}/{name}");'
+    - 'let path = format!("{dir}/{filename}");'
+    - 'let manifest = format!("{root}/{crate_name}/Cargo.toml");'
+    - 'let ratio = format!("{width}/100");'
+    - 'let proc_status = format!("/proc/{pid}/status");'
+    - 'let feature = format!("{dep_name}/{dep_feature}");'
+    - 'let msg = format!("See https://example.com/issues/{issue} for details.");'

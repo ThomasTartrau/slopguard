@@ -52,7 +52,7 @@ for finding in &result.findings {
 | `rule` | Rule loading from YAML (builtin via `slopguard-rules`, custom directories, sources) |
 | `source` | External rule sources: git repositories and local paths |
 | `scanner` | Scan orchestration and the `RuleEngine` trait (ast, metric, cross-file engines) |
-| `metric` | File-level metrics (`file_lines`, `import_count`, `function_count`, `comment_ratio`) |
+| `metric` | File-level metrics (`file_lines`, `code_lines`, `import_count`, `function_count`, `comment_ratio`) |
 | `cross_file` | Project-wide symbol index and cross-file rule kinds |
 | `resolution` | Import resolution against Cargo.toml, package.json and tsconfig.json |
 | `cache` | Per-file scan cache keyed by content hash |

@@ -2,11 +2,11 @@ id: max-file-lines
 language: rust
 severity: warning
 category: slop
-metric: file_lines
+metric: code_lines
 threshold: 500
 skip_test_code: true
-message: "File exceeds 500 lines ($value lines). Split it into focused modules."
-note: "Very large single files are a common signature of generated code: the model keeps appending instead of splitting."
+message: "File exceeds 500 lines of code ($value, blank and comment lines not counted). Split it into focused modules."
+note: "Very large single files are a common signature of generated code: the model keeps appending instead of splitting. Documentation does not count, so a well-documented module is not penalized for its docs."
 ignores:
   - "**/fixtures/**"
 tests:

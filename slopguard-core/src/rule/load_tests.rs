@@ -1,7 +1,10 @@
 use std::fs::{create_dir, write};
+use std::str::from_utf8;
 
+use slopguard_rules::BuiltinRules;
 use tempfile::{tempdir, TempDir};
 
+use super::load::is_rule_file;
 use super::*;
 
 #[test]
