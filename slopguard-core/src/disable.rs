@@ -21,12 +21,11 @@ struct DisableDirective {
 }
 
 /// The rule id of a directive, without its optional reason. The reason follows
-/// ` -- `; a directive holding only a reason (`-- why`) names no rule.
+/// `--` (rule ids are kebab-case and never hold a double hyphen), with or
+/// without surrounding spaces; a directive holding only a reason (`-- why`)
+/// names no rule.
 fn rule_id_text(rest: &str) -> &str {
-    if rest == "--" || rest.starts_with("-- ") {
-        return "";
-    }
-    rest.split_once(" -- ").map_or(rest, |(id, _)| id).trim()
+    rest.split_once("--").map_or(rest, |(id, _)| id).trim()
 }
 
 fn parse_directives(source: &str) -> Vec<DisableDirective> {
@@ -322,6 +321,24 @@ mod tests {
         let result = filter_disabled(findings, source);
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].rule_id, RuleId::from("no-expect-in-prod"));
+    }
+
+    #[test]
+    fn disable_with_unspaced_or_empty_reason_suppresses_rule() {
+        for directive in [
+            "// slopguard-disable-next-line no-unwrap-in-prod --",
+            "// slopguard-disable-next-line no-unwrap-in-prod --reason",
+            "// slopguard-disable-next-line no-unwrap-in-prod--reason",
+        ] {
+            let source = format!("fn main() {{\n    {directive}\n    foo().unwrap();\n}}\n");
+            let findings = vec![
+                make_finding("no-unwrap-in-prod", 3),
+                make_finding("no-expect-in-prod", 3),
+            ];
+            let result = filter_disabled(findings, &source);
+            assert_eq!(result.len(), 1, "{directive}");
+            assert_eq!(result[0].rule_id, RuleId::from("no-expect-in-prod"));
+        }
     }
 
     #[test]

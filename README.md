@@ -596,9 +596,12 @@ let value = risky_call().unwrap();
 
 // slopguard-disable-next-line no-unwrap-in-prod
 let value = safe_call().unwrap();
+
+// slopguard-disable-next-line no-unwrap-in-prod -- checked at startup
+let value = safe_call().unwrap();
 ```
 
-The first form suppresses all rules for the next line. The second form suppresses only the named rule.
+The first form suppresses all rules for the next line. The second form suppresses only the named rule. Text after `--` is a reason and is ignored.
 
 Disable comments rot: the code below changes, and the comment keeps hiding
 whatever lands there next. `slopguard scan --report-unused-disable` reports

@@ -5,7 +5,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::fs::read_to_string;
-use std::path::{Path, PathBuf};
+use std::path::{absolute, Path, PathBuf};
 
 use serde_json::Value as JsonValue;
 use toml::Table;
@@ -277,7 +277,12 @@ fn collect_ts_aliases(value: &JsonValue) -> Vec<(String, bool)> {
 /// file's directory, so files in the same directory reuse a parsed manifest.
 #[derive(Default)]
 pub struct ManifestResolver {
-    cargo: HashMap<PathBuf, Option<HashSet<String>>>,
+    /// Source directory -> the `Cargo.toml` governing it (`None` when none is
+    /// reachable or readable).
+    cargo: HashMap<PathBuf, Option<PathBuf>>,
+    /// `Cargo.toml` path -> its collected dependency names, so the directories
+    /// of one crate share a single read of its manifest and path dependencies.
+    cargo_by_manifest: HashMap<PathBuf, HashSet<String>>,
     package_json: HashMap<PathBuf, Option<HashSet<String>>>,
     ts_aliases: HashMap<PathBuf, Vec<(String, bool)>>,
 }
@@ -291,14 +296,24 @@ impl ManifestResolver {
     /// `Cargo.toml` could be read (nothing can be asserted about imports).
     pub(super) fn cargo_deps(&mut self, dir: &Path) -> Option<&HashSet<String>> {
         if !self.cargo.contains_key(dir) {
-            let deps = find_up(dir, "Cargo.toml").and_then(|path| {
+            let manifest = find_up(dir, "Cargo.toml").and_then(|path| {
+                if self.cargo_by_manifest.contains_key(&path) {
+                    return Some(path);
+                }
                 let table = read_to_string(&path).ok()?.parse::<Table>().ok()?;
+                // Absolute, so the walk up to a workspace root declared above
+                // the current directory succeeds when `dir` is relative.
                 let manifest_dir = path.parent().unwrap_or_else(|| Path::new("."));
-                Some(collect_cargo_deps(&table, manifest_dir))
+                let manifest_dir =
+                    absolute(manifest_dir).unwrap_or_else(|_| manifest_dir.to_path_buf());
+                let deps = collect_cargo_deps(&table, &manifest_dir);
+                self.cargo_by_manifest.insert(path.clone(), deps);
+                Some(path)
             });
-            self.cargo.insert(dir.to_path_buf(), deps);
+            self.cargo.insert(dir.to_path_buf(), manifest);
         }
-        self.cargo.get(dir).and_then(|entry| entry.as_ref())
+        let manifest = self.cargo.get(dir)?.as_ref()?;
+        self.cargo_by_manifest.get(manifest)
     }
 
     /// The `package.json` dependency names governing `dir`, or `None` when no

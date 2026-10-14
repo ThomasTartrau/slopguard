@@ -9,10 +9,12 @@ use ast_grep_language::SupportLang;
 type RustNode<'a> = Node<'a, StrDoc<SupportLang>>;
 
 /// Whether the match of rule `rule_id` on `node` is a false positive to drop.
-/// Rules without a filter are never dropped.
+/// Rules without a filter are never dropped. Filters read Rust node kinds, so
+/// a same-id rule for another language (`no-trivial-function` has a
+/// TypeScript twin) is never filtered.
 pub(crate) fn is_false_positive(rule_id: &str, node: &RustNode<'_>) -> bool {
-    match rule_id {
-        "no-trivial-function" => trivial_function_is_benign(node),
+    match (rule_id, node.lang()) {
+        ("no-trivial-function", SupportLang::Rust) => trivial_function_is_benign(node),
         _ => false,
     }
 }
@@ -47,23 +49,16 @@ fn trivial_function_is_benign(fn_item: &RustNode<'_>) -> bool {
     is_named_getter(fn_item, &expr)
 }
 
-/// Whether `expr` reads `self.<field>` (optionally borrowed) where `<field>` is
-/// the name of the function.
+/// Whether `expr` reads `self.<field>` where `<field>` is the name of the
+/// function. The rule only matches a bare field read as the body (`&self.x`
+/// is a `reference_expression` it never matches), so no borrow is unwrapped.
 fn is_named_getter(fn_item: &RustNode<'_>, expr: &RustNode<'_>) -> bool {
-    let inner = if &*expr.kind() == "reference_expression" {
-        let Some(value) = expr.field("value") else {
-            return false;
-        };
-        value
-    } else {
-        expr.clone()
-    };
-    if &*inner.kind() != "field_expression" {
+    if &*expr.kind() != "field_expression" {
         return false;
     }
     let (Some(value), Some(field), Some(name)) = (
-        inner.field("value"),
-        inner.field("field"),
+        expr.field("value"),
+        expr.field("field"),
         fn_item.field("name"),
     ) else {
         return false;
