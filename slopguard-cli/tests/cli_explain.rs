@@ -86,7 +86,7 @@ fn explain_metric_rule_text() {
         .assert()
         .success()
         .stdout(predicate::str::contains("type:      metric"))
-        .stdout(predicate::str::contains("metric:    file_lines"))
+        .stdout(predicate::str::contains("metric:    code_lines"))
         .stdout(predicate::str::contains("threshold: 500"));
 }
 
@@ -104,6 +104,6 @@ fn explain_metric_rule_json() {
 
     assert_eq!(json["id"].as_str(), Some("max-file-lines"));
     assert_eq!(json["type"].as_str(), Some("metric"));
-    assert_eq!(json["metric"].as_str(), Some("file_lines"));
+    assert_eq!(json["metric"].as_str(), Some("code_lines"));
     assert_eq!(json["threshold"].as_f64(), Some(500.0));
 }

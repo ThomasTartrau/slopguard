@@ -196,8 +196,8 @@ greater than the threshold.
 
 | Rule | Language | Metric | Threshold | What it catches |
 | ---- | -------- | ------ | --------- | --------------- |
-| `max-file-lines` | rust | `file_lines` | 500 | Modules that kept growing instead of being split |
-| `max-file-lines-ts` | typescript | `file_lines` | 500 | Same, for TypeScript |
+| `max-file-lines` | rust | `code_lines` | 500 | Modules that kept growing instead of being split (blank and comment lines not counted) |
+| `max-file-lines-ts` | typescript | `code_lines` | 500 | Same, for TypeScript |
 | `max-import-count` | rust | `import_count` | 40 | Files with no single responsibility |
 | `max-import-count-ts` | typescript | `import_count` | 40 | Same, for TypeScript |
 | `max-function-count` | rust | `function_count` | 30 | Files with too many entry points to review as a unit |
@@ -269,8 +269,11 @@ dependency clears a finding even when the importing file is unchanged.
 Resolution stays silent when no manifest is reachable (nothing can be asserted),
 for statement-level `import type` (may resolve to ambient declarations), for
 re-exports (`export ... from`, not parsed as imports), and for TypeScript
-`compilerOptions.paths` aliases. Rust checks only the crate root, never a deep
-path. `$import` in the message is replaced with the unresolved specifier.
+`compilerOptions.paths` aliases. Files under a `fixtures/` directory are skipped
+like in most builtin rules: they are test inputs, not part of the build, and
+often import modules that do not exist on purpose. Rust checks only the crate
+root, never a deep path. `$import` in the message is replaced with the
+unresolved specifier.
 
 In Rust 2018+, a `use` can start from any name already in scope, so a Rust root
 also resolves when it is:
@@ -352,7 +355,7 @@ ai_check:
   if_false: "..."
 
 # ...or a file-level metric, mutually exclusive with `rule`
-metric: file_lines                 # file_lines | import_count | function_count | comment_ratio
+metric: code_lines                 # code_lines | file_lines | import_count | function_count | comment_ratio
 threshold: 500                     # required with `metric`; fires only above it, never at it
                                    # `$value` in `message` becomes the measured value
 

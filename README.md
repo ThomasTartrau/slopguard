@@ -425,8 +425,8 @@ slopguard list --format json | jq '[.[] | select(.type == "metric")] | length'
 
 | Rule | Language | Metric | Threshold |
 | ---- | -------- | ------ | --------- |
-| `max-file-lines` | rust | `file_lines` | 500 |
-| `max-file-lines-ts` | typescript | `file_lines` | 500 |
+| `max-file-lines` | rust | `code_lines` | 500 |
+| `max-file-lines-ts` | typescript | `code_lines` | 500 |
 | `max-import-count` | rust | `import_count` | 40 |
 | `max-import-count-ts` | typescript | `import_count` | 40 |
 | `max-function-count` | rust | `function_count` | 30 |
@@ -434,9 +434,11 @@ slopguard list --format json | jq '[.[] | select(.type == "metric")] | length'
 | `high-comment-ratio` | rust | `comment_ratio` | 0.4 |
 | `high-comment-ratio-ts` | typescript | `comment_ratio` | 0.4 |
 
-`function_count` counts nested functions, and in TypeScript also arrow
-functions and class methods. `comment_ratio` counts distinct comment lines, so
-a five-line block comment counts as five.
+`code_lines` skips blank lines and lines holding only comments, doc comments
+included, so documentation never pushes a file over the limit; `file_lines`
+counts every line. `function_count` counts methods and nested functions, and in
+TypeScript also arrow functions; Rust closures do not count. `comment_ratio`
+counts distinct comment lines, so a five-line block comment counts as five.
 
 ### Writing one
 
@@ -445,9 +447,9 @@ id: max-file-lines
 language: rust
 severity: warning
 category: slop
-metric: file_lines          # file_lines | import_count | function_count | comment_ratio
+metric: code_lines          # code_lines | file_lines | import_count | function_count | comment_ratio
 threshold: 500              # fires above this value, never at it
-message: "File exceeds 500 lines ($value lines). Split it into focused modules."
+message: "File exceeds 500 lines of code ($value). Split it into focused modules."
 tests:
   should_match_files:
     - "fixtures/metrics/rust_large.rs"
@@ -574,8 +576,9 @@ without any network call:
 - **TypeScript**: each `import` / `require` must be in `package.json`, a
   relative file that exists, or a Node builtin.
 
-It stays silent when no manifest is found, on `import type`, on re-exports and
-on tsconfig `paths` aliases. The rule is per file, so it works under `--diff`.
+It stays silent when no manifest is found, on `import type`, on re-exports, on
+tsconfig `paths` aliases and in `fixtures/` directories (test inputs, not part
+of the build). The rule is per file, so it works under `--diff`.
 Editing a manifest is picked up on the next scan even for cached files.
 
 ```text

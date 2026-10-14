@@ -20,6 +20,7 @@ use crate::test_filter::CfgTestRanges;
 #[strum(serialize_all = "snake_case")]
 pub enum Metric {
     FileLines,
+    CodeLines,
     ImportCount,
     FunctionCount,
     CommentRatio,
@@ -34,7 +35,8 @@ fn import_kinds(lang: &Language) -> &'static [&'static str] {
 }
 
 /// Tree-sitter node kinds that represent a function definition in each
-/// language. Nested functions, closures with a body, and methods all count.
+/// language. Methods and nested functions count in both languages; TypeScript
+/// arrow functions and function expressions count, Rust closures do not.
 fn function_kinds(lang: &Language) -> &'static [&'static str] {
     match lang {
         Language::Rust => &["function_item"],
@@ -70,6 +72,9 @@ pub fn compute<D: Doc>(
 ) -> f64 {
     match metric {
         Metric::FileLines => count_lines(source, exclude_tests) as f64,
+        Metric::CodeLines => {
+            count_code_lines(root, comment_kinds(lang), source, exclude_tests) as f64
+        }
         Metric::ImportCount => count_kinds(root, import_kinds(lang), exclude_tests) as f64,
         Metric::FunctionCount => count_kinds(root, function_kinds(lang), exclude_tests) as f64,
         Metric::CommentRatio => {
@@ -97,6 +102,38 @@ fn count_lines(source: &str, exclude_tests: Option<&CfgTestRanges>) -> usize {
         .lines()
         .enumerate()
         .filter(|(i, _)| !in_test(exclude_tests, *i))
+        .count()
+}
+
+/// Count lines that hold code, optionally dropping those inside `#[cfg(test)]`
+/// ranges.
+///
+/// Blank lines and lines holding nothing but comments (doc comments included)
+/// do not count; a line of code with a trailing comment does. Comments are
+/// found on the tree, not by text, so `//` inside a string literal stays code.
+/// Line numbering matches [`count_lines`].
+fn count_code_lines<D: Doc>(
+    root: &AstGrep<D>,
+    kinds: &[&str],
+    source: &str,
+    exclude_tests: Option<&CfgTestRanges>,
+) -> usize {
+    let mut code = source.as_bytes().to_vec();
+    for node in root.root().dfs() {
+        if !kinds.contains(&node.kind().as_ref()) {
+            continue;
+        }
+        if let Some(comment) = code.get_mut(node.range()) {
+            for byte in comment.iter_mut().filter(|b| **b != b'\n') {
+                *byte = b' ';
+            }
+        }
+    }
+    code.split(|b| *b == b'\n')
+        .enumerate()
+        .filter(|(i, line)| {
+            !in_test(exclude_tests, *i) && line.iter().any(|b| !b.is_ascii_whitespace())
+        })
         .count()
 }
 
@@ -168,6 +205,7 @@ impl Metric {
         let rendered = self.format_value(value);
         match self {
             Metric::FileLines => format!("{rendered} lines"),
+            Metric::CodeLines => format!("{rendered} lines of code"),
             Metric::ImportCount => format!("{rendered} imports"),
             Metric::FunctionCount => format!("{rendered} functions"),
             Metric::CommentRatio => format!("{rendered} comment ratio"),
@@ -227,6 +265,63 @@ mod tests {
     #[test]
     fn file_lines_empty_file_is_zero() {
         assert_eq!(rust(Metric::FileLines, ""), 0.0);
+    }
+
+    #[test]
+    fn code_lines_skips_blank_and_comment_only_lines() {
+        let source = "\
+//! module doc
+use std::fmt;
+
+/// doc for a
+/// still doc
+fn a() {} // trailing comment keeps the line
+/* block
+   comment */
+// narration
+fn b() {
+    let url = \"https://example.com\"; /* inline */ let x = 1;
+}
+";
+        assert_eq!(rust(Metric::FileLines, source), 12.0);
+        // Code lines: `use`, `fn a`, `fn b() {`, the `let` line, `}`.
+        assert_eq!(rust(Metric::CodeLines, source), 5.0);
+    }
+
+    #[test]
+    fn code_lines_typescript() {
+        let source = "\
+/** jsdoc
+ * more jsdoc
+ */
+// narration
+export function f(): string {
+  return \"// not a comment\";
+}
+";
+        // `//` inside a string literal is code: 3 code lines.
+        assert_eq!(typescript(Metric::CodeLines, source), 3.0);
+    }
+
+    #[test]
+    fn code_lines_excludes_cfg_test() {
+        let source = "\
+fn prod() {}
+
+#[cfg(test)]
+mod tests {
+    // test comment
+    fn t() {}
+}
+";
+        assert_eq!(rust(Metric::CodeLines, source), 5.0);
+        assert_eq!(rust_no_tests(Metric::CodeLines, source), 1.0);
+    }
+
+    #[test]
+    fn code_lines_empty_or_comment_only_file_is_zero() {
+        assert_eq!(rust(Metric::CodeLines, ""), 0.0);
+        assert_eq!(rust(Metric::CodeLines, "// only\n\n/// docs\n"), 0.0);
     }
 
     #[test]
@@ -453,6 +548,7 @@ function f() {}
     fn format_value_and_describe() {
         assert_eq!(Metric::FileLines.format_value(547.0), "547");
         assert_eq!(Metric::FileLines.describe(547.0), "547 lines");
+        assert_eq!(Metric::CodeLines.describe(412.0), "412 lines of code");
         assert_eq!(Metric::ImportCount.describe(42.0), "42 imports");
         assert_eq!(Metric::FunctionCount.describe(31.0), "31 functions");
         assert_eq!(Metric::CommentRatio.format_value(0.617), "0.62");
@@ -470,6 +566,7 @@ function f() {}
     #[test]
     fn metric_display_is_snake_case() {
         assert_eq!(Metric::FileLines.to_string(), "file_lines");
+        assert_eq!(Metric::CodeLines.to_string(), "code_lines");
         assert_eq!(Metric::CommentRatio.to_string(), "comment_ratio");
     }
 }
