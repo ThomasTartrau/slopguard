@@ -8,8 +8,8 @@ use super::test_support::*;
 use super::*;
 use crate::cache::{CacheEntry, CacheKey};
 use crate::config::Config;
-use crate::finding::ScanResult;
-use crate::rule::{Rule, RuleId};
+use crate::finding::{Finding, ScanResult};
+use crate::rule::{load_builtin_rules, Rule, RuleId};
 
 fn test_cache_key() -> CacheKey {
     CacheKey::from_bytes([7; 32])
@@ -691,4 +691,132 @@ fn all_engine_kinds_run_and_aggregate() {
         ids.contains(&RuleId::from("no-single-impl-trait")),
         "cross-file engine finding missing: {ids:?}"
     );
+}
+
+/// Findings of the builtin rule `rule_id` on `source`, written as `lib.rs`.
+fn builtin_findings(rule_id: &str, source: &str) -> Vec<Finding> {
+    // A rule id may exist once per language (`no-trivial-function` has a
+    // TypeScript twin), so keep every variant and let the scan pick by file.
+    let rules: Vec<Rule> = load_builtin_rules()
+        .unwrap()
+        .into_iter()
+        .filter(|r| r.id.as_str() == rule_id)
+        .collect();
+    assert!(!rules.is_empty(), "builtin rule '{rule_id}' should exist");
+    let dir = tempdir().unwrap();
+    write(dir.path().join("lib.rs"), source).unwrap();
+    scan_dir(dir.path(), &rules)
+        .findings
+        .into_iter()
+        .filter(|f| f.rule_id.as_str() == rule_id)
+        .collect()
+}
+
+#[test]
+fn expect_inside_enclosing_call_reported_once() {
+    let found = builtin_findings(
+        "no-expect-in-prod",
+        "fn f(h: &mut H, v: Option<u8>) { headers.insert(h, v.expect(\"set\")); }\n",
+    );
+    assert_eq!(found.len(), 1, "got: {found:?}");
+    assert!(
+        found[0].matched_text.starts_with("v.expect("),
+        "got: {}",
+        found[0].matched_text
+    );
+}
+
+#[test]
+fn expect_inside_lazy_lock_closure_reported_once() {
+    let found = builtin_findings(
+        "no-expect-in-prod",
+        "static X: LazyLock<u8> = LazyLock::new(|| x.expect(\"boom\"));\n",
+    );
+    assert_eq!(found.len(), 1, "got: {found:?}");
+}
+
+#[test]
+fn expect_in_format_macro_reported_once() {
+    let found = builtin_findings(
+        "no-expect-in-prod",
+        "fn f() { let s = format!(\"{}\", name.as_deref().expect(\"set\")); }\n",
+    );
+    assert_eq!(found.len(), 1, "got: {found:?}");
+}
+
+#[test]
+fn lock_expect_not_reported() {
+    let found = builtin_findings(
+        "no-expect-in-prod",
+        "fn f() { let g = map.lock().expect(\"poisoned\"); }\n",
+    );
+    assert!(found.is_empty(), "got: {found:?}");
+}
+
+#[test]
+fn swallowed_map_err_with_try_in_some_not_reported() {
+    let found = builtin_findings(
+        "no-swallowed-error",
+        "fn f() { let v = Some(x.parse().map_err(|_| Error::Bad)?); }\n",
+    );
+    assert!(found.is_empty(), "got: {found:?}");
+}
+
+#[test]
+fn swallowed_map_err_inside_call_reported_once() {
+    let found = builtin_findings(
+        "no-swallowed-error",
+        "fn f() { foo(x.parse().map_err(|_| Error::Bad)); }\n",
+    );
+    assert_eq!(found.len(), 1, "got: {found:?}");
+    assert!(
+        found[0].matched_text.starts_with("x.parse().map_err("),
+        "got: {}",
+        found[0].matched_text
+    );
+}
+
+#[test]
+fn getter_named_like_field_not_reported() {
+    let found = builtin_findings(
+        "no-trivial-function",
+        "impl A { fn name(&self) -> String { self.name } }\n",
+    );
+    assert!(found.is_empty(), "got: {found:?}");
+}
+
+#[test]
+fn call_adding_constant_argument_not_reported() {
+    let found = builtin_findings(
+        "no-trivial-function",
+        "fn from_fn(f: F) -> L { from_fn_with_state((), f) }\n",
+    );
+    assert!(found.is_empty(), "got: {found:?}");
+}
+
+#[test]
+fn pure_forward_still_reported() {
+    let found = builtin_findings(
+        "no-trivial-function",
+        "fn run(mut x: i32, y: &str) -> i32 { compute(x, &y) }\n",
+    );
+    assert_eq!(found.len(), 1, "got: {found:?}");
+}
+
+#[test]
+fn field_read_under_other_name_still_reported() {
+    let found = builtin_findings(
+        "no-trivial-function",
+        "impl A { fn label(&self) -> String { self.name } }\n",
+    );
+    assert_eq!(found.len(), 1, "got: {found:?}");
+}
+
+#[test]
+fn self_pass_through_still_reported() {
+    let found = builtin_findings(
+        "no-trivial-function",
+        "impl A { fn describe(&self) -> String { render(self) } }\n",
+    );
+    assert_eq!(found.len(), 1, "got: {found:?}");
 }

@@ -5,8 +5,36 @@ category: correctness
 message: ".expect() forbidden in production. Use ? or match."
 note: "expect() allowed only in tests and server startup (main). In a handler/service it crashes the process."
 rule:
-  kind: call_expression
-  regex: '\.expect\('
+  any:
+    - all:
+        - kind: call_expression
+        - has:
+            field: function
+            kind: field_expression
+            has:
+              field: field
+              regex: '^expect$'
+        - not:
+            has:
+              field: function
+              kind: field_expression
+              has:
+                field: value
+                kind: call_expression
+                all:
+                  - has:
+                      field: function
+                      kind: field_expression
+                      has:
+                        field: field
+                        regex: '^(lock|read|write)$'
+                  - has:
+                      field: arguments
+                      regex: '^\(\s*\)$'
+    - all:
+        - kind: macro_invocation
+        - regex: '^[\w:]+!\s*[(\[]'
+        - regex: '\.expect\('
 ignores:
   - "**/tests/**"
   - "**/*_tests/**"
@@ -23,8 +51,11 @@ tests:
   should_match:
     - 'let conn = pool.get().expect("pool exhausted");'
     - 'let val = map.get("key").expect("missing key");'
+    - 'let s = format!("{}", name.as_deref().expect("set"));'
   should_not_match:
     - "let conn = pool.get()?;"
+    - 'let g = map.lock().expect("poisoned");'
+    - 'let g = cell.read().expect("poisoned");'
     - |
       match pool.get() {
           Ok(conn) => conn,

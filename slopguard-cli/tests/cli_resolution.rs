@@ -135,3 +135,11 @@ fn manifest_edit_clears_finding_under_cache() {
         "declaring the dependency should clear the finding, got: {after:?}"
     );
 }
+
+// A path dependency imported under its `[lib] name`, and a package importing its
+// own `[lib] name` from `tests/`, are not unresolved.
+#[test]
+fn renamed_lib_import_is_not_flagged() {
+    let found = resolution_findings(&format!("{FIXTURES_DIR}/renamed_lib"), None);
+    assert!(found.is_empty(), "got: {found:?}");
+}

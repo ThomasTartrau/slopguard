@@ -20,6 +20,14 @@ struct DisableDirective {
     comment_text: String,
 }
 
+/// The rule id of a directive, without its optional reason. The reason follows
+/// `--` (rule ids are kebab-case and never hold a double hyphen), with or
+/// without surrounding spaces; a directive holding only a reason (`-- why`)
+/// names no rule.
+fn rule_id_text(rest: &str) -> &str {
+    rest.split_once("--").map_or(rest, |(id, _)| id).trim()
+}
+
 fn parse_directives(source: &str) -> Vec<DisableDirective> {
     source
         .lines()
@@ -30,11 +38,11 @@ fn parse_directives(source: &str) -> Vec<DisableDirective> {
                 .strip_prefix("//")?
                 .trim()
                 .strip_prefix(DISABLE_MARKER)?;
-            let rest = rest.trim();
+            let id = rule_id_text(rest.trim());
             Some(DisableDirective {
                 comment_line: idx + 1,
                 target_line: idx + 2,
-                rule_id: (!rest.is_empty()).then(|| RuleId::from(rest)),
+                rule_id: (!id.is_empty()).then(|| RuleId::from(id)),
                 comment_text: line.trim().to_string(),
             })
         })
@@ -301,6 +309,55 @@ mod tests {
         let unused = unused_disable_findings(Path::new("test.rs"), source, &raw);
         assert_eq!(unused.len(), 1);
         assert!(unused[0].message.contains("no-expect-in-prod"));
+    }
+
+    #[test]
+    fn disable_with_reason_after_double_dash_suppresses_rule() {
+        let source = "fn main() {\n    // slopguard-disable-next-line no-unwrap-in-prod -- startup invariant\n    foo().unwrap();\n}\n";
+        let findings = vec![
+            make_finding("no-unwrap-in-prod", 3),
+            make_finding("no-expect-in-prod", 3),
+        ];
+        let result = filter_disabled(findings, source);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].rule_id, RuleId::from("no-expect-in-prod"));
+    }
+
+    #[test]
+    fn disable_with_unspaced_or_empty_reason_suppresses_rule() {
+        for directive in [
+            "// slopguard-disable-next-line no-unwrap-in-prod --",
+            "// slopguard-disable-next-line no-unwrap-in-prod --reason",
+            "// slopguard-disable-next-line no-unwrap-in-prod--reason",
+        ] {
+            let source = format!("fn main() {{\n    {directive}\n    foo().unwrap();\n}}\n");
+            let findings = vec![
+                make_finding("no-unwrap-in-prod", 3),
+                make_finding("no-expect-in-prod", 3),
+            ];
+            let result = filter_disabled(findings, &source);
+            assert_eq!(result.len(), 1, "{directive}");
+            assert_eq!(result[0].rule_id, RuleId::from("no-expect-in-prod"));
+        }
+    }
+
+    #[test]
+    fn disable_with_only_reason_is_blanket() {
+        let source = "fn main() {\n    // slopguard-disable-next-line -- startup invariant\n    foo().unwrap();\n}\n";
+        let findings = vec![
+            make_finding("no-unwrap-in-prod", 3),
+            make_finding("no-expect-in-prod", 3),
+        ];
+        assert!(filter_disabled(findings, source).is_empty());
+    }
+
+    #[test]
+    fn unused_disable_message_omits_the_reason() {
+        let source = "fn main() {\n    // slopguard-disable-next-line no-unwrap-in-prod -- startup invariant\n    let x = 1;\n}\n";
+        let unused = unused_disable_findings(Path::new("test.rs"), source, &[]);
+        assert_eq!(unused.len(), 1);
+        assert!(unused[0].message.contains("for 'no-unwrap-in-prod'"));
+        assert!(!unused[0].message.contains("startup invariant"));
     }
 
     #[test]

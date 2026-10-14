@@ -3,7 +3,7 @@ language: rust
 severity: warning
 category: slop
 message: "Trivial wrapper function. Inline it or call the target directly."
-note: "AI adds pass-through functions that only forward a call or read a field. Trait impl methods (From, Deref, etc.) and newtype accessors are excluded."
+note: "AI adds pass-through functions that only forward a call or read a field. Trait impl methods (From, Deref, etc.) and newtype accessors are excluded, as are a getter named like its field and a call that adds or derives an argument."
 rule:
   all:
     - kind: function_item
@@ -45,7 +45,8 @@ ignores:
 skip_test_code: true
 tests:
   should_match:
-    - "fn name(&self) -> String { self.name }"
+    - "fn label(&self) -> String { self.name }"
+    - "fn alias(a: i32, b: i32) -> i32 { compute(a, b) }"
     - "fn run(x: i32) -> i32 { compute(x) }"
   should_not_match:
     - "fn calc(a: i32, b: i32) -> i32 { let s = a + b; s * 2 }"
@@ -55,3 +56,7 @@ tests:
     - "fn into_inner(self) -> T { self.0 }"
     - "fn new(value: T) -> Self { Self(value) }"
     - "fn deref(&self) -> &Self::Target { &self.0 }"
+    - "fn name(&self) -> String { self.name }"
+    - "fn name(&self) -> &String { &self.name }"
+    - "fn from_fn(f: F) -> L { from_fn_with_state((), f) }"
+    - "fn limit(&self) -> i32 { compute(self.limit, 3) }"

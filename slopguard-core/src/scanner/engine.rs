@@ -18,6 +18,7 @@ use ast_grep_core::AstGrep;
 use ast_grep_language::SupportLang;
 use globset::GlobSet;
 
+use crate::ast_filter;
 use crate::cross_file::{self, CrossFileKind, DeclFilter, SymbolIndex};
 use crate::disable::filter_disabled;
 use crate::finding::Finding;
@@ -134,6 +135,9 @@ impl RuleEngine for AstEngine<'_> {
                 let skip_test_code = rule.skip_test_code;
                 matches
                     .into_iter()
+                    .filter(move |node_match| {
+                        !ast_filter::is_false_positive(rule.id.as_str(), node_match)
+                    })
                     .map(move |node_match| {
                         let start = node_match.start_pos();
                         let end = node_match.end_pos();
