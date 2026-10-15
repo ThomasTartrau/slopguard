@@ -70,7 +70,8 @@ The library crate. Responsible for:
   under a per-user key, default dir under the user cache (cache.rs, D41)
 - Inline disable comment parsing and the unused-disable report (disable.rs)
 - `#[cfg(test)]` and test-path detection for `skip_test_code` (test_filter.rs)
-- Autofix: `rewrite` application, fix point, dry-run diff (fix/, D31)
+- Autofix: `rewrite` application and builtin multi-node fixers, fix point,
+  dry-run diff (fix/, D31, D49)
 - Config parsing (slopguard.toml via serde + toml) and `init` presets (preset.rs)
 - Finding representation (file, line, rule_id, severity, message, note)
 - Baseline hashing, persistence and filtering (baseline.rs)
@@ -108,13 +109,13 @@ slopguard-rules/
   src/
     lib.rs                # exports the embedded rules (rust-embed)
   rules/
-    slop/                 # 44 files
+    slop/                 # 47 files
     security/             # 22 files
-    correctness/          # 51 files
+    correctness/          # 52 files
     fixtures/             # whole-file fixtures for metric rule tests
 ```
 
-117 files ship, 14 of them opt-in (`enabled: false`). `slopguard list --all`
+121 files ship, 14 of them opt-in (`enabled: false`). `slopguard list --all`
 is the source of truth for the inventory, and RULES.md describes each rule.
 
 Dependencies: rust-embed
@@ -141,7 +142,9 @@ category: slop                 # slop | security | correctness (derived from rul
 enabled: false                 # opt-in rule, activated by `rules.enable` (default true)
 fix: "Use X instead of Y"     # human message, never applied
 rewrite: "$R"                  # ast-grep rewrite template applied by `scan --fix` (D31)
-autofix_safe: true             # required for `rewrite` to be applied (default false); external rules also need fix.allow_external
+fixer: derive_clone            # or a builtin multi-node fixer, exclusive with rewrite (D49)
+autofix_safe: true             # required for `rewrite`/`fixer` to be applied (default false); external rules also need fix.allow_external
+autofix_unsafe: true           # instead of autofix_safe: applied only with --unsafe-fixes (D49)
 skip_test_code: true           # drop findings inside #[cfg(test)] blocks (Rust only, default false)
 ai_check:                      # turns the rule into an AI rule: `rule` only collects candidates
   prompt: "..."                # template with {{filename}}, {{rule_context}}, {{code}}
@@ -457,10 +460,20 @@ provider (D34).
 
 ## Autofix
 
-`scan --fix` applies the `rewrite` of every `autofix_safe` rule in place
-(`slopguard-core::fix`, D31). Builtin rules qualify on `autofix_safe` alone; an
+`scan --fix` applies the rewrite of every `autofix_safe` rule in place
+(`slopguard-core::fix`, D31), and of every `autofix_unsafe` rule too under
+`--unsafe-fixes` (D49). Builtin rules qualify on that marker alone; an
 external rule (`custom_dirs`, `[[rules.sources]]`) also needs its id in the
 user-only `fix.allow_external` (D40).
+
+A rewrite is either the rule's `rewrite` template, compiled as the ast-grep
+fix, or a builtin `fixer` (`fix/fixers/`): Rust code that receives one
+detection match and returns the edit group of its rewrite, possibly spread
+over the file (the enum's derive list and the impl it replaces), or nothing
+when it cannot prove the rewrite correct. The strum fixer reads the crate's
+`Cargo.toml` (`resolution::strum_derive_crate`); the re-export fixer reads the
+module file a glob points at. In `slopguard test`, fixers see no manifest
+(strum is assumed) and no other file.
 
 1. Refuse when the scanned paths have uncommitted changes, or are outside a git
    repository, unless `--allow-dirty`.
@@ -469,8 +482,10 @@ user-only `fix.allow_external` (D40).
 3. Match each autofixable rule (or its narrower `autofix_rule`, kept only inside
    a detection match) directly on the source, within the rule's `files` /
    `ignores` scope, skipping test code and protected ranges.
-4. Apply the non-overlapping edits, shift the protected ranges, then match the
-   new buffer again, until a fix point or 10 iterations.
+4. Apply the edit groups that do not conflict (overlapping edits, or two edits
+   starting at the same position), all edits of a group or none, shift the
+   protected ranges, then match the new buffer again, until a fix point or 10
+   iterations.
 5. Rescan from disk with the rules already loaded (no source re-fetch) and exit
    1 if findings remain.
 

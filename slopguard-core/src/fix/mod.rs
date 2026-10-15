@@ -1,9 +1,12 @@
-//! `scan --fix`: apply the `rewrite` template of autofix-safe rules in place.
+//! `scan --fix`: apply the rewrites of autofixable rules in place.
 //!
-//! The detection pass never touches `rewrite`. This module compiles each
-//! autofixable rule with its `rewrite` as the ast-grep `fix`, matches the source
-//! directly (so it can re-match a mutated buffer and reach a fix point), and
-//! applies the resulting edits.
+//! The detection pass never touches `rewrite` or `fixer`. This module compiles
+//! each autofixable rule with its `rewrite` as the ast-grep `fix` (or with its
+//! detection matcher alone when a builtin `fixer` computes the edits), matches
+//! the source directly (so it can re-match a mutated buffer and reach a fix
+//! point), and applies the resulting edits. The edits of one match form a group
+//! applied together or not at all. Rules marked `autofix_unsafe` only run when
+//! the caller asks for unsafe fixes.
 //!
 //! A rewrite stays within the scope of detection: only builtin rules, or
 //! external rules the user listed in `fix.allow_external`, are applied; a rule's
@@ -14,79 +17,47 @@
 //! baseline membership are resolved once on the original content and tracked
 //! through every edit, so a rewrite that shifts lines cannot unprotect them.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::slice::from_ref;
 
-use ast_grep_config::RuleConfig;
 use ast_grep_core::tree_sitter::LanguageExt;
 use ast_grep_language::SupportLang;
-use globset::GlobSet;
-use serde_yaml::Value;
 
 use crate::baseline::{finding_hash, Baseline};
 use crate::config::Config;
 use crate::disable::is_disabled;
 use crate::finding::Finding;
+use crate::resolution::strum_derive_crate;
 use crate::rule::{Category, Rule, RuleId, Severity};
-use crate::scanner::{build_glob_set, compile_ast_grep_rule, walk_files, AstGrepRule, ScanError};
-use crate::source::RuleOrigin;
+use crate::scanner::{build_glob_set, walk_files, ScanError};
 use crate::test_filter::{CfgTestRanges, TestPaths};
+
+mod compile;
+mod edits;
+mod fixers;
+
+use compile::{compile_fix_rules, needs_strum, CompiledFixRule, FixAction};
+use edits::{apply_edits, select_non_overlapping, shift_protected, Protected, RawEdit};
+use fixers::FixEnv;
+pub use fixers::FixerKind;
 
 /// Upper bound on the re-scan/re-apply cycles per file. Fixing overlapping or
 /// nested matches can expose new ones; the loop stops at a fix point or here.
 const MAX_ITERATIONS: usize = 10;
 
-/// One autofixable rule compiled for a specific ast-grep language, keeping a way
-/// back to the slopguard rule identity for filtering.
-struct CompiledFixRule {
-    rule_id: RuleId,
-    lang: SupportLang,
-    skip_test_code: bool,
-    config: RuleConfig<SupportLang>,
-    /// The detection `rule` (with its `constraints`) when a dedicated
-    /// `autofix_rule` drives `config`: a fix match is kept only inside one of
-    /// its matches. `None` when `config` already is the detection matcher.
-    detect: Option<RuleConfig<SupportLang>>,
-    files: Option<GlobSet>,
-    ignores: Option<GlobSet>,
-}
-
-impl CompiledFixRule {
-    /// Whether the rule's `files` / `ignores` globs select `path`, with the
-    /// same semantics as the metric engine.
-    fn applies_to(&self, path: &Path) -> bool {
-        self.files.as_ref().is_none_or(|g| g.is_match(path))
-            && !self.ignores.as_ref().is_some_and(|g| g.is_match(path))
-    }
-}
-
-/// A single text replacement, decoupled from ast-grep's borrowed `Edit` so it
-/// outlives the parsed tree.
-struct RawEdit {
-    position: usize,
-    deleted_length: usize,
-    inserted: Vec<u8>,
-}
-
-/// A match `--fix` must leave alone (inline disable or baseline), as a byte
-/// range of the current buffer for one rule.
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct Protected {
-    rule_id: RuleId,
-    start: usize,
-    end: usize,
-}
-
-/// A match eligible for rewriting in one pass, with what both the protection
-/// pre-pass and the edit pass need from it.
+/// A match in scope for rewriting in one pass, with what both the protection
+/// pre-pass and the edit pass need from it. `edits` is the group its rewrite
+/// produces, `None` when a builtin fixer declined the match: it is still
+/// protected by an inline disable or the baseline, in case a later pass could
+/// fix it.
 struct Candidate {
     range: Range<usize>,
     line: usize,
     text: String,
-    edit: RawEdit,
+    edits: Option<Vec<RawEdit>>,
 }
 
 /// The rewrite of one file: kept only when the content actually changed.
@@ -112,87 +83,6 @@ impl FixReport {
     }
 }
 
-/// Whether `--fix` may apply `rule`: it is autofixable, and either builtin or
-/// an external rule the user explicitly allowed in `fix.allow_external`.
-fn is_trusted_for_fix(rule: &Rule, allow_external: &[String]) -> bool {
-    rule.is_autofixable()
-        && (rule.origin == RuleOrigin::Builtin
-            || allow_external.iter().any(|id| id == rule.id.as_str()))
-}
-
-/// Compile one ast-grep matcher of `rule` for `lang`: the fix matcher (with the
-/// `rewrite` as `fix`) or the detection matcher bounding it (`fix: None`).
-fn compile_matcher(
-    rule: &Rule,
-    lang: SupportLang,
-    matcher: &Value,
-    constraints: Option<&Value>,
-    fix: Option<&str>,
-) -> Result<RuleConfig<SupportLang>, ScanError> {
-    let ast_grep_rule = AstGrepRule {
-        id: rule.id.as_str(),
-        language: lang,
-        severity: &rule.severity,
-        message: &rule.message,
-        note: rule.note.as_deref(),
-        rule: matcher,
-        constraints,
-        fix,
-        files: rule.files.as_deref(),
-        ignores: rule.ignores.as_deref(),
-    };
-    compile_ast_grep_rule(&ast_grep_rule).map_err(|source| ScanError::RuleCompile {
-        id: rule.id.clone(),
-        source,
-    })
-}
-
-/// Compile every autofixable rule (`autofix_safe` + `rewrite`) trusted for
-/// `--fix` with its rewrite as the ast-grep fix template, once per ast-grep
-/// language it targets.
-fn compile_fix_rules(
-    rules: &[Rule],
-    allow_external: &[String],
-) -> Result<Vec<CompiledFixRule>, ScanError> {
-    let mut compiled = Vec::new();
-    for rule in rules
-        .iter()
-        .filter(|r| is_trusted_for_fix(r, allow_external))
-    {
-        // `is_autofixable` guarantees `rewrite` is present.
-        let Some(rewrite) = rule.rewrite.as_deref() else {
-            continue;
-        };
-        // A dedicated `autofix_rule` is self-contained: its metavariables need
-        // not match those of the detection `rule`, so detection `constraints`
-        // (which reference the detection rule's metavariables) do not apply to
-        // it. They apply to the separate detection matcher instead, which
-        // bounds where the dedicated matcher may rewrite.
-        let uses_dedicated_matcher = !rule.autofix_rule.is_null();
-        let detection_constraints = (!rule.constraints.is_null()).then_some(&rule.constraints);
-        let constraints = detection_constraints.filter(|_| !uses_dedicated_matcher);
-        let files = rule.files.as_deref().map(build_glob_set).transpose()?;
-        let ignores = rule.ignores.as_deref().map(build_glob_set).transpose()?;
-        for &lang in rule.language.ast_grep_langs() {
-            let config =
-                compile_matcher(rule, lang, rule.fix_matcher(), constraints, Some(rewrite))?;
-            let detect = uses_dedicated_matcher
-                .then(|| compile_matcher(rule, lang, &rule.rule, detection_constraints, None))
-                .transpose()?;
-            compiled.push(CompiledFixRule {
-                rule_id: rule.id.clone(),
-                lang,
-                skip_test_code: rule.skip_test_code,
-                config,
-                detect,
-                files: files.clone(),
-                ignores: ignores.clone(),
-            });
-        }
-    }
-    Ok(compiled)
-}
-
 /// The baseline hashes to skip, empty when no baseline is active.
 fn baseline_hash_set(baseline: Option<&Baseline>) -> HashSet<String> {
     baseline
@@ -200,78 +90,28 @@ fn baseline_hash_set(baseline: Option<&Baseline>) -> HashSet<String> {
         .unwrap_or_default()
 }
 
-/// Apply non-overlapping edits (sorted ascending) to `source`, right to left so
-/// earlier positions stay valid. Returns the new content and the number of
-/// edits actually spliced: an out-of-bounds edit is skipped and not counted,
-/// and an invalid UTF-8 result yields the original content with 0 applied.
-fn apply_edits(source: &str, edits: &[RawEdit]) -> (String, usize) {
-    let mut bytes = source.as_bytes().to_vec();
-    let mut applied = 0;
-    for edit in edits.iter().rev() {
-        let end = edit.position + edit.deleted_length;
-        if end > bytes.len() {
-            continue;
-        }
-        bytes.splice(edit.position..end, edit.inserted.iter().copied());
-        applied += 1;
-    }
-    match String::from_utf8(bytes) {
-        Ok(fixed) => (fixed, applied),
-        Err(_) => (source.to_string(), 0),
-    }
-}
-
-/// Greedily keep the edits that do not overlap a previously kept one. Input must
-/// be sorted by position. An edit starting before the running end (a nested or
-/// duplicate match) is dropped and left for the next fix-point iteration.
-fn select_non_overlapping(mut edits: Vec<RawEdit>) -> Vec<RawEdit> {
-    edits.sort_by_key(|e| e.position);
-    let mut kept: Vec<RawEdit> = Vec::new();
-    let mut last_end = 0usize;
-    for edit in edits {
-        if edit.position >= last_end {
-            last_end = edit.position + edit.deleted_length;
-            kept.push(edit);
-        }
-    }
-    kept
-}
-
-/// Move the protected ranges through one pass of applied edits (sorted
-/// ascending, non-overlapping, positions in the pre-pass buffer). A range after
-/// an edit shifts by the length delta; a range an edit touches is widened to
-/// cover the replacement, so it keeps protecting the text it held.
-fn shift_protected(protected: &mut [Protected], edits: &[RawEdit]) {
-    // Right to left: an edit never moves the positions before it, so each
-    // edit's coordinates stay valid while the later ones are folded in.
-    for edit in edits.iter().rev() {
-        let edit_end = edit.position + edit.deleted_length;
-        let inserted = edit.inserted.len();
-        for range in protected.iter_mut() {
-            if edit_end <= range.start {
-                // `range.start >= edit_end >= deleted_length`: no underflow.
-                range.start = range.start - edit.deleted_length + inserted;
-                range.end = range.end - edit.deleted_length + inserted;
-            } else if edit.position < range.end {
-                // `max(end, edit_end) >= edit_end >= deleted_length`.
-                range.end = range.end.max(edit_end) - edit.deleted_length + inserted;
-                range.start = range.start.min(edit.position);
-            }
-        }
-    }
+/// Everything fixing one file needs besides its content.
+struct FileContext<'a> {
+    path: &'a Path,
+    lang: SupportLang,
+    rules: &'a [CompiledFixRule],
+    test_paths: &'a TestPaths,
+    env: FixEnv<'a>,
 }
 
 /// The matches of every rule over `source` that pass the scope filters shared
 /// with detection: the rule's `files` / `ignores` globs, `skip_test_code`
 /// (path heuristic and inline `#[cfg(test)]`), and, for a dedicated
 /// `autofix_rule`, containment in a detection match.
-fn candidates<'r>(
-    source: &str,
-    path: &Path,
-    lang: SupportLang,
-    rules: &'r [CompiledFixRule],
-    test_paths: &TestPaths,
-) -> Vec<(&'r CompiledFixRule, Candidate)> {
+fn candidates<'r>(source: &str, file: &FileContext<'r>) -> Vec<(&'r CompiledFixRule, Candidate)> {
+    let FileContext {
+        path,
+        lang,
+        rules,
+        test_paths,
+        env,
+    } = file;
+    let (path, lang) = (*path, *lang);
     let ast = lang.ast_grep(source);
     let cfg_test = (lang == SupportLang::Rust).then(|| CfgTestRanges::from_root(&ast));
     let is_test_file = test_paths.is_test(path);
@@ -281,9 +121,10 @@ fn candidates<'r>(
         .iter()
         .filter(|r| r.lang == lang && r.applies_to(path))
     {
-        let Some(fixer) = rule.config.fixer.first() else {
+        let template = rule.config.fixer.first();
+        if matches!(rule.action, FixAction::Template) && template.is_none() {
             continue;
-        };
+        }
         let detected: Option<Vec<Range<usize>>> = rule.detect.as_ref().map(|detect| {
             ast.root()
                 .find_all(&detect.matcher)
@@ -311,18 +152,25 @@ fn candidates<'r>(
                 continue;
             }
 
-            let edit = node_match.make_edit(&rule.config.matcher, fixer);
+            let edits = match (rule.action, template) {
+                (FixAction::Builtin(kind), _) => fixers::fix(kind, &node_match, env),
+                (FixAction::Template, Some(fixer)) => {
+                    let edit = node_match.make_edit(&rule.config.matcher, fixer);
+                    Some(vec![RawEdit {
+                        position: edit.position,
+                        deleted_length: edit.deleted_length,
+                        inserted: edit.inserted_text,
+                    }])
+                }
+                (FixAction::Template, None) => None,
+            };
             found.push((
                 rule,
                 Candidate {
                     range,
                     line: start_line,
                     text: node_match.text().to_string(),
-                    edit: RawEdit {
-                        position: edit.position,
-                        deleted_length: edit.deleted_length,
-                        inserted: edit.inserted_text,
-                    },
+                    edits,
                 },
             ));
         }
@@ -335,14 +183,12 @@ fn candidates<'r>(
 /// checked per (rule, match), so a blanket directive protects every rule.
 fn protected_ranges(
     original: &str,
-    path: &Path,
-    lang: SupportLang,
-    rules: &[CompiledFixRule],
-    test_paths: &TestPaths,
+    file: &FileContext<'_>,
     baseline_hashes: &HashSet<String>,
     baseline_root: &Path,
 ) -> Vec<Protected> {
-    candidates(original, path, lang, rules, test_paths)
+    let path = file.path;
+    candidates(original, file)
         .into_iter()
         .filter(|(rule, candidate)| {
             if is_disabled(original, candidate.line, &rule.rule_id) {
@@ -363,17 +209,14 @@ fn protected_ranges(
         .collect()
 }
 
-/// Collect the edits due for `source` in one pass: the in-scope matches that
-/// do not overlap a protected range of the same rule.
+/// Collect the edit groups due for `source` in one pass: the rewrites of the
+/// in-scope matches that do not overlap a protected range of the same rule.
 fn collect_edits(
     source: &str,
-    path: &Path,
-    lang: SupportLang,
-    rules: &[CompiledFixRule],
-    test_paths: &TestPaths,
+    file: &FileContext<'_>,
     protected: &[Protected],
-) -> Vec<RawEdit> {
-    candidates(source, path, lang, rules, test_paths)
+) -> Vec<Vec<RawEdit>> {
+    candidates(source, file)
         .into_iter()
         .filter(|(rule, candidate)| {
             !protected.iter().any(|p| {
@@ -382,7 +225,7 @@ fn collect_edits(
                     && p.start < candidate.range.end
             })
         })
-        .map(|(_, candidate)| candidate.edit)
+        .filter_map(|(_, candidate)| candidate.edits)
         .collect()
 }
 
@@ -408,30 +251,19 @@ fn position_finding(rule_id: &RuleId, path: &Path, line: usize, matched: &str) -
 }
 
 /// Rewrite one file's content to a fix point. Returns the new content and the
-/// number of edits actually applied.
+/// number of fixes (edit groups) actually applied.
 fn fix_source(
     original: &str,
-    path: &Path,
-    lang: SupportLang,
-    rules: &[CompiledFixRule],
-    test_paths: &TestPaths,
+    file: &FileContext<'_>,
     baseline_hashes: &HashSet<String>,
     baseline_root: &Path,
 ) -> (String, usize) {
-    let mut protected = protected_ranges(
-        original,
-        path,
-        lang,
-        rules,
-        test_paths,
-        baseline_hashes,
-        baseline_root,
-    );
+    let mut protected = protected_ranges(original, file, baseline_hashes, baseline_root);
     let mut source = original.to_string();
     let mut applied = 0;
     for _ in 0..MAX_ITERATIONS {
-        let edits = collect_edits(&source, path, lang, rules, test_paths, &protected);
-        let selected = select_non_overlapping(edits);
+        let groups = collect_edits(&source, file, &protected);
+        let (selected, fixes) = select_non_overlapping(groups, source.len());
         if selected.is_empty() {
             break;
         }
@@ -440,13 +272,14 @@ fn fix_source(
             break;
         }
         shift_protected(&mut protected, &selected);
-        applied += count;
+        applied += fixes;
         source = fixed;
     }
     (source, applied)
 }
 
-/// Apply the autofix-safe rewrites over `paths`.
+/// Apply the autofix rewrites over `paths`: the `autofix_safe` ones, plus the
+/// `autofix_unsafe` ones when `unsafe_fixes` is on.
 ///
 /// Only builtin rules and the external rules listed in `fix.allow_external`
 /// are applied. Nothing is written here: [`FileFix`] carries the before/after
@@ -458,29 +291,45 @@ pub fn fix_paths(
     config: &Config,
     baseline: Option<&Baseline>,
     baseline_root: &Path,
+    unsafe_fixes: bool,
 ) -> Result<FixReport, ScanError> {
     let test_paths = TestPaths::new(&config.scan.test_paths)?;
     let ignores = build_glob_set(&config.scan.ignores)?;
-    let compiled = compile_fix_rules(rules, &config.fix.allow_external)?;
+    let compiled = compile_fix_rules(rules, &config.fix.allow_external, unsafe_fixes)?;
     if compiled.is_empty() {
         return Ok(FixReport::default());
     }
     let baseline_hashes = baseline_hash_set(baseline);
+    let reads_manifest = needs_strum(&compiled);
+    let mut strum_by_dir: HashMap<PathBuf, Option<&'static str>> = HashMap::new();
 
     let mut report = FixReport::default();
     for (path, lang) in walk_files(paths, &ignores) {
         let Ok(original) = fs::read_to_string(&path) else {
             continue;
         };
-        let (fixed, applied) = fix_source(
-            &original,
-            &path,
+        let dir = path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .to_path_buf();
+        let strum_crate = if reads_manifest {
+            *strum_by_dir
+                .entry(dir)
+                .or_insert_with_key(|dir| strum_derive_crate(dir))
+        } else {
+            None
+        };
+        let file = FileContext {
+            path: &path,
             lang,
-            &compiled,
-            &test_paths,
-            &baseline_hashes,
-            baseline_root,
-        );
+            rules: &compiled,
+            test_paths: &test_paths,
+            env: FixEnv {
+                path: Some(&path),
+                strum_crate,
+            },
+        };
+        let (fixed, applied) = fix_source(&original, &file, &baseline_hashes, baseline_root);
         if applied > 0 && fixed != original {
             report.applied += applied;
             report.files.push(FileFix {
@@ -497,10 +346,12 @@ pub fn fix_paths(
 /// point. Used by `slopguard test` to validate `tests.should_fix`: no baseline,
 /// no test-path filtering, no `files` / `ignores` globs, no inline-disable
 /// directives are consulted. Nothing is written to disk, so the external-rule
-/// trust gate does not apply. Returns the snippet unchanged when the rule is
-/// not autofixable.
+/// trust gate does not apply, and an `autofix_unsafe` rewrite is applied like
+/// a safe one. No manifest is read either: the strum derive macros are assumed
+/// reachable through `strum`, and a fixer that needs another file declines.
+/// Returns the snippet unchanged when the rule is not autofixable.
 pub fn fix_snippet(rule: &Rule, source: &str) -> Result<String, ScanError> {
-    let mut compiled = compile_fix_rules(from_ref(rule), &[rule.id.as_str().to_string()])?;
+    let mut compiled = compile_fix_rules(from_ref(rule), &[rule.id.as_str().to_string()], true)?;
     if compiled.is_empty() {
         return Ok(source.to_string());
     }
@@ -508,19 +359,19 @@ pub fn fix_snippet(rule: &Rule, source: &str) -> Result<String, ScanError> {
         fix_rule.files = None;
         fix_rule.ignores = None;
     }
-    let lang = compiled[0].lang;
     let test_paths = TestPaths::new(&[])?;
-    let baseline_hashes = HashSet::new();
     let path = Path::new("snippet");
-    let (fixed, _applied) = fix_source(
-        source,
+    let file = FileContext {
         path,
-        lang,
-        &compiled,
-        &test_paths,
-        &baseline_hashes,
-        path,
-    );
+        lang: compiled[0].lang,
+        rules: &compiled,
+        test_paths: &test_paths,
+        env: FixEnv {
+            path: None,
+            strum_crate: Some("strum"),
+        },
+    };
+    let (fixed, _applied) = fix_source(source, &file, &HashSet::new(), path);
     Ok(fixed)
 }
 

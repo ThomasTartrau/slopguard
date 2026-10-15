@@ -323,6 +323,7 @@ fn main() -> ExitCode {
             fix,
             dry_run,
             allow_dirty,
+            unsafe_fixes,
             offline,
         } => match run_scan(ScanOpts {
             paths,
@@ -347,6 +348,7 @@ fn main() -> ExitCode {
             fix,
             dry_run,
             allow_dirty,
+            unsafe_fixes,
             offline,
         }) {
             Ok(true) => ExitCode::from(1),

@@ -1,6 +1,6 @@
 # Builtin rules reference
 
-117 rule files ship in `slopguard-rules/rules/{slop,security,correctness}/`. 103
+121 rule files ship in `slopguard-rules/rules/{slop,security,correctness}/`. 107
 are active by default; the other 14 are opt-in (`enabled: false`) and run only
 when listed in `rules.enable` or passed with `--enable`. `slopguard list --all`
 is the authoritative inventory, and `slopguard explain <rule-id>` prints a
@@ -8,7 +8,7 @@ rule's full definition.
 
 | Type | Files | Active by default | Section |
 | ---- | ----- | ----------------- | ------- |
-| `ast` | 98 | 84 | [AST rules](#ast-rules-98) |
+| `ast` | 102 | 88 | [AST rules](#ast-rules-102) |
 | `ai` | 6 | 6 | [AI rules](#ai-rules-6) |
 | `metric` | 8 | 8 | [File-level rules](#file-level-rules-8) |
 | `cross-file` | 3 | 3 | [Cross-file rules](#cross-file-rules-3) |
@@ -18,30 +18,35 @@ A rule id is unique per language, not globally: most rules exist once for Rust
 and once for TypeScript under the same id, and a single `rules.disable` entry
 covers both variants.
 
-## AST rules (98)
+## AST rules (102)
 
 Plain ast-grep matchers. The "What it catches" column is the first sentence of
-the rule's `message`; `(autofix)` marks the rules `scan --fix` can rewrite.
+the rule's `message`; `(autofix)` marks the rules `scan --fix` can rewrite, and
+`(autofix, unsafe)` the ones it rewrites only with `--unsafe-fixes`, because
+the rewrite changes behavior on purpose.
 
-### slop (33 rules, 24 on by default)
+### slop (36 rules, 27 on by default)
 
 AI-generated code patterns detected at abnormally high rates.
 
-#### Rust (19)
+#### Rust (22)
 
 | Rule | Severity | Default | What it catches |
 | ---- | -------- | ------- | --------------- |
 | `max-function-lines` | warning | opt-in | Function exceeds 80 lines. |
+| `merge-identical-match-arms` (autofix) | warning | on | Adjacent match arms with the same body. |
 | `no-and-more-doc` | warning | on | Vague documentation ('and more', 'etc.', 'various'). |
 | `no-commented-out-code` | warning | opt-in | Commented-out code. |
 | `no-deferral-comment` | warning | on | Deferral language in comment. |
+| `no-derivable-clone` (autofix) | warning | on | Manual impl Clone that clones every field. |
 | `no-doc-hidden-public` | warning | opt-in | #[doc(hidden)] on a public item. |
 | `no-em-dash` | warning | on | Em dash (U+2014) in source. |
 | `no-empty-doc-comment` | warning | opt-in | Empty doc comment. |
-| `no-glob-reexport` | warning | on | pub use module::*. |
+| `no-glob-reexport` (autofix) | warning | on | pub use module::*. |
 | `no-hedging-comment` | warning | on | Hedging language in comment. |
 | `no-inline-qualified-path` | warning | opt-in | Inline qualified path. |
-| `no-manual-display` | warning | on | Manual Display impl with match. |
+| `no-manual-display` (autofix, unsafe) | warning | on | Manual Display impl with match. |
+| `no-manual-enum-str` (autofix) | warning | on | Hand-written enum-to-string match. |
 | `no-manual-rfc3339` | warning | on | .to_rfc3339() is usually redundant. |
 | `no-obvious-comment` | warning | on | Obvious comment restating the code. |
 | `no-paraphrase-doc` | warning | on | Doc-comment paraphrasing the method name. |
@@ -103,11 +108,11 @@ Security anti-patterns.
 | `no-sql-string-concat` | error | on | SQL built by concatenation. |
 | `no-unsafe-json-parse` | error | on | JSON.parse without try/catch. |
 
-### correctness (46 rules, 41 on by default)
+### correctness (47 rules, 42 on by default)
 
 Error handling, type safety, test quality and correctness issues.
 
-#### Rust (21)
+#### Rust (22)
 
 | Rule | Severity | Default | What it catches |
 | ---- | -------- | ------- | --------------- |
@@ -120,6 +125,7 @@ Error handling, type safety, test quality and correctness issues.
 | `no-float-money` | error | on | FLOAT/REAL/DOUBLE in SQL. |
 | `no-ignored-result` | warning | on | Result ignored via let _ =. |
 | `no-index-without-if-not-exists` | error | on | CREATE INDEX without IF NOT EXISTS in a SQL migration. |
+| `no-lock-unwrap` (autofix, unsafe) | warning | on | Lock acquired with .unwrap()/.expect(): once a holder panics, every later caller panics too. |
 | `no-magic-number` | warning | opt-in | Magic number in logic. |
 | `no-ok-chain` | warning | on | .ok() followed by unwrap is redundant. |
 | `no-println-in-prod` | warning | on | println!/eprintln! in production code. |
@@ -318,6 +324,15 @@ autofix_safe: true                 # opt-in; default false. Without it `rewrite`
                                    # On an external rule (custom_dirs, rules.sources) it
                                    # also needs the id in the user config's
                                    # `[fix] allow_external`.
+# Instead of `rewrite`, a builtin fixer for rewrites that edit several nodes or
+# read another file (mutually exclusive with `rewrite`; an unknown name is a
+# parse error): strum_enum_str, merge_match_arms, explicit_reexport,
+# derive_clone. A fixer declines any match it cannot prove correct.
+fixer: derive_clone
+# Instead of `autofix_safe`, for a rewrite that changes behavior on purpose:
+# applied only by `scan --fix --unsafe-fixes`. Mutually exclusive with
+# `autofix_safe`.
+autofix_unsafe: true
 
 # Optional: a dedicated fix matcher, when detection must be broader than the fix
 # (detect broadly, fix narrowly). When set, `scan --fix` locates nodes with this

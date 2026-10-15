@@ -4,6 +4,13 @@ severity: warning
 category: slop
 message: 'Manual Display impl with match. Use #[derive(Display)] from strum with #[strum(serialize_all = "...")].'
 note: "A manual impl with a match arm per variant is replaced by one derive line. Check if strum is already a dependency."
+fix: 'Derive strum::Display on the enum, with #[strum(serialize_all = "...")] when the strings follow a case style, and delete the impl.'
+# `scan --fix --unsafe-fixes` replaces the impl when every arm writes a plain
+# literal of one case style and strum's derive feature is a dependency. Unsafe:
+# the derived Display honors width and precision flags ({:>8}), which a
+# `write!(f, "lit")` ignores.
+fixer: strum_enum_str
+autofix_unsafe: true
 rule:
   all:
     - pattern: impl fmt::Display for $NAME { $$$ }
@@ -84,3 +91,90 @@ tests:
               }
           }
       }
+  should_fix:
+    - before: |
+        use std::fmt;
+
+        #[derive(Debug, Clone, Copy)]
+        pub enum LogStream {
+            Stdout,
+            ForbiddenHost,
+        }
+
+        impl fmt::Display for LogStream {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                match self {
+                    Self::Stdout => write!(f, "stdout"),
+                    Self::ForbiddenHost => f.write_str("forbidden_host"),
+                }
+            }
+        }
+
+        fn main() {}
+      after: |
+        #[derive(Debug, Clone, Copy, strum::Display)]
+        #[strum(serialize_all = "snake_case")]
+        pub enum LogStream {
+            Stdout,
+            ForbiddenHost,
+        }
+
+        fn main() {}
+    - before: |
+        use std::fmt::{self, Display};
+
+        enum Mode {
+            Fast,
+            Slow,
+        }
+
+        impl fmt::Display for Mode {
+            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                let s = match self {
+                    Mode::Fast => "Fast",
+                    Mode::Slow => "Slow",
+                };
+                write!(f, "{s}")
+            }
+        }
+
+        fn show(m: &dyn Display) -> fmt::Result { Ok(()) }
+      after: |
+        use std::fmt::{self, Display};
+
+        #[derive(strum::Display)]
+        enum Mode {
+            Fast,
+            Slow,
+        }
+
+        fn show(m: &dyn Display) -> fmt::Result { Ok(()) }
+    # An arm interpolating a value cannot be derived: left as written.
+    - before: |
+        enum Level {
+            Low,
+            High,
+        }
+
+        impl fmt::Display for Level {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                match self {
+                    Self::Low => write!(f, "low"),
+                    Self::High => write!(f, "{}", LIMIT),
+                }
+            }
+        }
+      after: |
+        enum Level {
+            Low,
+            High,
+        }
+
+        impl fmt::Display for Level {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                match self {
+                    Self::Low => write!(f, "low"),
+                    Self::High => write!(f, "{}", LIMIT),
+                }
+            }
+        }

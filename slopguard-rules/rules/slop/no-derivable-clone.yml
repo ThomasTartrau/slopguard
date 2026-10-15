@@ -1,0 +1,154 @@
+id: no-derivable-clone
+language: rust
+severity: warning
+category: slop
+message: "Manual impl Clone that clones every field. Use #[derive(Clone)]."
+note: "A field-by-field clone is exactly what the derive generates, so the impl is boilerplate that a new field can silently skip."
+fix: "Add Clone to the struct's derive list and delete the impl."
+# `scan --fix` rewrites it when the struct is declared in the same module and
+# is not generic (the derive would add a T: Clone bound). Safe: the derive
+# clones the same fields in the same order.
+fixer: derive_clone
+autofix_safe: true
+rule:
+  kind: impl_item
+  all:
+    - has: { field: trait, regex: '^((std|core)::clone::)?Clone$' }
+    - has: { field: type, kind: type_identifier }
+    - not: { has: { kind: type_parameters } }
+    - not: { has: { kind: where_clause } }
+    # A documented impl explains its clone semantics (a shared handle, a
+    # cheap copy) in rustdoc, which the derive would drop.
+    - not: { follows: { kind: line_comment, regex: '^///' } }
+    - has:
+        field: body
+        all:
+          - not: { has: { kind: line_comment, regex: '^///' } }
+          # `clone` only: an impl that also overrides `clone_from` does more.
+          - not: { has: { kind: function_item, not: { has: { field: name, regex: '^clone$' } } } }
+          - has:
+              kind: function_item
+              has:
+                field: body
+                all:
+                  - not: { has: { any: [{ kind: let_declaration }, { kind: expression_statement }, { kind: macro_invocation }] } }
+                  - any:
+                      - has:
+                          kind: struct_expression
+                          all:
+                            - has: { field: body, has: { kind: field_initializer } }
+                            - not: { has: { field: body, has: { kind: base_field_initializer } } }
+                            - not:
+                                has:
+                                  field: body
+                                  has:
+                                    kind: field_initializer
+                                    not:
+                                      any:
+                                        - pattern: { context: 'S { $F: self.$F.clone() }', selector: field_initializer }
+                                        - pattern: { context: 'S { $F: self.$F }', selector: field_initializer }
+                      - has:
+                          any:
+                            - pattern: Self(self.0.clone())
+                            - pattern: Self(self.0)
+                            - pattern: $T(self.0.clone())
+ignores:
+  - "**/fixtures/**"
+tests:
+  should_match:
+    - |
+      impl Clone for Client {
+          fn clone(&self) -> Self {
+              Self { base_url: self.base_url.clone(), retries: self.retries }
+          }
+      }
+    - |
+      impl Clone for Token {
+          fn clone(&self) -> Self {
+              Self(self.0.clone())
+          }
+      }
+  should_not_match:
+    # Swapped fields: not what the derive does.
+    - |
+      impl Clone for Pair {
+          fn clone(&self) -> Self {
+              Self { a: self.b.clone(), b: self.a.clone() }
+          }
+      }
+    # A field is rebuilt, not cloned.
+    - |
+      impl Clone for Pool {
+          fn clone(&self) -> Self {
+              Self { size: self.size, conns: Vec::new() }
+          }
+      }
+    # Generic: the derive would add a T: Clone bound.
+    - |
+      impl<T> Clone for Handle<T> {
+          fn clone(&self) -> Self {
+              Self { inner: self.inner.clone() }
+          }
+      }
+    # Documented: the doc would be lost.
+    - |
+      impl Clone for Tracker {
+          /// Returns a tracker sharing the same set of tasks.
+          fn clone(&self) -> Self {
+              Self { inner: self.inner.clone() }
+          }
+      }
+    # Also overrides clone_from.
+    - |
+      impl Clone for Buf {
+          fn clone(&self) -> Self {
+              Self { data: self.data.clone() }
+          }
+          fn clone_from(&mut self, other: &Self) {
+              self.data.clone_from(&other.data);
+          }
+      }
+  should_fix:
+    - before: |
+        /// HTTP client.
+        #[derive(Debug)]
+        pub struct Client {
+            base_url: String,
+            retries: u8,
+        }
+
+        impl Clone for Client {
+            fn clone(&self) -> Self {
+                Self {
+                    base_url: self.base_url.clone(),
+                    retries: self.retries,
+                }
+            }
+        }
+
+        impl Client {
+            pub fn new() -> Self { todo!() }
+        }
+      after: |
+        /// HTTP client.
+        #[derive(Debug, Clone)]
+        pub struct Client {
+            base_url: String,
+            retries: u8,
+        }
+
+        impl Client {
+            pub fn new() -> Self { todo!() }
+        }
+    - before: |
+        struct Token(String);
+
+        // Tokens are cheap to clone.
+        impl Clone for Token {
+            fn clone(&self) -> Self {
+                Self(self.0.clone())
+            }
+        }
+      after: |
+        #[derive(Clone)]
+        struct Token(String);

@@ -91,6 +91,7 @@ fn rewrites_unnecessary_clone() {
         &Config::default(),
         None,
         dir.path(),
+        false,
     )
     .unwrap();
 
@@ -123,6 +124,7 @@ fn rewrite_ignored_without_autofix_safe() {
         &Config::default(),
         None,
         dir.path(),
+        false,
     )
     .unwrap();
 
@@ -142,6 +144,7 @@ fn inline_disabled_finding_is_not_rewritten() {
         &Config::default(),
         None,
         dir.path(),
+        false,
     )
     .unwrap();
 
@@ -174,6 +177,7 @@ fn baselined_finding_is_not_rewritten() {
         &Config::default(),
         Some(&baseline),
         dir.path(),
+        false,
     )
     .unwrap();
 
@@ -201,6 +205,7 @@ fn overlapping_matches_reach_a_fix_point() {
         &Config::default(),
         None,
         dir.path(),
+        false,
     )
     .unwrap();
 
@@ -220,7 +225,15 @@ fn dedicated_autofix_rule_fixes_only_the_safe_subset() {
     let source = "fn a() { let x = dbg!(compute()); }\nfn b() { let y = dbg!(); }\nfn c() { let z = dbg!(p, q); }\n";
     let file = write_file(dir.path(), "a.rs", source);
 
-    let report = fix_paths(&[file], &[dbg_rule()], &Config::default(), None, dir.path()).unwrap();
+    let report = fix_paths(
+        &[file],
+        &[dbg_rule()],
+        &Config::default(),
+        None,
+        dir.path(),
+        false,
+    )
+    .unwrap();
 
     // Only the single comma-free argument is rewritten; the empty and multi-arg
     // forms are left intact so the result still compiles.
@@ -286,6 +299,7 @@ fn external_rule_with_autofix_safe_is_not_applied() {
         &Config::default(),
         None,
         dir.path(),
+        false,
     )
     .unwrap();
 
@@ -307,6 +321,7 @@ fn external_rule_listed_in_allow_external_is_applied() {
         &config_allowing(&["no-unnecessary-clone"]),
         None,
         dir.path(),
+        false,
     )
     .unwrap();
 
@@ -328,6 +343,7 @@ fn external_rule_allow_list_naming_another_rule_is_not_applied() {
         &config_allowing(&["some-other-rule"]),
         None,
         dir.path(),
+        false,
     )
     .unwrap();
 
@@ -348,6 +364,7 @@ fn external_rule_allowed_but_not_autofix_safe_is_not_applied() {
         &config_allowing(&["no-unnecessary-clone"]),
         None,
         dir.path(),
+        false,
     )
     .unwrap();
 
@@ -380,6 +397,7 @@ fn rewrite_respects_ignores_glob() {
         &Config::default(),
         None,
         dir.path(),
+        false,
     )
     .unwrap();
 
@@ -406,6 +424,7 @@ fn rewrite_respects_files_glob() {
         &Config::default(),
         None,
         dir.path(),
+        false,
     )
     .unwrap();
 
@@ -441,7 +460,15 @@ fn autofix_rule_rewrites_only_where_detection_matched() {
     let file = write_file(dir.path(), "a.rs", source);
     let rule = parse_rule(LET_CLONE_RULE).unwrap();
 
-    let report = fix_paths(&[file], &[rule], &Config::default(), None, dir.path()).unwrap();
+    let report = fix_paths(
+        &[file],
+        &[rule],
+        &Config::default(),
+        None,
+        dir.path(),
+        false,
+    )
+    .unwrap();
 
     assert_eq!(report.applied, 1, "the undetected clone must stay");
     assert_eq!(
@@ -475,7 +502,15 @@ fn autofix_rule_honors_detection_constraints() {
     let file = write_file(dir.path(), "a.rs", source);
     let rule = parse_rule(CONSTRAINED_CLONE_RULE).unwrap();
 
-    let report = fix_paths(&[file], &[rule], &Config::default(), None, dir.path()).unwrap();
+    let report = fix_paths(
+        &[file],
+        &[rule],
+        &Config::default(),
+        None,
+        dir.path(),
+        false,
+    )
+    .unwrap();
 
     assert_eq!(
         report.applied, 1,
@@ -516,6 +551,7 @@ fn inline_disable_still_protects_after_earlier_edits_shift_lines() {
         &Config::default(),
         None,
         dir.path(),
+        false,
     )
     .unwrap();
 
@@ -565,6 +601,7 @@ fn baselined_match_stays_protected_across_iterations() {
         &Config::default(),
         Some(&baseline),
         dir.path(),
+        false,
     )
     .unwrap();
 
@@ -587,6 +624,7 @@ fn applied_counts_only_edits_actually_written() {
         &Config::default(),
         None,
         dir.path(),
+        false,
     )
     .unwrap();
 

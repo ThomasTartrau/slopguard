@@ -6,7 +6,7 @@ A Rust CLI tool that catches AI-generated code patterns ("slop") and common corr
 
 Read these files before working:
 - ARCHITECTURE.md - workspace structure, crate responsibilities, data flow
-- DECISIONS.md - all design decisions with rationale (D1-D48)
+- DECISIONS.md - all design decisions with rationale (D1-D49)
 - ROADMAP.md - what to build and in what order
 - RULES.md - the builtin rules, their YAML format, and ast-grep syntax gotchas
 
@@ -15,10 +15,10 @@ Read these files before working:
 The project ships as a 4-crate workspace with roughly 22k lines of Rust. The scan engine, config loading, and CLI are all implemented and published to crates.io.
 
 Delivered features:
-- 103 active rules (`slopguard list`), across the `slop`, `security`, and `correctness` rulesets, covering Rust and TypeScript. 117 rule YAML files ship on disk; 14 are opt-in (`enabled: false`), shown by `slopguard list --all`.
-- Five rule types: `ast` (84 active), `metric` (8, file-level), `cross-file` (3, project-wide index), `resolution` (2, import resolution against manifests), `ai` (6, AST pre-filter plus model confirmation).
+- 107 active rules (`slopguard list`), across the `slop`, `security`, and `correctness` rulesets, covering Rust and TypeScript. 121 rule YAML files ship on disk; 14 are opt-in (`enabled: false`), shown by `slopguard list --all`.
+- Five rule types: `ast` (88 active), `metric` (8, file-level), `cross-file` (3, project-wide index), `resolution` (2, import resolution against manifests), `ai` (6, AST pre-filter plus model confirmation).
 - Per-rule options: `[rules.options.<id>]` (today only `no-assertion-free-test`'s `assert_functions`).
-- Autofix: `slopguard scan --fix` applies in-place rewrites for rules marked `autofix_safe` (`--fix --dry-run` to preview without writing, `--allow-dirty` to bypass the clean-tree guard, which also refuses outside git). An external rule (`custom_dirs`, `[[rules.sources]]`) is rewritten only when its id is listed in the user-only `[fix] allow_external`.
+- Autofix: `slopguard scan --fix` applies in-place rewrites for rules marked `autofix_safe` (`--fix --dry-run` to preview without writing, `--allow-dirty` to bypass the clean-tree guard, which also refuses outside git), plus the `autofix_unsafe` ones under `--unsafe-fixes`. A rewrite is an ast-grep `rewrite` template or a builtin `fixer` (`slopguard-core/src/fix/fixers/`) for multi-node edits (D49). An external rule (`custom_dirs`, `[[rules.sources]]`) is rewritten only when its id is listed in the user-only `[fix] allow_external`.
 - AI pipeline: LLM-backed rules run when a provider is configured; `slopguard scan --no-ai` skips them. An optional classifier (`[ai.classifier]`, Jev) can replace the LLM confirmation.
 - Cache: per-file findings keyed by content hash, AI results under `<cache-dir>/ai/` keyed on the exact match (`--no-cache`, `--cache-dir`). Default dir `<user cache>/slopguard/projects/<hash>`; every entry is HMAC-signed with `<user cache>/slopguard/cache.key`, unsigned entries are ignored (D41).
 - External rule sources: `[[rules.sources]]` loads rules from git repositories or local paths (`--offline` to skip fetching).

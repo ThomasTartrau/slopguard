@@ -142,6 +142,11 @@ pub enum Command {
         #[arg(long, requires = "fix")]
         allow_dirty: bool,
 
+        /// With --fix, also apply the rewrites that change behavior on purpose
+        /// (rules marked autofix_unsafe)
+        #[arg(long, requires = "fix")]
+        unsafe_fixes: bool,
+
         /// Never fetch git rule sources; reuse the cache (fails if it is missing)
         #[arg(long)]
         offline: bool,
@@ -565,6 +570,20 @@ mod tests {
         Cli::command()
             .try_get_matches_from(["slopguard", "scan", "--fix", "--allow-dirty", "."])
             .expect("scan with --fix --allow-dirty should parse");
+    }
+
+    #[test]
+    fn cli_parses_scan_with_fix_unsafe_fixes() {
+        Cli::command()
+            .try_get_matches_from(["slopguard", "scan", "--fix", "--unsafe-fixes", "."])
+            .expect("scan with --fix --unsafe-fixes should parse");
+    }
+
+    #[test]
+    fn cli_rejects_unsafe_fixes_without_fix() {
+        let result =
+            Cli::command().try_get_matches_from(["slopguard", "scan", "--unsafe-fixes", "."]);
+        assert!(result.is_err(), "--unsafe-fixes should require --fix");
     }
 
     #[test]

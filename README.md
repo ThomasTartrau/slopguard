@@ -32,7 +32,7 @@
 
 AI code generators produce recurring anti-patterns: trivial doc-comments, swallowed errors, silent fallbacks, filler words in comments, missing timeouts, redundant string conversions. These patterns are structurally detectable but no existing tool catches them systematically.
 
-slopguard fills that gap with 117 builtin rules (103 active by default) organized into three rulesets (**slop**, **security**, **correctness**), covering both **Rust and TypeScript**. Rules are defined in YAML using ast-grep pattern syntax, powered by tree-sitter for AST-level matching. Beyond single-node patterns, slopguard measures whole files, builds a project-wide index for cross-file rules, checks that imports resolve against your manifests, and can confirm ambiguous matches with an LLM.
+slopguard fills that gap with 121 builtin rules (107 active by default) organized into three rulesets (**slop**, **security**, **correctness**), covering both **Rust and TypeScript**. Rules are defined in YAML using ast-grep pattern syntax, powered by tree-sitter for AST-level matching. Beyond single-node patterns, slopguard measures whole files, builds a project-wide index for cross-file rules, checks that imports resolve against your manifests, and can confirm ambiguous matches with an LLM.
 
 You can extend slopguard with your own YAML rules or shared rulesets from git, disable rules per-line with inline suppression comments, apply safe rewrites with `--fix`, and output findings as colored text (rustc-style), JSON, SARIF or a standalone HTML report.
 
@@ -118,6 +118,7 @@ slopguard scan --diff --base main     # only files changed vs main (three-dot di
 slopguard scan --fix                  # apply autofix-safe rewrites in place
 slopguard scan --fix --dry-run        # preview the rewrites as a unified diff, write nothing
 slopguard scan --fix --allow-dirty    # rewrite even with uncommitted changes or outside git (else refused)
+slopguard scan --fix --unsafe-fixes   # also apply the rewrites that change behavior on purpose
 slopguard scan --report-unused-disable  # also report disable comments that suppress nothing
 slopguard scan --offline              # never fetch git rule sources, reuse the cache
 slopguard list                       # show active rules with their type and source
@@ -143,7 +144,7 @@ Every rule has a type, shown in the `type` column of `slopguard list`:
 
 | Type | Active | What it does |
 | ---- | ------ | ------------ |
-| `ast` | 84 | ast-grep pattern on the syntax tree |
+| `ast` | 88 | ast-grep pattern on the syntax tree |
 | `metric` | 8 | measures the whole file (lines, imports, functions, comment ratio) |
 | `cross-file` | 3 | evaluated once over a project-wide index |
 | `resolution` | 2 | checks imports against Cargo.toml / package.json |
@@ -617,15 +618,28 @@ with or without a provider.
 
 ## Autofix
 
-Rules marked `autofix_safe` carry a `rewrite` that `--fix` applies in place:
+Rules marked `autofix_safe` carry a rewrite that `--fix` applies in place: an
+ast-grep `rewrite` template, or a builtin `fixer` for rewrites that touch several
+places (an enum's derive list and the impl it replaces, two match arms, the
+module a glob re-export points at):
 
 ```bash
 slopguard scan --fix --dry-run    # unified diff of the rewrites, nothing written
 slopguard scan --fix              # apply them
+slopguard scan --fix --unsafe-fixes   # also apply the autofix_unsafe ones
 ```
 
-- Today `no-dbg-in-prod` and `no-unnecessary-clone` are autofixable
-  (`(autofix)` in [RULES.md](RULES.md)).
+- Autofixable today (`(autofix)` in [RULES.md](RULES.md)): `no-dbg-in-prod`,
+  `no-unnecessary-clone`, `no-manual-enum-str` (an `as_str` match becomes a
+  strum `IntoStaticStr` derive), `merge-identical-match-arms`,
+  `no-derivable-clone` and `no-glob-reexport`.
+- `autofix_unsafe` rules change behavior on purpose and only run with
+  `--unsafe-fixes`: `no-lock-unwrap` recovers a poisoned lock instead of
+  panicking, and `no-manual-display` swaps a hand-written `Display` for strum's,
+  which honors width flags (`{:>8}`).
+- A builtin fixer declines any match it cannot prove correct (strum missing
+  from `Cargo.toml`, strings that follow no single case style, a `#[cfg]` item
+  behind a glob...): the finding stays reported and the code untouched.
 - `--fix` refuses to run when the scanned paths have uncommitted changes, so
   every rewrite can be reviewed and reverted with git. Outside a git repository
   it refuses too, since uncommitted work cannot be protected there.
@@ -639,8 +653,9 @@ slopguard scan --fix              # apply them
   lines cannot expose them.
 - After rewriting, slopguard scans again and exits 1 if findings remain.
 
-To make a custom rule autofixable, add `rewrite` and `autofix_safe: true`, and
-prove the rewrite with `tests.should_fix` (`before` / `after` pairs).
+To make a custom rule autofixable, add `rewrite` (or reuse a builtin `fixer`)
+and `autofix_safe: true` (or `autofix_unsafe: true`), and prove the rewrite with
+`tests.should_fix` (`before` / `after` pairs).
 
 Rules from `rules.custom_dirs` or `[[rules.sources]]` are not rewritten on
 their own say-so: `autofix_safe` on an external rule takes effect only once
