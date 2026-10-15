@@ -71,6 +71,41 @@ fn dry_run_prints_diff_and_leaves_file_untouched() {
 }
 
 #[test]
+fn unsafe_fix_needs_unsafe_fixes() {
+    let dir = tempdir().unwrap();
+    let file = dir.path().join("app.rs");
+    let source = "fn f(m: &std::sync::Mutex<u8>) -> u8 {\n    *m.lock().unwrap()\n}\n";
+    write(&file, source).unwrap();
+    let fix = |extra: &[&str]| {
+        let mut args = vec![
+            "scan",
+            "--no-ai",
+            "--rule",
+            "no-lock-unwrap",
+            "--fix",
+            "--allow-dirty",
+        ];
+        args.extend_from_slice(extra);
+        args.push(file.to_str().unwrap());
+        slopguard().args(&args).assert()
+    };
+
+    // no-lock-unwrap is autofix_unsafe: plain --fix leaves it reported.
+    fix(&[])
+        .code(1)
+        .stdout(predicate::str::contains("Applied 0 fix"));
+    assert_eq!(read_to_string(&file).unwrap(), source);
+
+    fix(&["--unsafe-fixes"])
+        .success()
+        .stdout(predicate::str::contains("Applied 1 fix"));
+    assert_eq!(
+        read_to_string(&file).unwrap(),
+        "fn f(m: &std::sync::Mutex<u8>) -> u8 {\n    *m.lock().unwrap_or_else(|e| e.into_inner())\n}\n"
+    );
+}
+
+#[test]
 fn fix_rewrites_file_and_clears_the_finding() {
     let dir = tempdir().unwrap();
     let file = dir.path().join("app.rs");

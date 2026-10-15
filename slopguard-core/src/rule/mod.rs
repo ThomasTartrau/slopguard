@@ -10,6 +10,7 @@ use strum::{Display, EnumIter, EnumString};
 use thiserror::Error;
 
 use crate::cross_file::CrossFileKind;
+use crate::fix::FixerKind;
 use crate::metric::Metric;
 use crate::resolution::ResolutionKind;
 use crate::source::RuleOrigin;
@@ -95,6 +96,15 @@ impl Category {
             _ => None,
         }
     }
+}
+
+/// Whether an autofix preserves behavior. `scan --fix` applies `Safe` fixes;
+/// `Unsafe` ones also need `--unsafe-fixes`.
+#[derive(Debug, Display, Clone, Copy, PartialEq, Eq)]
+#[strum(serialize_all = "lowercase")]
+pub enum FixSafety {
+    Safe,
+    Unsafe,
 }
 
 /// One rewrite assertion for an autofixable rule: `slopguard test` applies the
@@ -194,13 +204,26 @@ pub struct Rule {
     /// metavariables). The AST detection pass never reads this field.
     #[serde(default)]
     pub rewrite: Option<String>,
-    /// Opt-in marker that this rule's `rewrite` is safe to apply automatically
-    /// (idempotent, no semantic change). `scan --fix` ignores the `rewrite` of
-    /// any rule without it. Defaults to `false`. On a rule from `custom_dirs`
-    /// or `[[rules.sources]]` it is not enough: the rule id must also be listed
-    /// in the user config's `fix.allow_external`.
+    /// Builtin fixer applied by `scan --fix` instead of a `rewrite` template,
+    /// for rewrites that edit several nodes (an item and its attributes, two
+    /// match arms) or read another file. Mutually exclusive with `rewrite`. The
+    /// kind selects builtin Rust logic, so an unknown name is a parse error.
+    #[serde(default)]
+    pub fixer: Option<FixerKind>,
+    /// Opt-in marker that this rule's `rewrite` (or `fixer`) is safe to apply
+    /// automatically (idempotent, no semantic change). `scan --fix` ignores the
+    /// rewrite of any rule without it or `autofix_unsafe`. Defaults to `false`.
+    /// On a rule from `custom_dirs` or `[[rules.sources]]` it is not enough:
+    /// the rule id must also be listed in the user config's
+    /// `fix.allow_external`.
     #[serde(default)]
     pub autofix_safe: bool,
+    /// Opt-in marker for a rewrite that deliberately changes behavior (it
+    /// recovers a poisoned lock instead of panicking, it lets a derived
+    /// `Display` honor width flags). Applied only by `scan --fix
+    /// --unsafe-fixes`. Mutually exclusive with `autofix_safe`.
+    #[serde(default)]
+    pub autofix_unsafe: bool,
     /// Matcher used only by `scan --fix` to locate nodes to rewrite, when it must
     /// be narrower than the detection `rule` (detect broadly, fix narrowly). A
     /// rule can flag every variant of a pattern while auto-rewriting only the
@@ -294,12 +317,26 @@ impl Rule {
         self.resolution.is_some()
     }
 
-    /// Whether `scan --fix` may rewrite this rule's matches: it carries a
-    /// `rewrite` template and is explicitly marked `autofix_safe`. An external
-    /// (non-builtin) rule additionally needs its id in `fix.allow_external`,
-    /// which `scan --fix` checks on top of this.
+    /// How safe this rule's autofix is: `None` when `scan --fix` never rewrites
+    /// its matches (no `rewrite` or `fixer`, or neither `autofix_safe` nor
+    /// `autofix_unsafe`). An external (non-builtin) rule additionally needs its
+    /// id in `fix.allow_external`, which `scan --fix` checks on top of this.
+    pub fn fix_safety(&self) -> Option<FixSafety> {
+        if self.rewrite.is_none() && self.fixer.is_none() {
+            return None;
+        }
+        if self.autofix_safe {
+            Some(FixSafety::Safe)
+        } else if self.autofix_unsafe {
+            Some(FixSafety::Unsafe)
+        } else {
+            None
+        }
+    }
+
+    /// Whether `scan --fix` may rewrite this rule's matches at some safety level.
     pub fn is_autofixable(&self) -> bool {
-        self.autofix_safe && self.rewrite.is_some()
+        self.fix_safety().is_some()
     }
 
     /// The matcher `scan --fix` uses to find nodes to rewrite: the dedicated
@@ -355,6 +392,15 @@ pub enum RuleError {
 
     #[error("rule '{id}': a metric rule requires a 'threshold'")]
     MissingThreshold { id: RuleId },
+
+    #[error("rule '{id}': 'rewrite' and 'fixer' are mutually exclusive")]
+    RewriteAndFixer { id: RuleId },
+
+    #[error("rule '{id}': a 'fixer' needs an ast-grep 'rule' to locate its matches")]
+    FixerWithoutRule { id: RuleId },
+
+    #[error("rule '{id}': 'autofix_safe' and 'autofix_unsafe' are mutually exclusive")]
+    SafeAndUnsafeFix { id: RuleId },
 
     #[error("rule '{id}': test fixture files are only supported for metric rules")]
     FixturesOnAstRule { id: RuleId },
@@ -427,6 +473,17 @@ pub fn parse_rule(yaml: &str) -> Result<Rule, RuleError> {
             return Err(RuleError::EmptyRule { id: rule.id })
         }
         _ => {}
+    }
+    if rule.fixer.is_some() {
+        if rule.rewrite.is_some() {
+            return Err(RuleError::RewriteAndFixer { id: rule.id });
+        }
+        if !has_rule {
+            return Err(RuleError::FixerWithoutRule { id: rule.id });
+        }
+    }
+    if rule.autofix_safe && rule.autofix_unsafe {
+        return Err(RuleError::SafeAndUnsafeFix { id: rule.id });
     }
     if !rule.is_metric() {
         if let Some(tests) = &rule.tests {

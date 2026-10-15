@@ -28,6 +28,7 @@ mod manifest;
 mod rust;
 mod typescript;
 
+pub(crate) use manifest::strum_derive_crate;
 pub use manifest::ManifestResolver;
 
 use rust::Rust;

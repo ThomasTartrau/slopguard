@@ -1,6 +1,6 @@
-//! `scan --fix`: apply autofix-safe rewrites in place (or preview them with
-//! `--dry-run`) once the git tree is known clean, then re-scan to report what
-//! could not be fixed.
+//! `scan --fix`: apply autofix-safe rewrites in place (plus the autofix-unsafe
+//! ones under `--unsafe-fixes`, or preview them with `--dry-run`) once the git
+//! tree is known clean, then re-scan to report what could not be fixed.
 
 use std::env;
 use std::fs;
@@ -34,6 +34,7 @@ pub(crate) struct FixOpts {
     pub baseline_path: Option<PathBuf>,
     pub dry_run: bool,
     pub allow_dirty: bool,
+    pub unsafe_fixes: bool,
     pub offline: bool,
 }
 
@@ -110,6 +111,7 @@ pub(crate) fn run_fix(opts: FixOpts) -> Result<bool, AppError> {
         baseline_path,
         dry_run,
         allow_dirty,
+        unsafe_fixes,
         offline,
     } = opts;
 
@@ -137,7 +139,14 @@ pub(crate) fn run_fix(opts: FixOpts) -> Result<bool, AppError> {
         }
     };
 
-    let report = fix_paths(&paths, &rules, &config, baseline, &baseline_root)?;
+    let report = fix_paths(
+        &paths,
+        &rules,
+        &config,
+        baseline,
+        &baseline_root,
+        unsafe_fixes,
+    )?;
 
     let stdout = io::stdout();
     let mut out = stdout.lock();

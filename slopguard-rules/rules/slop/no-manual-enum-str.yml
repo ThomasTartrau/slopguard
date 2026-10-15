@@ -1,0 +1,229 @@
+id: no-manual-enum-str
+language: rust
+severity: warning
+category: slop
+message: "Hand-written enum-to-string match. Derive strum::IntoStaticStr and return self.into()."
+note: "A method mapping every variant to a string literal duplicates the variant list by hand; a new variant needs a new arm. strum derives the same mapping from the variant names and a serialize_all case style."
+fix: 'Derive strum::IntoStaticStr (with #[strum(serialize_all = "...")] when the strings follow a case style) and make the method body self.into(), so callers stay unchanged.'
+# `scan --fix` rewrites it when every arm returns a plain literal of one case
+# style, the enum lives in the same module and strum's derive feature is a
+# dependency. Safe: IntoStaticStr returns the very same &'static str.
+fixer: strum_enum_str
+autofix_safe: true
+rule:
+  kind: function_item
+  all:
+    - has: { field: parameters, regex: '^\(\s*&?\s*self\s*\)$' }
+    - has: { field: return_type, regex: "^&\\s*('static\\s+)?str$" }
+    - not: { has: { kind: function_modifiers, regex: '\bconst\b' } }
+    - has:
+        field: body
+        all:
+          # The body is the match alone.
+          - not: { has: { any: [{ kind: let_declaration }, { kind: macro_invocation }] } }
+          # tree-sitter wraps a trailing `match` in an expression_statement.
+          - has:
+              nthChild: 1
+              kind: expression_statement
+              has:
+                kind: match_expression
+                all:
+                  - has: { field: value, regex: '^\*?self$' }
+                  - has:
+                      field: body
+                      all:
+                        - has: { kind: match_arm }
+                        # Every arm maps one variant path to a string literal.
+                        - not:
+                            has:
+                              kind: match_arm
+                              any:
+                                - not: { has: { field: value, kind: string_literal } }
+                                - not: { has: { field: pattern, has: { kind: scoped_identifier } } }
+                                - has: { field: pattern, has: { field: condition, regex: '.' } }
+          - not:
+              has:
+                nthChild: 2
+                kind: expression_statement
+    - inside:
+        kind: impl_item
+        stopBy: end
+ignores:
+  - "**/tests/**"
+  - "**/*_tests/**"
+  - "**/*_test/**"
+  - "**/test_*"
+  - "**/*_test.rs"
+  - "**/fixtures/**"
+skip_test_code: true
+tests:
+  should_match:
+    - |
+      impl LogStream {
+          pub fn as_str(&self) -> &'static str {
+              match self {
+                  Self::Stdout => "stdout",
+                  Self::Stderr => "stderr",
+              }
+          }
+      }
+    - |
+      impl Outcome {
+          fn label(self) -> &'static str {
+              match self {
+                  Outcome::Relayed => "relayed",
+                  Outcome::ForbiddenHost => "forbidden_host",
+              }
+          }
+      }
+  should_not_match:
+    # An arm computes its string.
+    - |
+      impl Kind {
+          pub fn as_str(&self) -> &'static str {
+              match self {
+                  Self::A => "a",
+                  Self::B => NAMES[1],
+              }
+          }
+      }
+    # A catch-all arm: strum cannot express it.
+    - |
+      impl Kind {
+          pub fn as_str(&self) -> &'static str {
+              match self {
+                  Self::A => "a",
+                  _ => "other",
+              }
+          }
+      }
+    # A const fn cannot call self.into().
+    - |
+      impl Kind {
+          pub const fn as_str(&self) -> &'static str {
+              match self {
+                  Self::A => "a",
+              }
+          }
+      }
+    # Not matching on self.
+    - |
+      impl Kind {
+          pub fn name(&self) -> &'static str {
+              match self.inner {
+                  Inner::A => "a",
+              }
+          }
+      }
+    # More than the match in the body.
+    - |
+      impl Kind {
+          pub fn as_str(&self) -> &'static str {
+              log();
+              match self {
+                  Self::A => "a",
+              }
+          }
+      }
+    - |
+      fn as_str(x: &Kind) -> &'static str {
+          match x {
+              Kind::A => "a",
+          }
+      }
+  should_fix:
+    - before: |
+        #[derive(Debug, Clone, Copy)]
+        pub enum LogStream {
+            Stdout,
+            Stderr,
+            System,
+        }
+
+        impl LogStream {
+            /// The stream name stored in the database.
+            pub fn as_str(&self) -> &'static str {
+                match self {
+                    Self::Stdout => "stdout",
+                    Self::Stderr => "stderr",
+                    Self::System => "system",
+                }
+            }
+        }
+      after: |
+        #[derive(Debug, Clone, Copy, strum::IntoStaticStr)]
+        #[strum(serialize_all = "snake_case")]
+        pub enum LogStream {
+            Stdout,
+            Stderr,
+            System,
+        }
+
+        impl LogStream {
+            /// The stream name stored in the database.
+            pub fn as_str(&self) -> &'static str {
+                self.into()
+            }
+        }
+    - before: |
+        use strum::{EnumString, IntoStaticStr};
+
+        #[derive(EnumString)]
+        #[strum(serialize_all = "kebab-case")]
+        enum Outcome {
+            Relayed,
+            ForbiddenHost,
+        }
+
+        impl Outcome {
+            fn label(self) -> &'static str {
+                match self {
+                    Outcome::Relayed => "relayed",
+                    Outcome::ForbiddenHost => "forbidden-host",
+                }
+            }
+        }
+      after: |
+        use strum::{EnumString, IntoStaticStr};
+
+        #[derive(EnumString, IntoStaticStr)]
+        #[strum(serialize_all = "kebab-case")]
+        enum Outcome {
+            Relayed,
+            ForbiddenHost,
+        }
+
+        impl Outcome {
+            fn label(self) -> &'static str {
+                self.into()
+            }
+        }
+    # The strings follow no single case style: left as written.
+    - before: |
+        enum Unit {
+            Second,
+            Minute,
+        }
+
+        impl Unit {
+            fn suffix(&self) -> &'static str {
+                match self {
+                    Unit::Second => "s",
+                    Unit::Minute => "min",
+                }
+            }
+        }
+      after: |
+        enum Unit {
+            Second,
+            Minute,
+        }
+
+        impl Unit {
+            fn suffix(&self) -> &'static str {
+                match self {
+                    Unit::Second => "s",
+                    Unit::Minute => "min",
+                }
+            }
+        }

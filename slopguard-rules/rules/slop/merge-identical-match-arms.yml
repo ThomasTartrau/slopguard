@@ -1,0 +1,135 @@
+id: merge-identical-match-arms
+language: rust
+severity: warning
+category: slop
+message: "Adjacent match arms with the same body. Merge them into one arm with an or-pattern (A | B => ...)."
+note: "Copy-pasted arms hide that the variants share a behavior, and a later edit to one copy silently diverges from the other."
+fix: "Join the two patterns with | and keep a single body."
+# `scan --fix` merges the pair; a run of N identical arms collapses over the
+# fix-point iterations. Safe: the arms are adjacent, so the first-match order is
+# unchanged, and neither binds a variable, so the or-pattern always compiles.
+fixer: merge_match_arms
+autofix_safe: true
+rule:
+  kind: match_arm
+  all:
+    - has: { field: value, pattern: $BODY }
+    - not: { has: { field: pattern, has: { field: condition, regex: '.' } } }
+    - not: &binds
+        has:
+          field: pattern
+          has:
+            stopBy: end
+            any:
+              - kind: captured_pattern
+              - kind: mut_pattern
+              - kind: ref_pattern
+              - kind: shorthand_field_identifier
+              - kind: macro_invocation
+              - all:
+                  - kind: identifier
+                  - regex: '^[a-z_]'
+                  - not: { inside: { kind: scoped_identifier } }
+    - precedes:
+        kind: match_arm
+        all:
+          - has: { field: value, pattern: $BODY }
+          - not: { has: { field: pattern, has: { field: condition, regex: '.' } } }
+          - not: *binds
+          # `A | _` is just `_`: listing A before the catch-all is deliberate.
+          - not: { has: { field: pattern, regex: '(^|\|)\s*_\s*($|\|)' } }
+ignores:
+  - "**/fixtures/**"
+tests:
+  should_match:
+    - |
+      fn f(k: Kind) -> bool {
+          match k {
+              Kind::A => true,
+              Kind::B => true,
+              Kind::C => false,
+          }
+      }
+    - |
+      fn f(s: Schema) {
+          match s {
+              Schema::OneOf(_) => { strip(); recurse(); }
+              Schema::AllOf(_) => { strip(); recurse(); }
+              _ => {}
+          }
+      }
+  should_not_match:
+    # Different bodies.
+    - |
+      fn f(k: Kind) -> u8 {
+          match k {
+              Kind::A => 1,
+              Kind::B => 2,
+          }
+      }
+    # Same body but not adjacent: merging would reorder the arms.
+    - |
+      fn f(k: Kind) -> u8 {
+          match k {
+              Kind::A => 1,
+              Kind::B => 2,
+              Kind::C => 1,
+          }
+      }
+    # Bindings: the or-pattern would need the same names and types.
+    - |
+      fn f(e: Event) -> u8 {
+          match e {
+              Event::Open(id) => log(id),
+              Event::Close(id) => log(id),
+          }
+      }
+    # The next arm is the catch-all.
+    - |
+      fn f(t: Type) {
+          match t {
+              Type::Never(_) => {}
+              _ => {}
+          }
+      }
+    # A guard.
+    - |
+      fn f(n: u8) -> u8 {
+          match n {
+              0 if strict => 1,
+              1 => 1,
+              _ => 0,
+          }
+      }
+  should_fix:
+    - before: |
+        fn f(k: Kind) -> bool {
+            match k {
+                Kind::A => true,
+                Kind::B => true,
+                Kind::C => true,
+                Kind::D => false,
+            }
+        }
+      after: |
+        fn f(k: Kind) -> bool {
+            match k {
+                Kind::A | Kind::B | Kind::C => true,
+                Kind::D => false,
+            }
+        }
+    - before: |
+        fn f(s: Schema) {
+            match s {
+                Schema::OneOf(_) => { strip(); }
+                Schema::AllOf(_) => { strip(); }
+                _ => {}
+            }
+        }
+      after: |
+        fn f(s: Schema) {
+            match s {
+                Schema::OneOf(_) | Schema::AllOf(_) => { strip(); }
+                _ => {}
+            }
+        }

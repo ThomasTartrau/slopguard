@@ -75,6 +75,7 @@ pub(crate) struct ScanOpts {
     pub fix: bool,
     pub dry_run: bool,
     pub allow_dirty: bool,
+    pub unsafe_fixes: bool,
     pub offline: bool,
 }
 
@@ -306,6 +307,7 @@ pub(crate) fn run_scan(opts: ScanOpts) -> Result<bool, AppError> {
         fix,
         dry_run,
         allow_dirty,
+        unsafe_fixes,
         offline,
     } = opts;
     let use_colors = !no_colors && env::var_os("NO_COLOR").is_none();
@@ -323,6 +325,7 @@ pub(crate) fn run_scan(opts: ScanOpts) -> Result<bool, AppError> {
             baseline_path,
             dry_run,
             allow_dirty,
+            unsafe_fixes,
             offline,
         });
     }

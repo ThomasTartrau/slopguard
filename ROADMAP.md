@@ -22,7 +22,7 @@
 - [x] Exit codes: 0 clean, 1 findings, 2 config error
 - [x] Colored text output (rustc-style diagnostics)
 
-### Rules (34 at v0.1.0; today 117 shipped, 103 active by default)
+### Rules (34 at v0.1.0; today 121 shipped, 107 active by default)
 
 - [x] Migrate 27 Rust rules from personal-config/slopguard/rules/
 - [x] Migrate 5 TypeScript rules from personal-config/slopguard/rules/
@@ -146,7 +146,8 @@
 - [x] `rewrite` field (ast-grep rewrite template) gated by `autofix_safe`, separate from the textual `fix` ([#33](https://gitlab.com/ThomasTartrau/slopguard/-/issues/33))
 - [x] `slopguard scan --fix` applies safe fixes (refuses a dirty tree unless `--allow-dirty`)
 - [x] `slopguard scan --fix --dry-run` previews fixes
-- [ ] More autofixable rules (only no-dbg-in-prod and no-unnecessary-clone today)
+- [x] Builtin `fixer`s for multi-node rewrites and `autofix_unsafe` behind `--unsafe-fixes` (D49): `no-manual-enum-str`, `merge-identical-match-arms`, `no-derivable-clone`, `no-glob-reexport`, `no-lock-unwrap` (unsafe), `no-manual-display` (unsafe)
+- [ ] More autofixable rules
 
 ### CI integration
 

@@ -55,8 +55,8 @@ fn load_all_builtin_rules() {
     let rules = load_builtin_rules().unwrap();
     assert_eq!(
         rules.len(),
-        117,
-        "expected 117 builtin rules, got {}",
+        121,
+        "expected 121 builtin rules, got {}",
         rules.len()
     );
 
@@ -72,9 +72,9 @@ fn load_all_builtin_rules() {
         .iter()
         .filter(|r| r.category == Some(Category::Correctness))
         .count();
-    assert_eq!(slop_count, 44, "expected 44 slop rules");
+    assert_eq!(slop_count, 47, "expected 47 slop rules");
     assert_eq!(security_count, 22, "expected 22 security rules");
-    assert_eq!(correctness_count, 51, "expected 51 correctness rules");
+    assert_eq!(correctness_count, 52, "expected 52 correctness rules");
 
     assert!(rules
         .iter()

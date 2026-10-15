@@ -352,3 +352,40 @@ impl ManifestResolver {
         })
     }
 }
+
+/// Whether a dependency spec enables the `feature` (only a table spec can).
+fn spec_has_feature(spec: &toml::Value, feature: &str) -> bool {
+    spec.get("features")
+        .and_then(|f| f.as_array())
+        .is_some_and(|features| features.iter().any(|f| f.as_str() == Some(feature)))
+}
+
+/// The crate the strum derive macros (`Display`, `IntoStaticStr`, ...) are
+/// reachable through for code in `dir`, read from the governing `Cargo.toml`:
+/// `strum` when its `derive` feature is on (in the member's spec, or in the
+/// `[workspace.dependencies]` entry it inherits), else `strum_macros` when it
+/// is a dependency, else `None`. Only `[dependencies]` counts: the fixed code
+/// is production code.
+pub(crate) fn strum_derive_crate(dir: &Path) -> Option<&'static str> {
+    let path = find_up(dir, "Cargo.toml")?;
+    let table = read_to_string(&path).ok()?.parse::<Table>().ok()?;
+    let deps = table.get("dependencies")?.as_table()?;
+    if let Some(spec) = deps.get("strum") {
+        let mut derive = spec_has_feature(spec, "derive");
+        if !derive && spec.get("workspace").and_then(|v| v.as_bool()) == Some(true) {
+            let manifest_dir = path.parent().unwrap_or_else(|| Path::new("."));
+            let manifest_dir =
+                absolute(manifest_dir).unwrap_or_else(|_| manifest_dir.to_path_buf());
+            derive = workspace_root(&manifest_dir, &table).is_some_and(|(_, root)| {
+                root.get("workspace")
+                    .and_then(|w| w.get("dependencies"))
+                    .and_then(|d| d.get("strum"))
+                    .is_some_and(|s| spec_has_feature(s, "derive"))
+            });
+        }
+        if derive {
+            return Some("strum");
+        }
+    }
+    deps.contains_key("strum_macros").then_some("strum_macros")
+}

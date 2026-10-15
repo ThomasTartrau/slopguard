@@ -1,0 +1,56 @@
+id: no-lock-unwrap
+language: rust
+severity: warning
+category: correctness
+message: "Lock acquired with .unwrap()/.expect(): once a holder panics, every later caller panics too. Recover the guard with .unwrap_or_else(|e| e.into_inner())."
+note: "A std Mutex or RwLock is poisoned when a thread panics while holding it. unwrap() then turns one failed request into a panic on every request that touches the lock. Recovering the guard keeps the process serving; check the protected data if a panic can leave it half-updated."
+fix: "Replace .unwrap() / .expect(..) on .lock(), .read() or .write() with .unwrap_or_else(|e| e.into_inner())."
+# `scan --fix --unsafe-fixes` applies it. Unsafe: a poisoned lock is recovered
+# instead of panicking, which is the point but is a behavior change.
+rewrite: "$X.$M().unwrap_or_else(|e| e.into_inner())"
+autofix_unsafe: true
+rule:
+  all:
+    - any:
+        - pattern: $X.$M().unwrap()
+        - pattern: $X.$M().expect($$$A)
+    # parking_lot and lock_api locks do not poison: their guard has no unwrap,
+    # and an unwrap there reaches through the guard to the data.
+    - not:
+        inside:
+          kind: source_file
+          stopBy: end
+          has:
+            kind: use_declaration
+            regex: '\b(parking_lot|lock_api)\b'
+constraints:
+  M:
+    regex: '^(lock|read|write)$'
+ignores:
+  - "**/tests/**"
+  - "**/*_tests/**"
+  - "**/*_test/**"
+  - "**/test_*"
+  - "**/*_test.rs"
+  - "**/examples/**"
+  - "**/benches/**"
+  - "**/fixtures/**"
+skip_test_code: true
+tests:
+  should_match:
+    - "fn f() { let state = self.state.lock().unwrap(); }"
+    - "fn f() { let cache = CACHE.read().expect(\"cache lock poisoned\"); }"
+    - "fn f() { shared.write().unwrap().push(x); }"
+  should_not_match:
+    - "fn f() { let state = self.state.lock().unwrap_or_else(|e| e.into_inner()); }"
+    - "fn f() { let state = self.state.lock().await; }"
+    - "fn f() { let n = file.read(&mut buf).unwrap(); }"
+    - "fn f() { let v = map.get(k).unwrap(); }"
+    - |
+      use parking_lot::Mutex;
+      fn f(m: &Mutex<Option<u8>>) { let v = m.lock().unwrap(); }
+  should_fix:
+    - before: "fn f() { let state = self.state.lock().unwrap(); }"
+      after: "fn f() { let state = self.state.lock().unwrap_or_else(|e| e.into_inner()); }"
+    - before: "fn f() { CACHE.read().expect(\"cache lock poisoned\").get(k); }"
+      after: "fn f() { CACHE.read().unwrap_or_else(|e| e.into_inner()).get(k); }"
