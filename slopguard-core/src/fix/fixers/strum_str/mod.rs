@@ -26,6 +26,10 @@ use case::infer_style;
 use imports::{imports_strum_macro, prune_fmt_imports};
 use shapes::{display_pairs, method_pairs};
 
+/// The impl block holding a manual string conversion, the enum it targets and
+/// its `(variant, literal)` pairs.
+type ManualConversion<'r, D> = (Node<'r, D>, String, Vec<(String, String)>);
+
 /// The `serialize_all` style an enum already declares in a `#[strum(...)]`
 /// attribute, and whether a strum attribute sits on one of its variants (it
 /// would override the derived name).
@@ -122,9 +126,7 @@ fn derive_edits<D: Doc>(
 
 /// The `(variant, literal)` pairs of `node`, an `impl Display` or an
 /// `as_str`-style method, with the impl block holding it.
-fn read_pairs<'r, D: Doc>(
-    node: &Node<'r, D>,
-) -> Option<(Node<'r, D>, String, Vec<(String, String)>)> {
+fn read_pairs<'r, D: Doc>(node: &Node<'r, D>) -> Option<ManualConversion<'r, D>> {
     let is_display = node.kind() == "impl_item";
     let implementation = if is_display {
         node.clone()

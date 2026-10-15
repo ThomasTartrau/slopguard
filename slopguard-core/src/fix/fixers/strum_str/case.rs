@@ -1,9 +1,12 @@
 //! Infer the strum `serialize_all` style that turns each variant name into
 //! the literal a hand-written match returns for it.
 
+/// Turns a variant name, split into words, into its serialized string.
+type Convert = fn(&[&str]) -> String;
+
 /// strum `serialize_all` styles tried in this order, each with the conversion
 /// it applies to a variant's words.
-const CASE_STYLES: &[(&str, fn(&[&str]) -> String)] = &[
+const CASE_STYLES: &[(&str, Convert)] = &[
     ("snake_case", |w| join_lower(w, "_")),
     ("kebab-case", |w| join_lower(w, "-")),
     ("lowercase", |w| join_lower(w, "")),
