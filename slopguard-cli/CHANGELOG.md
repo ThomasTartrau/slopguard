@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.1.42](https://gitlab.com/ThomasTartrau/slopguard/compare/slopguard-cli-v0.1.41...slopguard-cli-v0.1.42) - 2026-10-15
+
+### Added
+
+- add builtin fixers and review-derived autofix rules
+
 ## [0.1.41](https://gitlab.com/ThomasTartrau/slopguard/compare/slopguard-cli-v0.1.40...slopguard-cli-v0.1.41) - 2026-10-14
 
 ### Fixed
